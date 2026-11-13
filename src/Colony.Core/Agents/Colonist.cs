@@ -118,7 +118,7 @@ public sealed class Colonist
                 }
                 if (++WorkDone >= WorkRequired)
                 {
-                    orders.Complete(target);
+                    sim.CompleteDesignation(target);
                     JobTarget = null;
                     State = ColonistState.Idle;
                 }

@@ -179,7 +179,7 @@ public partial class DesignationTool : Node3D
     {
         var d = _sim.Designations;
         var all = new List<TilePos>(d.All.Keys);
-        foreach (var p in all) d.Complete(p);
+        foreach (var p in all) _sim.CompleteDesignation(p);
         LastAction = $"Debug: completed {all.Count} designations";
     }
 

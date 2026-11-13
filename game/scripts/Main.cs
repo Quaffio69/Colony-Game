@@ -144,6 +144,13 @@ public partial class Main : Node3D
                       (_world.PendingSections > 0 ? $"    building terrain: {_world.PendingSections} sections left" : ""));
         sb.AppendLine($"Tool: {tool}    Hover: {hover}");
         sb.AppendLine($"Designations: {_sim.Designations.Count}    {_tool.LastAction}");
+        if (_sim.RecentCaveIns.Count > 0)
+        {
+            var last = _sim.RecentCaveIns[^1];
+            double ago = (_sim.Tick - last.Tick) / (double)ColonySim.TicksPerSecond;
+            if (ago < 20)
+                sb.AppendLine($"CAVE-IN! {last.Tiles} tiles fell {last.Drop} levels near {last.Origin} ({ago:0}s ago)");
+        }
         sb.AppendLine();
         foreach (var c in _sim.Colonists)
             sb.AppendLine($"  {c.Name,-8} {c.Describe()}");

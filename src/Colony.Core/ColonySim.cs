@@ -37,11 +37,44 @@ public sealed class ColonySim
     /// <summary>Path searches run by colonists so far (diagnostics and tests).</summary>
     public long PathSearches { get; internal set; }
 
+    private readonly CaveIns _caveIns;
+    private readonly List<CaveIn> _recentCaveIns = new();
+    private const int RecentCaveInsKept = 16;
+
+    /// <summary>The most recent cave-ins, oldest first (for notifications).</summary>
+    public IReadOnlyList<CaveIn> RecentCaveIns => _recentCaveIns;
+    public int CaveInCount { get; private set; }
+
     public ColonySim(VoxelWorld world)
     {
         World = world;
         Designations = new Designations(world);
         Connectivity = new Connectivity(world);
+        _caveIns = new CaveIns(world);
+    }
+
+    /// <summary>
+    /// Carries out a designation, then lets any mass it left unsupported cave in. Everything that changes the
+    /// world on a colonist's (or the debug tool's) behalf should come through here.
+    /// </summary>
+    public bool CompleteDesignation(TilePos p)
+    {
+        if (!Designations.TryGet(p, out var kind) || !Designations.Complete(p)) return false;
+        if (kind == DesignationKind.Dig) CheckSupport(p);
+        return true;
+    }
+
+    /// <summary>Call after removing a solid tile by any other means (tests, future tools).</summary>
+    public void CheckSupport(TilePos removed) => _caveIns.AfterRemoval(removed, Tick, OnCaveIn);
+
+    private void OnCaveIn(CaveIn caveIn, IReadOnlyList<TilePos> landed)
+    {
+        // Orders on tiles that fell no longer point at the rock they were placed on.
+        foreach (var q in landed) Designations.Cancel(q.Offset(0, 0, caveIn.Drop));
+        CaveInCount++;
+        _recentCaveIns.Add(caveIn);
+        if (_recentCaveIns.Count > RecentCaveInsKept) _recentCaveIns.RemoveAt(0);
+        // Colonists caught underneath or riding the mass are handled by their own gravity next tick.
     }
 
     /// <summary>Generates a world and drops a starting party in the valley south of the central mountain.</summary>

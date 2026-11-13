@@ -59,6 +59,11 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - **Movement (Minecraft-like, not DF ramps):** agents are 1 tile tall, stand in an air tile on a solid
   floor, walk 8-way (no corner cutting), and can climb or drop exactly one level onto an orthogonal
   neighbour (climbing needs headroom). Raw climbs are slow; climbs onto/off `TileType.Stairs` are cheap.
+- **Cave-ins (DF-style):** a solid tile is supported if face-adjacent solid tiles connect it to z=0. After a
+  dig (`ColonySim.CompleteDesignation` -> `World.CaveIns`), each unsupported neighbouring mass falls as one
+  rigid piece until it lands; designations on it are cancelled; colonists ride it down or pop out on top.
+  Masses over `CaveIns.MaxMassTiles` count as self-supporting. Any code removing solid tiles should go
+  through `CompleteDesignation` or call `ColonySim.CheckSupport`. No damage yet (no health system).
 - **Stairs:** designated in one drag, footprint at least 2x2, N levels deep. One perimeter tile per level
   is carved into a stair step, spiralling around the shaft; the rest is dug out. No 1x1 DF-style shafts.
 
@@ -86,7 +91,12 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       (`Navigation`), designation claiming, digging, and Minecraft-style spiral stairs.
 - [x] M3.5: Scale-up to 2048x2048x128: greedy/threaded meshing, shader slicing, connectivity regions,
       job board, hierarchical pathfinding, stair step geometry, parallel multi-range world gen.
-- [ ] Ideas: job priorities; cave-ins / structural support as gameplay (not needed for performance).
+- [x] Cave-ins: support check after digs; unsupported masses fall rigidly.
+- [ ] Ideas: job priorities; cave-in damage/injury once health exists; material-strength spans
+      (overhang limits per material) as a later twist on pure connectivity support.
+- [ ] Water/fluids: cellular sim on active-chunk sets (DF-like 0-7 depth per tile, with pressure for
+      U-bends), possibly our own twist (e.g. flow fields, aquifers, temperature/freezing). Must stay
+      deterministic and only tick chunks with moving fluid.
 - [ ] M4: Items, stockpiles, first production chains (e.g. ore → smelter → bars → forge).
 - [ ] M5: Needs (food, rest), farming, population growth.
 - Later: education/skills, advanced product trees, factions, procedural narrative/history.
