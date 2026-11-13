@@ -135,9 +135,28 @@ public class ConnectivityTests
         {
             int x = rng.Next(w.Width), y = rng.Next(w.Depth);
             int z = Math.Max(1, w.SurfaceLevel(x, y) - rng.Next(3));
-            w.Set(x, y, z, TileType.Air);
+            // Mostly digs, plus stairs of every kind (including vertical stair links across chunk borders).
+            w.Set(x, y, z, rng.Next(4) switch
+            {
+                0 => TileType.UpStair, 1 => TileType.DownStair, 2 => TileType.UpDownStair, _ => TileType.Air,
+            });
         }
         c.Update();
+        AssertMatchesFloodFill(w, c);
+    }
+
+    [Fact]
+    public void StairShaft_IntoFullySolidChunks_IsConnected()
+    {
+        // Solid rock through z=0..35: the chunk layers z=0..15 and 16..31 start completely full.
+        var w = Flat(size: 32, height: 48, surface: 35);
+        var c = new Connectivity(w);
+        c.Update();
+        var surface = new TilePos(3, 3, 36);
+        for (int z = 35; z >= 10; z--)
+            w.Set(8, 8, z, z == 35 ? TileType.DownStair : z == 10 ? TileType.UpStair : TileType.UpDownStair);
+        c.Update();
+        Assert.True(c.Connected(surface, new TilePos(8, 8, 10)));
         AssertMatchesFloodFill(w, c);
     }
 

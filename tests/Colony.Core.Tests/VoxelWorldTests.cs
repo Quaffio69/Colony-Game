@@ -29,6 +29,33 @@ public class VoxelWorldTests
     }
 
     [Fact]
+    public void UniformChunk_ReadsAsItsType_AndMaterialisesOnFirstChange()
+    {
+        var w = new VoxelWorld(32, 32, 32);
+        var c = w.GetChunk(1, 0, 0)!;
+        c.InitUniform(TileType.Stone);
+        Assert.True(c.IsUniform);
+        Assert.Equal(Chunk.Volume, c.SolidCount);
+        Assert.Equal(TileType.Stone, w.Get(20, 5, 5));
+
+        var box = TileBox.Capture(w, 14, 0, 0, 4, 1, 1); // straddles an air chunk and the stone chunk
+        Assert.Equal(TileType.Air, box.Get(15, 0, 0));
+        Assert.Equal(TileType.Stone, box.Get(16, 0, 0));
+
+        w.Set(20, 5, 5, TileType.Stone); // no-op
+        Assert.True(c.IsUniform);
+        w.Set(20, 5, 5, TileType.Air);
+        Assert.False(c.IsUniform);
+        Assert.Equal(TileType.Air, w.Get(20, 5, 5));
+        Assert.Equal(TileType.Stone, w.Get(21, 5, 5));
+        Assert.Equal(Chunk.Volume - 1, c.SolidCount);
+
+        w.Set(20, 5, 5, TileType.Stone);
+        c.Compact();
+        Assert.True(c.IsUniform);
+    }
+
+    [Fact]
     public void SolidCount_TracksChanges()
     {
         var w = new VoxelWorld(16, 16, 16);
@@ -39,6 +66,9 @@ public class VoxelWorldTests
         Assert.Equal(2, c.SolidCount);
         w.Set(1, 1, 1, TileType.Air);
         Assert.Equal(1, c.SolidCount);
+        w.Set(2, 1, 1, TileType.UpStair); // carved into a stair: still there, but no longer solid
+        Assert.Equal(0, c.SolidCount);
+        Assert.Equal(1, c.NonAirCount);
     }
 
     [Fact]

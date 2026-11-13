@@ -74,6 +74,16 @@ public static class Pathfinder
         return total;
     }
 
+    private sealed class Scratch
+    {
+        public readonly List<Node> Nodes = new(1024);
+        public readonly Dictionary<long, int> Index = new(1024);
+        public readonly PriorityQueue<int, float> Open = new();
+        public readonly List<(TilePos To, float Cost)> Moves = new(12);
+    }
+
+    [ThreadStatic] private static Scratch? _scratch;
+
     private struct Node
     {
         public TilePos Pos;
@@ -88,10 +98,17 @@ public static class Pathfinder
         found = default;
         long Key(TilePos p) => ((long)p.Z * keyDepth + p.Y) * keyWidth + p.X;
 
-        var nodes = new List<Node>(1024);
-        var index = new Dictionary<long, int>(1024);
-        var open = new PriorityQueue<int, float>();
-        var moves = new List<(TilePos To, float Cost)>(12);
+        // Reused per thread: searches run back to back, and reallocating these (especially a large index
+        // dictionary) each time showed up as GC churn on long trips.
+        var scratch = _scratch ??= new Scratch();
+        var nodes = scratch.Nodes;
+        var index = scratch.Index;
+        var open = scratch.Open;
+        var moves = scratch.Moves;
+        nodes.Clear();
+        open.Clear();
+        if (index.Count > 50_000) index.TrimExcess(1024); // don't keep clearing a huge table after one long search
+        index.Clear();
 
         nodes.Add(new Node { Pos = start, G = 0, Parent = -1 });
         index[Key(start)] = 0;

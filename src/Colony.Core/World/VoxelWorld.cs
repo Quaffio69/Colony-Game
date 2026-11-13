@@ -39,6 +39,9 @@ public sealed class VoxelWorld : ITileReader
 
     public IReadOnlyList<Chunk> Chunks => _chunks;
 
+    /// <summary>Increments on every tile change, so views can skip per-chunk scans when nothing changed.</summary>
+    public long Revision { get; private set; }
+
     public bool InBounds(int x, int y, int z) =>
         (uint)x < (uint)Width && (uint)y < (uint)Depth && (uint)z < (uint)Height;
 
@@ -60,20 +63,33 @@ public sealed class VoxelWorld : ITileReader
 
         int lx = x & Chunk.Mask, ly = y & Chunk.Mask, lz = z & Chunk.Mask;
         if (!ChunkAt(x, y, z).Set(lx, ly, lz, type)) return;
+        Revision++;
+        int cx = x >> Chunk.Shift, cy = y >> Chunk.Shift, cz = z >> Chunk.Shift;
+        ChunkChanged?.Invoke(ChunkIndex(cx, cy, cz));
 
         // A tile near a chunk boundary can change faces or walkability in neighbouring chunks (including
         // diagonal ones). Walking reads up to two levels down (dropping onto a ledge checks its floor), so a
         // change in the top two layers also affects the chunk above.
-        int cx = x >> Chunk.Shift, cy = y >> Chunk.Shift, cz = z >> Chunk.Shift;
         int x0 = lx == 0 ? -1 : 0, x1 = lx == Chunk.Mask ? 1 : 0;
         int y0 = ly == 0 ? -1 : 0, y1 = ly == Chunk.Mask ? 1 : 0;
         int z0 = lz == 0 ? -1 : 0, z1 = lz >= Chunk.Mask - 1 ? 1 : 0;
         for (int dz = z0; dz <= z1; dz++)
         for (int dy = y0; dy <= y1; dy++)
         for (int dx = x0; dx <= x1; dx++)
-            if (dx != 0 || dy != 0 || dz != 0)
-                GetChunk(cx + dx, cy + dy, cz + dz)?.Touch();
+        {
+            if (dx == 0 && dy == 0 && dz == 0) continue;
+            if (GetChunk(cx + dx, cy + dy, cz + dz) is not { } n) continue;
+            n.Touch();
+            ChunkChanged?.Invoke(ChunkIndex(cx + dx, cy + dy, cz + dz));
+        }
     }
+
+    /// <summary>
+    /// Raised (synchronously, from <see cref="Set"/>) with the index of every chunk whose
+    /// <see cref="Chunk.Version"/> changed, so consumers track exactly what changed instead of scanning every
+    /// chunk. Not raised during world generation.
+    /// </summary>
+    public event Action<int>? ChunkChanged;
 
     public void Set(TilePos p, TileType type) => Set(p.X, p.Y, p.Z, type);
 
@@ -82,7 +98,8 @@ public sealed class VoxelWorld : ITileReader
     internal void SetForGeneration(int x, int y, int z, TileType type) =>
         ChunkAt(x, y, z).Set(x & Chunk.Mask, y & Chunk.Mask, z & Chunk.Mask, type);
 
-    public bool IsSolid(int x, int y, int z) => Get(x, y, z) != TileType.Air;
+    /// <summary>Natural rock/earth that blocks movement (see <see cref="TileInfo.IsSolid"/>); stairs are not solid.</summary>
+    public bool IsSolid(int x, int y, int z) => TileInfo.IsSolid(Get(x, y, z));
 
     /// <summary>Highest solid level in a column, or -1 if the column is empty.</summary>
     public int SurfaceLevel(int x, int y)
@@ -124,9 +141,12 @@ public sealed class VoxelWorld : ITileReader
                     int wx = x0 + x;
                     int lx = wx & Chunk.Mask;
                     int run = Math.Min(Chunk.Size - lx, xEnd - x);
-                    var raw = ChunkAt(wx, wy, wz).Raw;
+                    var chunk = ChunkAt(wx, wy, wz);
+                    var raw = chunk.Raw;
                     if (raw != null)
                         Array.Copy(raw, Chunk.Index(lx, wy & Chunk.Mask, wz & Chunk.Mask), dest, (z * sy + y) * sx + x, run);
+                    else if (chunk.UniformType != TileType.Air)
+                        dest.AsSpan((z * sy + y) * sx + x, run).Fill(chunk.UniformType);
                     x += run;
                 }
             }

@@ -47,7 +47,7 @@ public static class VoxelRaycast
 
         while (t <= maxDistance)
         {
-            if (world.IsSolid(x, y, z))
+            if (world.Get(x, y, z) != TileType.Air) // stairs are pickable too
                 return new RayHit(new TilePos(x, y, z), normal, t);
 
             if (tMaxX < tMaxY && tMaxX < tMaxZ)

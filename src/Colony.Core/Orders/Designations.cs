@@ -6,8 +6,14 @@ public enum DesignationKind : byte
 {
     /// <summary>Remove the tile, leaving air.</summary>
     Dig,
-    /// <summary>Carve the solid tile into a <see cref="TileType.Stairs"/> step.</summary>
-    CarveStairs,
+    /// <summary>Carve the tile into an <see cref="TileType.UpStair"/>.</summary>
+    UpStair,
+    /// <summary>Carve the tile into a <see cref="TileType.DownStair"/>.</summary>
+    DownStair,
+    /// <summary>Carve the tile into an <see cref="TileType.UpDownStair"/>.</summary>
+    UpDownStair,
+    /// <summary>Fell the tree standing in this (open) cell; leaves logs.</summary>
+    Chop,
 }
 
 /// <summary>
@@ -31,12 +37,22 @@ public sealed class Designations
     public bool Contains(TilePos p) => _orders.ContainsKey(p);
     public bool TryGet(TilePos p, out DesignationKind kind) => _orders.TryGetValue(p, out kind);
 
+    /// <summary>Trees, for validating <see cref="DesignationKind.Chop"/> orders (set by <see cref="ColonySim"/>).</summary>
+    public Nature.Flora? Flora { get; set; }
+
     public bool Designate(TilePos p, DesignationKind kind = DesignationKind.Dig)
     {
         if (!_world.InBounds(p)) return false;
-        var tile = _world.Get(p);
-        if (tile == TileType.Air) return false;
-        if (kind == DesignationKind.CarveStairs && tile == TileType.Stairs) return false;
+        if (kind == DesignationKind.Chop)
+        {
+            if (Flora is null || !Flora.TryGet(p, out var plant) || !Nature.PlantInfo.IsTree(plant.Kind)) return false;
+        }
+        else
+        {
+            var tile = _world.Get(p);
+            if (tile == TileType.Air) return false;
+            if (Result(kind, tile) == tile) return false; // nothing would change
+        }
         if (_orders.TryGetValue(p, out var existing) && existing == kind) return false;
 
         _orders[p] = kind;
@@ -61,46 +77,41 @@ public sealed class Designations
     public int CancelBox(TilePos a, TilePos b) => ForBox(a, b, Cancel);
 
     /// <summary>
-    /// Designates a spiral staircase in the rectangle spanned by <paramref name="a"/> and <paramref name="b"/>
-    /// (x/y only; at least 2x2), occupying levels <paramref name="topZ"/> down to <paramref name="topZ"/> - depth + 1.
-    /// On each level one perimeter tile becomes a stair step and the rest is dug out. The step advances one
-    /// tile around the perimeter per level, so every step is a one-level climb from the previous one.
-    /// Arriving at the bottom, an agent stands on the (undug) level below the stairs.
+    /// Designates a connected staircase in the inclusive box between two corners (any size, any number of
+    /// levels): down stairs on the top level, up/down stairs in between, up stairs on the bottom level.
+    /// A single-level box gets up/down stairs. The world's bottom layer is never touched.
     /// </summary>
     /// <returns>How many tiles were designated.</returns>
-    public int DesignateStairs(TilePos a, TilePos b, int topZ, int depth)
+    public int DesignateStairs(TilePos a, TilePos b)
     {
-        int x0 = Math.Min(a.X, b.X), x1 = Math.Max(a.X, b.X);
-        int y0 = Math.Min(a.Y, b.Y), y1 = Math.Max(a.Y, b.Y);
-        if (x1 - x0 < 1 || y1 - y0 < 1) throw new ArgumentException("Stairs need at least a 2x2 footprint.");
-        if (depth < 1) throw new ArgumentOutOfRangeException(nameof(depth));
-
-        var ring = PerimeterRing(x0, y0, x1, y1);
+        int top = Math.Max(a.Z, b.Z), bottom = Math.Max(1, Math.Min(a.Z, b.Z));
         int n = 0;
-        int bottom = Math.Max(1, topZ - depth + 1); // never dig out the world's floor
-        for (int z = topZ; z >= bottom; z--)
+        for (int z = top; z >= bottom; z--)
         {
-            var (sx, sy) = ring[(topZ - z) % ring.Count];
-            for (int y = y0; y <= y1; y++)
-            for (int x = x0; x <= x1; x++)
-            {
-                var kind = x == sx && y == sy ? DesignationKind.CarveStairs : DesignationKind.Dig;
-                if (Designate(new TilePos(x, y, z), kind)) n++;
-            }
+            var kind = top == bottom ? DesignationKind.UpDownStair
+                : z == top ? DesignationKind.DownStair
+                : z == bottom ? DesignationKind.UpStair
+                : DesignationKind.UpDownStair;
+            n += DesignateBox(a with { Z = z }, b with { Z = z }, kind);
         }
         return n;
     }
 
-    /// <summary>Perimeter cells of a rectangle in walking order (each orthogonally adjacent to the next, wrapping).</summary>
-    public static List<(int X, int Y)> PerimeterRing(int x0, int y0, int x1, int y1)
+    /// <summary>
+    /// The tile a designation leaves behind. Carving a stair into an existing stair adds directions, DF-style:
+    /// an up stair designated onto a down stair makes an up/down stair.
+    /// </summary>
+    public static TileType Result(DesignationKind kind, TileType current)
     {
-        var ring = new List<(int, int)>();
-        for (int x = x0; x <= x1; x++) ring.Add((x, y0));
-        for (int y = y0 + 1; y <= y1; y++) ring.Add((x1, y));
-        for (int x = x1 - 1; x >= x0; x--) ring.Add((x, y1));
-        for (int y = y1 - 1; y > y0; y--) ring.Add((x0, y));
-        return ring;
+        if (kind == DesignationKind.Chop) return current;
+        if (kind == DesignationKind.Dig) return TileType.Air;
+        bool up = kind is DesignationKind.UpStair or DesignationKind.UpDownStair || TileInfo.GoesUp(current);
+        bool down = kind is DesignationKind.DownStair or DesignationKind.UpDownStair || TileInfo.GoesDown(current);
+        return up && down ? TileType.UpDownStair : up ? TileType.UpStair : TileType.DownStair;
     }
+
+    public static bool IsStair(DesignationKind kind) =>
+        kind is DesignationKind.UpStair or DesignationKind.DownStair or DesignationKind.UpDownStair;
 
     public bool IsClaimed(TilePos p) => _claims.ContainsKey(p);
 
@@ -118,12 +129,15 @@ public sealed class Designations
         if (IsClaimedBy(p, colonistId)) _claims.Remove(p);
     }
 
-    /// <summary>Carries out a designation (dig or carve) and removes it. Returns false if there was none.</summary>
+    /// <summary>
+    /// Carries out a terrain designation (dig or carve) and removes it; a <see cref="DesignationKind.Chop"/> is
+    /// only removed (felling the tree is <see cref="ColonySim.CompleteDesignation"/>'s job). False if none.
+    /// </summary>
     public bool Complete(TilePos p)
     {
         if (!_orders.Remove(p, out var kind)) return false;
         _claims.Remove(p);
-        _world.Set(p, kind == DesignationKind.Dig ? TileType.Air : TileType.Stairs);
+        if (kind != DesignationKind.Chop) _world.Set(p, Result(kind, _world.Get(p)));
         Version++;
         return true;
     }
@@ -134,11 +148,12 @@ public sealed class Designations
         int dig = tile switch
         {
             TileType.Grass or TileType.Soil => 25,
-            TileType.Stone or TileType.Stairs => 60,
+            TileType.Stone => 60,
             TileType.Ore => 80,
+            _ when TileInfo.IsStair(tile) => 20, // already carved: only reshaping or clearing it
             _ => 40,
         };
-        return kind == DesignationKind.CarveStairs ? dig + 30 : dig;
+        return IsStair(kind) ? dig + 30 : dig;
     }
 
     private static int ForBox(TilePos a, TilePos b, Func<TilePos, bool> action)

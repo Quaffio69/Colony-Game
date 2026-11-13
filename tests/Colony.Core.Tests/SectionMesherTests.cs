@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using Colony.Core.Meshing;
 using Colony.Core.Procedural;
 using Colony.Core.World;
@@ -31,7 +31,7 @@ public class SectionMesherTests
     private static List<(int X, int Y, int Z, FaceDir Dir, TileType T)> Rasterize(IEnumerable<Quad> quads)
     {
         var faces = new List<(int, int, int, FaceDir, TileType)>();
-        foreach (var q in quads.Where(q => q.Tile != TileType.Stairs))
+        foreach (var q in quads.Where(q => !TileInfo.IsStair(q.Tile)))
         {
             var min = Vector3.Min(Vector3.Min(q.A, q.B), Vector3.Min(q.C, q.D));
             var max = Vector3.Max(Vector3.Max(q.A, q.B), Vector3.Max(q.C, q.D));
@@ -67,7 +67,9 @@ public class SectionMesherTests
     public void Quads_AreWoundCounterClockwiseFromOutside()
     {
         var w = WorldGenerator.Generate(new WorldGenSettings(Seed: 3, Width: 24, Depth: 24, Height: 20));
-        w.Set(5, 5, 10, TileType.Stairs);
+        w.Set(5, 5, 10, TileType.UpDownStair);
+        w.Set(5, 5, 11, TileType.DownStair);
+        w.Set(7, 5, 10, TileType.UpStair);
         var quads = new List<Quad>();
         SectionMesher.Build(w, 0, 0, 0, 24, 24, 20, quads);
 
@@ -103,23 +105,44 @@ public class SectionMesherTests
     }
 
     [Fact]
-    public void Stair_IsAStepRisingTowardsTheNextStepUp()
+    public void UpStair_IsStepsRisingAlongItsFacing_AndTurnsEachLevel()
     {
         var w = new VoxelWorld(8, 8, 8);
         for (int y = 0; y < 8; y++)
         for (int x = 0; x < 8; x++)
             w.Set(x, y, 0, TileType.Stone);
-        w.Set(3, 3, 1, TileType.Stairs);
-        w.Set(3, 4, 2, TileType.Stairs); // next step up is in +y
+        w.Set(3, 3, 1, TileType.UpStair);
 
-        Assert.Equal((0, 1), SectionMesher.StairFacing(w, 3, 3, 1));
+        Assert.Equal((0, 1), SectionMesher.StairFacing(1));
+        Assert.NotEqual(SectionMesher.StairFacing(1), SectionMesher.StairFacing(2));
 
         var quads = new List<Quad>();
         SectionMesher.Build(w, 0, 0, 0, 8, 8, 8, quads);
-        var tops = quads.Where(q => q.Tile == TileType.Stairs && q.Dir == FaceDir.PosZ && q.A.X >= 3 && q.A.X <= 4 && q.A.Y < 4).ToList();
-        // Two tread surfaces: low half at z+0.5 on the -y side, high half at z+1 on the +y side.
-        Assert.Contains(tops, q => q.A.Z == 1.5f && Math.Max(Math.Max(q.A.Y, q.B.Y), q.C.Y) <= 3.5f + 1e-4f);
-        Assert.Contains(tops, q => q.A.Z == 2f && Math.Min(Math.Min(q.A.Y, q.B.Y), q.C.Y) >= 3.5f - 1e-4f);
+        var tops = quads.Where(q => q.Tile == TileType.UpStair && q.Dir == FaceDir.PosZ)
+            .OrderBy(q => q.A.Z).ToList();
+        Assert.Equal(SectionMesher.StepsPerLevel, tops.Count);
+        // Each tread is higher and further along +y than the last; the top one is flush with the next level.
+        for (int i = 1; i < tops.Count; i++)
+            Assert.True(tops[i].A.Z > tops[i - 1].A.Z && MinY(tops[i]) > MinY(tops[i - 1]));
+        Assert.Equal(2f, tops[^1].A.Z, 1e-4f);
+        static float MinY(Quad q) => Math.Min(Math.Min(q.A.Y, q.B.Y), Math.Min(q.C.Y, q.D.Y));
+    }
+
+    [Fact]
+    public void DownStair_IsALowRimAroundTheOpening()
+    {
+        var w = new VoxelWorld(8, 8, 8);
+        w.Set(3, 3, 1, TileType.UpStair);
+        w.Set(3, 3, 2, TileType.DownStair);
+        var quads = new List<Quad>();
+        SectionMesher.Build(w, 0, 0, 0, 8, 8, 8, quads);
+        var rim = quads.Where(q => q.Tile == TileType.DownStair).ToList();
+        Assert.NotEmpty(rim);
+        Assert.All(rim, q => Assert.True(Math.Max(q.A.Z, q.C.Z) <= 2.1f));
+        // The centre of the opening is left clear.
+        Assert.DoesNotContain(rim, q => q.Dir == FaceDir.PosZ &&
+            Math.Min(q.A.X, q.C.X) < 3.5f && Math.Max(q.A.X, q.C.X) > 3.5f &&
+            Math.Min(q.A.Y, q.C.Y) < 3.5f && Math.Max(q.A.Y, q.C.Y) > 3.5f);
     }
 
     [Fact]
@@ -127,7 +150,7 @@ public class SectionMesherTests
     {
         var w = new VoxelWorld(8, 8, 8);
         w.Set(3, 3, 3, TileType.Stone);
-        w.Set(4, 3, 3, TileType.Stairs);
+        w.Set(4, 3, 3, TileType.UpStair);
         var quads = new List<Quad>();
         SectionMesher.Build(w, 0, 0, 0, 8, 8, 8, quads);
         Assert.Contains(quads, q => q.Tile == TileType.Stone && q.Dir == FaceDir.PosX);

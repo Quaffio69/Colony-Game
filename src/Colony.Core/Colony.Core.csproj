@@ -4,6 +4,13 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- Core is all hot simulation/meshing code: optimize it even in Debug builds (the Godot editor runs
+         Debug), otherwise startup meshing and the sim run several times slower during development. -->
+    <Optimize>true</Optimize>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Colony.Core.Tests" />
+  </ItemGroup>
 
 </Project>

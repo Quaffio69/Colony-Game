@@ -8,18 +8,31 @@ public enum TileType : byte
     Soil,
     Stone,
     Ore,
-    /// <summary>A solid block carved into a stair step. Climbing onto or off one is much faster than a raw climb.</summary>
-    Stairs,
+    /// <summary>Stair cell leading up: connects to a <see cref="DownStair"/> or <see cref="UpDownStair"/> directly above.</summary>
+    UpStair,
+    /// <summary>Stair cell leading down: connects to an <see cref="UpStair"/> or <see cref="UpDownStair"/> directly below.</summary>
+    DownStair,
+    /// <summary>Both: stack these for a multi-level shaft (DF-style).</summary>
+    UpDownStair,
 }
 
 public static class TileInfo
 {
     /// <summary>Number of <see cref="TileType"/> values (for palettes and lookup tables).</summary>
-    public const int Count = 6;
+    public const int Count = 8;
 
-    /// <summary>Solid for movement and picking.</summary>
-    public static bool IsSolid(TileType t) => t != TileType.Air;
+    /// <summary>Blocks movement: natural rock and earth. Stairs are walk-in cells, not solid.</summary>
+    public static bool IsSolid(TileType t) => t is TileType.Grass or TileType.Soil or TileType.Stone or TileType.Ore;
 
-    /// <summary>A full opaque cube that hides its neighbours' touching faces. Stairs are solid but not full cubes.</summary>
-    public static bool Occludes(TileType t) => t != TileType.Air && t != TileType.Stairs;
+    /// <summary>Any stair cell. An agent can stand in one regardless of what is below (the stair is its footing).</summary>
+    public static bool IsStair(TileType t) => t is TileType.UpStair or TileType.DownStair or TileType.UpDownStair;
+
+    public static bool GoesUp(TileType t) => t is TileType.UpStair or TileType.UpDownStair;
+    public static bool GoesDown(TileType t) => t is TileType.DownStair or TileType.UpDownStair;
+
+    /// <summary>Carries structural load for cave-ins: everything but air (stairs are carved rock).</summary>
+    public static bool IsStructural(TileType t) => t != TileType.Air;
+
+    /// <summary>A full opaque cube that hides its neighbours' touching faces.</summary>
+    public static bool Occludes(TileType t) => IsSolid(t);
 }

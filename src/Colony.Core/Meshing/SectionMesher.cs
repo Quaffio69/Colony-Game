@@ -17,8 +17,8 @@ public readonly record struct Quad(Vector3 A, Vector3 B, Vector3 C, Vector3 D, F
 /// <summary>
 /// Builds the mesh for an axis-aligned box of the world ("section"). Full cubes are greedy-meshed: visible
 /// faces of the same tile type in a plane are merged into large rectangles, which cuts vertex counts many
-/// times over on terrain. Stairs are emitted as step geometry (a half slab plus a raised half on the side of
-/// the next step up). The mesh does not depend on the view level; the renderer slices it in a shader.
+/// times over on terrain. Up and up/down stairs are emitted as rising steps, down stairs as a rim around the
+/// opening. The mesh does not depend on the view level; the renderer slices it in a shader.
 /// </summary>
 public static class SectionMesher
 {
@@ -104,51 +104,70 @@ public static class SectionMesher
         for (int z = z0; z < z0 + sz; z++)
         for (int y = y0; y < y0 + sy; y++)
         for (int x = x0; x < x0 + sx; x++)
-            if (tiles.Get(x, y, z) == TileType.Stairs)
-                AddStair(tiles, x, y, z, output);
+        {
+            var t = tiles.Get(x, y, z);
+            if (TileInfo.GoesUp(t)) AddSteps(tiles, x, y, z, t, output);
+            if (t == TileType.DownStair) AddRim(tiles, x, y, z, t, output);
+        }
     }
+
+    /// <summary>Steps per stair cell (one level).</summary>
+    public const int StepsPerLevel = 3;
 
     /// <summary>
-    /// Horizontal direction (dx, dy) the step rises towards: towards the next stair step one level up, else
-    /// towards a wall, else +x.
+    /// Horizontal direction (dx, dy) an up stair's steps rise towards. Turns a quarter per level, so a stacked
+    /// shaft of up/down stairs reads as a spiral staircase.
     /// </summary>
-    public static (int Dx, int Dy) StairFacing<T>(in T tiles, int x, int y, int z) where T : ITileReader
+    public static (int Dx, int Dy) StairFacing(int z) => (z & 3) switch
     {
-        ReadOnlySpan<(int, int)> dirs = [(1, 0), (0, 1), (-1, 0), (0, -1)];
-        foreach (var (dx, dy) in dirs)
-            if (tiles.Get(x + dx, y + dy, z + 1) == TileType.Stairs) return (dx, dy);
-        foreach (var (dx, dy) in dirs)
-            if (TileInfo.Occludes(tiles.Get(x + dx, y + dy, z + 1))) return (dx, dy);
-        return (1, 0);
+        0 => (1, 0),
+        1 => (0, 1),
+        2 => (-1, 0),
+        _ => (0, -1),
+    };
+
+    /// <summary>Rising steps filling the cell: column k spans [k, k+1]/N along the facing, height (k+1)/N.</summary>
+    private static void AddSteps(TileBox tiles, int x, int y, int z, TileType t, List<Quad> output)
+    {
+        var (dx, dy) = StairFacing(z);
+        const float n = StepsPerLevel;
+        for (int k = 0; k < StepsPerLevel; k++)
+        {
+            float a0 = k / n, a1 = (k + 1) / n;
+            // Along-axis extent in tile-local [0,1], flipped when rising towards negative x/y.
+            float lo = (dx < 0 || dy < 0) ? 1 - a1 : a0, hi = (dx < 0 || dy < 0) ? 1 - a0 : a1;
+            var min = dx != 0 ? new Vector3(x + lo, y, z) : new Vector3(x, y + lo, z);
+            var max = dx != 0 ? new Vector3(x + hi, y + 1, z + a1) : new Vector3(x + 1, y + hi, z + a1);
+            // The face towards the next (taller) step is covered by it.
+            FaceDir? covered = k == StepsPerLevel - 1 ? null
+                : dx > 0 ? FaceDir.PosX : dx < 0 ? FaceDir.NegX : dy > 0 ? FaceDir.PosY : FaceDir.NegY;
+            AddBox(tiles, x, y, z, min, max, t, output, covered);
+        }
     }
 
-    private static void AddStair(TileBox tiles, int x, int y, int z, List<Quad> output)
+    /// <summary>A low lip around the edge of a down stair's opening, so the stairwell reads from above.</summary>
+    private static void AddRim(TileBox tiles, int x, int y, int z, TileType t, List<Quad> output)
     {
-        var (dx, dy) = StairFacing(tiles, x, y, z);
-        // Raised half: the half of the tile on the rising side (its underside is inside the slab).
-        float hx0 = dx > 0 ? x + 0.5f : x, hx1 = dx < 0 ? x + 0.5f : x + 1;
-        float hy0 = dy > 0 ? y + 0.5f : y, hy1 = dy < 0 ? y + 0.5f : y + 1;
-        AddBox(tiles, x, y, z, new Vector3(hx0, hy0, z + 0.5f), new Vector3(hx1, hy1, z + 1), output, bottom: false);
-        // Lower slab: the whole tile, half height. Its top is only exposed on the low half (the tread).
-        AddBox(tiles, x, y, z, new Vector3(x, y, z), new Vector3(x + 1, y + 1, z + 0.5f), output, top: false);
-        float lx0 = dx < 0 ? x + 0.5f : x, lx1 = dx > 0 ? x + 0.5f : x + 1;
-        float ly0 = dy < 0 ? y + 0.5f : y, ly1 = dy > 0 ? y + 0.5f : y + 1;
-        output.Add(MakeQuad(2, 0, 1, z + 0.5f, lx0, lx1, ly0, ly1, FaceDir.PosZ, TileType.Stairs));
+        const float w = 0.12f, h = 0.08f;
+        AddBox(tiles, x, y, z, new Vector3(x, y, z), new Vector3(x + 1, y + w, z + h), t, output);
+        AddBox(tiles, x, y, z, new Vector3(x, y + 1 - w, z), new Vector3(x + 1, y + 1, z + h), t, output);
+        AddBox(tiles, x, y, z, new Vector3(x, y + w, z), new Vector3(x + w, y + 1 - w, z + h), t, output);
+        AddBox(tiles, x, y, z, new Vector3(x + 1 - w, y + w, z), new Vector3(x + 1, y + 1 - w, z + h), t, output);
     }
 
     /// <summary>Adds a box inside tile (x,y,z), skipping faces flush against an occluding neighbour.</summary>
-    private static void AddBox(TileBox tiles, int x, int y, int z, Vector3 min, Vector3 max, List<Quad> output,
-        bool top = true, bool bottom = true)
+    private static void AddBox(TileBox tiles, int x, int y, int z, Vector3 min, Vector3 max, TileType t,
+        List<Quad> output, FaceDir? skip = null)
     {
-        bool Hidden(float face, float tileEdge, int nx, int ny, int nz) =>
-            face == tileEdge && TileInfo.Occludes(tiles.Get(x + nx, y + ny, z + nz));
+        bool Hidden(FaceDir dir, float face, float tileEdge, int nx, int ny, int nz) =>
+            dir == skip || (face == tileEdge && TileInfo.Occludes(tiles.Get(x + nx, y + ny, z + nz)));
 
-        if (!Hidden(max.X, x + 1, 1, 0, 0)) output.Add(MakeQuad(0, 1, 2, max.X, min.Y, max.Y, min.Z, max.Z, FaceDir.PosX, TileType.Stairs));
-        if (!Hidden(min.X, x, -1, 0, 0)) output.Add(MakeQuad(0, 1, 2, min.X, min.Y, max.Y, min.Z, max.Z, FaceDir.NegX, TileType.Stairs));
-        if (!Hidden(max.Y, y + 1, 0, 1, 0)) output.Add(MakeQuad(1, 0, 2, max.Y, min.X, max.X, min.Z, max.Z, FaceDir.PosY, TileType.Stairs));
-        if (!Hidden(min.Y, y, 0, -1, 0)) output.Add(MakeQuad(1, 0, 2, min.Y, min.X, max.X, min.Z, max.Z, FaceDir.NegY, TileType.Stairs));
-        if (top && !Hidden(max.Z, z + 1, 0, 0, 1)) output.Add(MakeQuad(2, 0, 1, max.Z, min.X, max.X, min.Y, max.Y, FaceDir.PosZ, TileType.Stairs));
-        if (bottom && !Hidden(min.Z, z, 0, 0, -1) && z > 0) output.Add(MakeQuad(2, 0, 1, min.Z, min.X, max.X, min.Y, max.Y, FaceDir.NegZ, TileType.Stairs));
+        if (!Hidden(FaceDir.PosX, max.X, x + 1, 1, 0, 0)) output.Add(MakeQuad(0, 1, 2, max.X, min.Y, max.Y, min.Z, max.Z, FaceDir.PosX, t));
+        if (!Hidden(FaceDir.NegX, min.X, x, -1, 0, 0)) output.Add(MakeQuad(0, 1, 2, min.X, min.Y, max.Y, min.Z, max.Z, FaceDir.NegX, t));
+        if (!Hidden(FaceDir.PosY, max.Y, y + 1, 0, 1, 0)) output.Add(MakeQuad(1, 0, 2, max.Y, min.X, max.X, min.Z, max.Z, FaceDir.PosY, t));
+        if (!Hidden(FaceDir.NegY, min.Y, y, 0, -1, 0)) output.Add(MakeQuad(1, 0, 2, min.Y, min.X, max.X, min.Z, max.Z, FaceDir.NegY, t));
+        if (!Hidden(FaceDir.PosZ, max.Z, z + 1, 0, 0, 1)) output.Add(MakeQuad(2, 0, 1, max.Z, min.X, max.X, min.Y, max.Y, FaceDir.PosZ, t));
+        if (!Hidden(FaceDir.NegZ, min.Z, z, 0, 0, -1) && z > 0) output.Add(MakeQuad(2, 0, 1, min.Z, min.X, max.X, min.Y, max.Y, FaceDir.NegZ, t));
     }
 
     private static Quad MakeQuad(int axis, int ua, int va, float plane, float u0, float u1, float v0, float v1,

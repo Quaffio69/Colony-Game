@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using Colony.Core;
 using Colony.Core.Meshing;
@@ -29,10 +30,15 @@ public partial class WorldView : Node3D
     /// <summary>Main-thread milliseconds per frame for snapshotting and uploading meshes.</summary>
     [Export] public double MeshBudgetMs { get; set; } = 6.0;
     [Export] public int MaxInFlight { get; set; } = 128;
+    /// <summary>Budget while more than <see cref="LoadingBacklog"/> sections are pending (startup).</summary>
+    [Export] public double LoadingBudgetMs { get; set; } = 40.0;
+    private const int LoadingBacklog = 2000;
+    private double _budgetMs = 6.0;
+    private int _maxInFlight = 128;
 
     private sealed class Section
     {
-        public required int X0, Y0, Z0, SX, SY, SZ;
+        public required int Index, X0, Y0, Z0, SX, SY, SZ;
         public required Chunk[] Chunks;
         public int[] BuiltVersions = [];
         public bool InFlight;
@@ -55,7 +61,11 @@ public partial class WorldView : Node3D
     private ColonySim _sim = null!;
     private readonly List<Section> _sections = new();
     private readonly ConcurrentQueue<MeshResult> _results = new();
-    private int _scanCursor;
+    // Sections waiting to be checked/meshed, fed by VoxelWorld.ChunkChanged: no per-frame scans of every section.
+    private readonly Queue<int> _dirtyQueue = new();
+    private bool[] _queued = [];
+    private int _sectionsX, _sectionsY;
+    private readonly HashSet<int> _capDirty = new(); // changed chunks on the cap's two levels
     private int _inFlight;
     private ShaderMaterial _terrainMaterial = null!;
 
@@ -65,7 +75,6 @@ public partial class WorldView : Node3D
     private Image _capImage = null!;
     private ImageTexture _capTexture = null!;
     private byte[] _capData = [];
-    private readonly Dictionary<int, int> _capChunkVersions = new();
     private int _capLevel = -1;
 
     private readonly Dictionary<DesignationKind, MultiMeshInstance3D> _designationMarks = new();
@@ -76,6 +85,10 @@ public partial class WorldView : Node3D
 
     public VoxelWorld World => _sim.World;
     public int VisibleQuads { get; private set; }
+    /// <summary>Startup diagnostics: main-thread ms spent snapshotting / uploading, worker ms spent meshing.</summary>
+    public double SnapshotMs, UploadMs;
+    private long _workerTicks;
+    public double WorkerMs => _workerTicks * 1000.0 / Stopwatch.Frequency;
     public int SectionCount => _sections.Count;
     /// <summary>Sections waiting to be (re)meshed or uploaded. Zero once the world is fully built.</summary>
     public int PendingSections { get; private set; }
@@ -94,13 +107,18 @@ public partial class WorldView : Node3D
         TileType.Soil => new Color(0.48f, 0.34f, 0.22f),
         TileType.Stone => new Color(0.52f, 0.52f, 0.55f),
         TileType.Ore => new Color(0.80f, 0.55f, 0.25f),
-        TileType.Stairs => new Color(0.70f, 0.62f, 0.48f),
+        TileType.UpStair => new Color(0.74f, 0.64f, 0.46f),
+        TileType.DownStair => new Color(0.62f, 0.54f, 0.42f),
+        TileType.UpDownStair => new Color(0.80f, 0.72f, 0.56f),
         _ => Colors.Magenta,
     };
 
     public static Color DesignationColor(DesignationKind kind) => kind switch
     {
-        DesignationKind.CarveStairs => new Color(0.3f, 0.85f, 1f, 0.45f),
+        DesignationKind.UpStair => new Color(0.3f, 1f, 0.55f, 0.45f),
+        DesignationKind.DownStair => new Color(0.3f, 0.55f, 1f, 0.45f),
+        DesignationKind.UpDownStair => new Color(0.3f, 0.85f, 1f, 0.45f),
+        DesignationKind.Chop => new Color(0.45f, 1f, 0.25f, 0.4f),
         _ => new Color(1f, 0.85f, 0.2f, 0.45f),
     };
 
@@ -123,6 +141,7 @@ public partial class WorldView : Node3D
 
             _sections.Add(new Section
             {
+                Index = _sections.Count,
                 X0 = x0, Y0 = y0, Z0 = z0,
                 SX = Math.Min(SectionX, World.Width - x0),
                 SY = Math.Min(SectionY, World.Depth - y0),
@@ -130,6 +149,12 @@ public partial class WorldView : Node3D
                 Chunks = chunks.ToArray(),
             });
         }
+
+        _sectionsX = (World.Width + SectionX - 1) / SectionX;
+        _sectionsY = (World.Depth + SectionY - 1) / SectionY;
+        _queued = new bool[_sections.Count];
+        for (int i = 0; i < _sections.Count; i++) Enqueue(i);
+        World.ChunkChanged += OnChunkChanged;
 
         BuildCap();
 
@@ -156,9 +181,14 @@ public partial class WorldView : Node3D
         if (_appliedViewLevel != _viewLevel) ApplyViewLevel();
 
         var clock = Stopwatch.StartNew();
+        // While the initial world (or a huge change) is still being built, frames are a loading screen anyway:
+        // spend most of each one meshing instead of trickling sections in.
+        bool loading = PendingSections > LoadingBacklog;
+        _budgetMs = loading ? LoadingBudgetMs : MeshBudgetMs;
+        _maxInFlight = loading ? MaxInFlight * 8 : MaxInFlight;
         ApplyResults(clock);
         ScheduleDirty(clock);
-        UpdateCap();
+        if (_capDirty.Count > 0) UpdateCap();
 
         var designations = _sim.Designations;
         if (designations.Version != _designationsDrawnVersion || _viewLevel != _designationsDrawnLevel)
@@ -176,39 +206,84 @@ public partial class WorldView : Node3D
         RebuildCapFull();
     }
 
-    /// <summary>Snapshots dirty sections and hands them to worker threads, within the frame budget.</summary>
+    private void Enqueue(int section)
+    {
+        if (_queued[section]) return;
+        _queued[section] = true;
+        _dirtyQueue.Enqueue(section);
+    }
+
+    /// <summary>A chunk's tiles (or a neighbour's border tiles) changed: requeue its section, patch the cap.</summary>
+    private void OnChunkChanged(int chunkIndex)
+    {
+        var c = World.Chunks[chunkIndex].Coord;
+        int sx = (c.X << Chunk.Shift) / SectionX, sy = (c.Y << Chunk.Shift) / SectionY, sz = (c.Z << Chunk.Shift) / SectionZ;
+        Enqueue((sz * _sectionsY + sy) * _sectionsX + sx);
+        if (c.Z >= _capLevel >> Chunk.Shift && c.Z <= (_capLevel + 1) >> Chunk.Shift) _capDirty.Add(chunkIndex);
+    }
+
+    /// <summary>Snapshots queued sections and hands them to worker threads, within the frame budget.</summary>
     private void ScheduleDirty(Stopwatch clock)
     {
-        int pending = 0;
-        int n = _sections.Count, start = _scanCursor;
-        for (int step = 0; step < n; step++)
+        while (_dirtyQueue.TryPeek(out int index))
         {
-            var s = _sections[(start + step) % n];
-            if (s.InFlight) { pending++; continue; }
-            if (!s.IsDirty()) continue;
-
-            // Nothing solid at all: no geometry, no snapshot needed.
-            bool empty = true;
-            foreach (var c in s.Chunks) empty &= c.SolidCount == 0;
-            if (empty)
+            var s = _sections[index];
+            // In flight: its result's arrival re-checks it. Clean: nothing to do.
+            if (s.InFlight || !s.IsDirty())
             {
+                Dequeue();
+                continue;
+            }
+
+            // Nothing solid at all, or solid rock buried in solid rock: no geometry, no snapshot needed.
+            bool empty = true;
+            foreach (var c in s.Chunks) empty &= c.NonAirCount == 0;
+            if (empty || IsBuried(s))
+            {
+                Dequeue();
                 s.BuiltVersions = s.CurrentVersions();
                 SetMesh(s, null, 0);
                 continue;
             }
 
-            pending++;
-            if (_inFlight >= MaxInFlight || clock.Elapsed.TotalMilliseconds > MeshBudgetMs) continue;
-
+            if (_inFlight >= _maxInFlight || clock.Elapsed.TotalMilliseconds > _budgetMs) break; // next frame
+            Dequeue();
+            long t0 = Stopwatch.GetTimestamp();
             var versions = s.CurrentVersions();
             var box = TileBox.Capture(World, s.X0 - SectionMesher.Pad, s.Y0 - SectionMesher.Pad, s.Z0 - SectionMesher.Pad,
                 s.SX + 2 * SectionMesher.Pad, s.SY + 2 * SectionMesher.Pad, s.SZ + 2 * SectionMesher.Pad);
             s.InFlight = true;
             _inFlight++;
-            Task.Run(() => _results.Enqueue(BuildMesh(s, versions, box)));
-            _scanCursor = (start + step + 1) % n; // next frame resumes after the last scheduled section
+            SnapshotMs += (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+            Task.Run(() =>
+            {
+                long w0 = Stopwatch.GetTimestamp();
+                var result = BuildMesh(s, versions, box);
+                Interlocked.Add(ref _workerTicks, Stopwatch.GetTimestamp() - w0);
+                _results.Enqueue(result);
+            });
         }
-        PendingSections = pending + _results.Count;
+        PendingSections = _dirtyQueue.Count + _inFlight + _results.Count;
+
+        void Dequeue() => _queued[_dirtyQueue.Dequeue()] = false;
+    }
+
+    /// <summary>
+    /// True if the section and a one-tile shell around it are all solid, inside the world (the world's sides
+    /// and top are drawn, its underside never is), so it can have no visible faces. O(chunks), no tile reads.
+    /// </summary>
+    private bool IsBuried(Section s)
+    {
+        if (s.X0 == 0 || s.Y0 == 0 || s.X0 + s.SX >= World.Width || s.Y0 + s.SY >= World.Depth ||
+            s.Z0 + s.SZ >= World.Height) return false;
+        int cx0 = (s.X0 - 1) >> Chunk.Shift, cx1 = (s.X0 + s.SX) >> Chunk.Shift;
+        int cy0 = (s.Y0 - 1) >> Chunk.Shift, cy1 = (s.Y0 + s.SY) >> Chunk.Shift;
+        int cz0 = Math.Max(0, s.Z0 - 1) >> Chunk.Shift, cz1 = (s.Z0 + s.SZ) >> Chunk.Shift;
+        for (int cz = cz0; cz <= cz1; cz++)
+        for (int cy = cy0; cy <= cy1; cy++)
+        for (int cx = cx0; cx <= cx1; cx++)
+            if (World.GetChunk(cx, cy, cz) is not { SolidCount: Chunk.Volume }) return false;
+        return true;
     }
 
     private static MeshResult BuildMesh(Section s, int[] versions, TileBox box)
@@ -246,12 +321,14 @@ public partial class WorldView : Node3D
 
     private void ApplyResults(Stopwatch clock)
     {
-        while (clock.Elapsed.TotalMilliseconds < MeshBudgetMs && _results.TryDequeue(out var r))
+        long u0 = Stopwatch.GetTimestamp();
+        while (clock.Elapsed.TotalMilliseconds < _budgetMs && _results.TryDequeue(out var r))
         {
             var s = r.Section;
             s.InFlight = false;
             _inFlight--;
-            s.BuiltVersions = r.Versions; // if the world moved on meanwhile, IsDirty() will requeue it
+            s.BuiltVersions = r.Versions;
+            if (s.IsDirty()) Enqueue(s.Index); // the world moved on while it was being meshed
 
             if (r.Quads == 0)
             {
@@ -268,6 +345,7 @@ public partial class WorldView : Node3D
             mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
             SetMesh(s, mesh, r.Quads);
         }
+        UploadMs += (Stopwatch.GetTimestamp() - u0) * 1000.0 / Stopwatch.Frequency;
     }
 
     private void SetMesh(Section s, ArrayMesh? mesh, int quads)
@@ -327,10 +405,9 @@ public partial class WorldView : Node3D
         World.CopyBox(0, 0, level, World.Width, World.Depth, 2, layers);
         int plane = World.Width * World.Depth;
         for (int i = 0; i < plane; i++)
-            _capData[i] = layers[i] != TileType.Air && layers[plane + i] != TileType.Air ? (byte)layers[i] : (byte)0;
+            _capData[i] = TileInfo.IsSolid(layers[i]) && TileInfo.IsSolid(layers[plane + i]) ? (byte)layers[i] : (byte)0;
 
-        _capChunkVersions.Clear();
-        foreach (var (key, chunk) in CapChunks()) _capChunkVersions[key] = chunk.Version;
+        _capDirty.Clear();
         UploadCap();
     }
 
@@ -338,11 +415,9 @@ public partial class WorldView : Node3D
     private void UpdateCap()
     {
         bool changed = false;
-        foreach (var (key, chunk) in CapChunks())
+        foreach (int key in _capDirty)
         {
-            if (_capChunkVersions.TryGetValue(key, out int v) && v == chunk.Version) continue;
-            _capChunkVersions[key] = chunk.Version;
-
+            var chunk = World.Chunks[key];
             int x0 = chunk.Origin.X, y0 = chunk.Origin.Y;
             int sx = Math.Min(Chunk.Size, World.Width - x0), sy = Math.Min(Chunk.Size, World.Depth - y0);
             var layers = new TileType[sx * sy * 2];
@@ -352,20 +427,12 @@ public partial class WorldView : Node3D
             {
                 var t = layers[y * sx + x];
                 var above = layers[sx * sy + y * sx + x];
-                _capData[(y0 + y) * World.Width + x0 + x] = t != TileType.Air && above != TileType.Air ? (byte)t : (byte)0;
+                _capData[(y0 + y) * World.Width + x0 + x] = TileInfo.IsSolid(t) && TileInfo.IsSolid(above) ? (byte)t : (byte)0;
             }
             changed = true;
         }
+        _capDirty.Clear();
         if (changed) UploadCap();
-    }
-
-    private IEnumerable<(int Key, Chunk Chunk)> CapChunks()
-    {
-        int czLo = _capLevel >> Chunk.Shift, czHi = Math.Min(World.ChunksZ - 1, (_capLevel + 1) >> Chunk.Shift);
-        for (int cz = czLo; cz <= czHi; cz++)
-        for (int cy = 0; cy < World.ChunksY; cy++)
-        for (int cx = 0; cx < World.ChunksX; cx++)
-            yield return (World.ChunkIndex(cx, cy, cz), World.GetChunk(cx, cy, cz)!);
     }
 
     private void UploadCap()
@@ -385,7 +452,8 @@ public partial class WorldView : Node3D
         {
             var visible = new List<TilePos>();
             foreach (var (p, k) in _sim.Designations.All)
-                if (k == kind && p.Z <= _viewLevel) visible.Add(p);
+                // Chop marks a tree's (open) cell, which stands on the cut surface like a colonist.
+                if (k == kind && p.Z <= _viewLevel + (k == DesignationKind.Chop ? 1 : 0)) visible.Add(p);
 
             var mm = marks.Multimesh;
             mm.InstanceCount = visible.Count;

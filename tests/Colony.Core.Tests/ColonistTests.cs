@@ -71,13 +71,15 @@ public class ColonistTests
         var sim = FlatSim(surface);
         var c = sim.AddColonist("Digger", new TilePos(3, 3, surface + 1));
         sim.AddColonist("Helper", new TilePos(4, 3, surface + 1));
-        sim.Designations.DesignateStairs(new TilePos(8, 8, surface), new TilePos(9, 9, surface), surface, depth: 6);
+        // A 1x1 DF-style shaft, 6 levels deep.
+        sim.Designations.DesignateStairs(new TilePos(8, 8, surface), new TilePos(8, 8, surface - 5));
 
         for (int i = 0; i < 20000 && sim.Designations.Count > 0; i++) sim.Step();
 
         Assert.Equal(0, sim.Designations.Count);
-        Assert.Equal(6, Enumerable.Range(surface - 5, 6).Count(z =>
-            Enumerable.Range(8, 2).Any(x => Enumerable.Range(8, 2).Any(y => sim.World.Get(x, y, z) == TileType.Stairs))));
+        Assert.Equal(TileType.DownStair, sim.World.Get(8, 8, surface));
+        for (int z = surface - 4; z < surface; z++) Assert.Equal(TileType.UpDownStair, sim.World.Get(8, 8, z));
+        Assert.Equal(TileType.UpStair, sim.World.Get(8, 8, surface - 5));
 
         // Now the bottom is reachable from the surface.
         var bottom = Pathfinder.FindNearest(sim.World, c.Position, p => p.Z == surface - 5, out _);

@@ -53,12 +53,12 @@ public class DesignationTests
         var dig = new TilePos(3, 3, 0);
         var carve = new TilePos(4, 4, 0);
         d.Designate(dig);
-        d.Designate(carve, DesignationKind.CarveStairs);
+        d.Designate(carve, DesignationKind.UpDownStair);
 
         Assert.True(d.Complete(dig));
         Assert.True(d.Complete(carve));
         Assert.Equal(TileType.Air, w.Get(dig));
-        Assert.Equal(TileType.Stairs, w.Get(carve));
+        Assert.Equal(TileType.UpDownStair, w.Get(carve));
         Assert.Equal(0, d.Count);
         Assert.False(d.Complete(new TilePos(5, 5, 0))); // never designated
     }
@@ -79,63 +79,65 @@ public class DesignationTests
     }
 
     [Fact]
-    public void PerimeterRing_IsAClosedOrthogonalLoop()
+    public void StairDesignations_CombineDirections_LikeDF()
     {
-        foreach (var (w, h) in new[] { (2, 2), (3, 2), (4, 5) })
-        {
-            var ring = Designations.PerimeterRing(0, 0, w - 1, h - 1);
-            Assert.Equal(2 * (w + h) - 4, ring.Count);
-            Assert.Equal(ring.Count, ring.Distinct().Count());
-            for (int i = 0; i < ring.Count; i++)
-            {
-                var (ax, ay) = ring[i];
-                var (bx, by) = ring[(i + 1) % ring.Count];
-                Assert.Equal(1, Math.Abs(ax - bx) + Math.Abs(ay - by));
-            }
-        }
+        Assert.Equal(TileType.UpDownStair, Designations.Result(DesignationKind.UpStair, TileType.DownStair));
+        Assert.Equal(TileType.UpDownStair, Designations.Result(DesignationKind.DownStair, TileType.UpStair));
+        Assert.Equal(TileType.UpStair, Designations.Result(DesignationKind.UpStair, TileType.Stone));
+        Assert.Equal(TileType.Air, Designations.Result(DesignationKind.Dig, TileType.UpDownStair));
+
+        var w = Block(8, 8, 4);
+        var d = new Designations(w);
+        w.Set(2, 2, 4, TileType.DownStair);
+        Assert.False(d.Designate(new TilePos(2, 2, 4), DesignationKind.DownStair)); // already that
+        Assert.True(d.Designate(new TilePos(2, 2, 4), DesignationKind.UpStair));
+        Assert.True(d.Designate(new TilePos(3, 3, 4), DesignationKind.Dig));
     }
 
     [Fact]
-    public void Stairs_RequireTwoByTwo()
+    public void StairsBox_PutsDownOnTop_UpDownBetween_UpAtTheBottom()
     {
         var w = Block(8, 12, 9);
         var d = new Designations(w);
-        Assert.Throws<ArgumentException>(() => d.DesignateStairs(new TilePos(2, 2, 9), new TilePos(2, 5, 9), 9, 4));
+        // Corners in any order, spanning levels 9..5.
+        Assert.Equal(2 * 5, d.DesignateStairs(new TilePos(2, 2, 5), new TilePos(3, 2, 9)));
+        Assert.True(d.TryGet(new TilePos(2, 2, 9), out var top) && top == DesignationKind.DownStair);
+        Assert.True(d.TryGet(new TilePos(3, 2, 7), out var mid) && mid == DesignationKind.UpDownStair);
+        Assert.True(d.TryGet(new TilePos(3, 2, 5), out var bottom) && bottom == DesignationKind.UpStair);
+
+        // A single level gets up/down stairs; the world's bottom layer is never designated.
+        Assert.Equal(1, d.DesignateStairs(new TilePos(5, 5, 3), new TilePos(5, 5, 3)));
+        Assert.True(d.TryGet(new TilePos(5, 5, 3), out var single) && single == DesignationKind.UpDownStair);
+        d.DesignateStairs(new TilePos(6, 6, 0), new TilePos(6, 6, 2));
+        Assert.False(d.Contains(new TilePos(6, 6, 0)));
     }
 
     [Theory]
-    [InlineData(2, 2, 6)]
-    [InlineData(3, 3, 8)]
-    [InlineData(2, 4, 5)]
+    [InlineData(1, 1, 6)]
+    [InlineData(2, 2, 8)]
+    [InlineData(1, 3, 2)]
     public void CompletedStaircase_ConnectsSurfaceToBottom(int sizeX, int sizeY, int depth)
     {
         const int surface = 10;
         var w = Block(12, 16, surface);
         var d = new Designations(w);
+        int bottomLevel = surface - depth + 1;
         var a = new TilePos(4, 4, surface);
-        var b = new TilePos(4 + sizeX - 1, 4 + sizeY - 1, surface);
+        var b = new TilePos(4 + sizeX - 1, 4 + sizeY - 1, bottomLevel);
 
-        int n = d.DesignateStairs(a, b, surface, depth);
-        Assert.Equal(sizeX * sizeY * depth, n);
-        Assert.Equal(depth, d.All.Count(kv => kv.Value == DesignationKind.CarveStairs));
-
+        Assert.Equal(sizeX * sizeY * depth, d.DesignateStairs(a, b));
         foreach (var p in d.All.Keys.ToList()) d.Complete(p);
+        Assert.Equal(TileType.UpStair, w.Get(4, 4, bottomLevel));
 
         var top = new TilePos(1, 1, surface + 1);
-        int bottomLevel = surface - depth + 1; // standing on the undug level below the shaft
-        var bottom = new TilePos(4, 4, bottomLevel);
         Assert.True(Movement.IsStandable(w, top));
-
         var down = Pathfinder.FindNearest(w, top, p => p.Z == bottomLevel, out var reached);
         Assert.NotNull(down);
         Assert.Equal(bottomLevel, reached.Z);
+        Assert.NotNull(Pathfinder.FindPath(w, reached, top)); // and back up
 
-        // And back up again.
-        Assert.NotNull(Pathfinder.FindPath(w, reached, top));
-
-        // The descent should use stair-cost climbs, not raw climbs.
+        // Every level change on the way is a cheap stair move.
         var cost = Pathfinder.PathCost(w, top, down)!.Value;
-        Assert.True(cost < depth * Movement.ClimbDownCost + 10, $"cost {cost}");
-        _ = bottom;
+        Assert.True(cost <= depth * Movement.StairCost + 6, $"cost {cost}");
     }
 }

@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Text;
 using Colony.Core;
 using Colony.Core.Procedural;
@@ -16,7 +16,7 @@ public partial class Main : Node3D
     [Export] public int Seed { get; set; } = 12345;
     [Export] public int WorldWidth { get; set; } = 2048;
     [Export] public int WorldDepth { get; set; } = 2048;
-    [Export] public int WorldHeight { get; set; } = 128;
+    [Export] public int WorldHeight { get; set; } = 384;
     [Export] public int StartingColonists { get; set; } = 7;
 
     private static readonly int[] Speeds = [1, 3, 10];
@@ -24,6 +24,8 @@ public partial class Main : Node3D
 
     private ColonySim _sim = null!;
     private WorldView _world = null!;
+    private FloraView _flora = null!;
+    private ItemView _items = null!;
     private DesignationTool _tool = null!;
     private Label _hud = null!;
     private CameraRig _rig = null!;
@@ -60,6 +62,14 @@ public partial class Main : Node3D
 
         _world = GetNode<WorldView>("WorldView");
         _world.Initialize(_sim);
+
+        _flora = new FloraView { Name = "FloraView" };
+        AddChild(_flora);
+        _flora.Initialize(_sim, _world);
+
+        _items = new ItemView { Name = "ItemView" };
+        AddChild(_items);
+        _items.Initialize(_sim, _world);
 
         GetNode<ColonistView>("ColonistView").Initialize(_sim, _world);
 
@@ -134,16 +144,19 @@ public partial class Main : Node3D
     private void UpdateHud()
     {
         var sb = new StringBuilder();
-        string hover = _tool.Hovered is { } h ? $"{_sim.World.Get(h)} at {h}" : "-";
+        string hover = _tool.Hovered is { } h
+            ? $"{_sim.World.Get(h)} at {h}" + (_sim.Flora.TryGet(h.Offset(0, 0, 1), out var plant) ? $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" : "")
+            : "-";
         string time = _paused ? "PAUSED" : $"{Speeds[_speedIndex]}x";
-        string tool = _tool.Mode == DesignationTool.ToolMode.Stairs ? $"Stairs (depth {_tool.StairDepth})" : "Dig";
+        string tool = DesignationTool.ModeName(_tool.Mode);
         double seconds = _sim.Tick / (double)ColonySim.TicksPerSecond;
 
         sb.AppendLine($"Level {_world.ViewLevel} / {_sim.World.Height - 1}    Time {seconds:0}s [{time}]    " +
                       $"{Engine.GetFramesPerSecond()} fps, sim {_simMsThisFrame:0.0} ms" +
                       (_world.PendingSections > 0 ? $"    building terrain: {_world.PendingSections} sections left" : ""));
         sb.AppendLine($"Tool: {tool}    Hover: {hover}");
-        sb.AppendLine($"Designations: {_sim.Designations.Count}    {_tool.LastAction}");
+        sb.AppendLine($"Designations: {_sim.Designations.Count}    {_tool.SelectionInfo ?? _tool.LastAction}");
+        sb.AppendLine(StockLine());
         if (_sim.RecentCaveIns.Count > 0)
         {
             var last = _sim.RecentCaveIns[^1];
@@ -155,11 +168,28 @@ public partial class Main : Node3D
         foreach (var c in _sim.Colonists)
             sb.AppendLine($"  {c.Name,-8} {c.Describe()}");
         sb.AppendLine();
-        sb.AppendLine("Tab: dig/stairs tool   [ ]: stair depth   LMB drag: designate   RMB drag: cancel");
+        sb.AppendLine("Tab/Shift+Tab: tool   LMB: start/confirm box (Z/X while selecting: span levels)   RMB: cancel box");
         sb.AppendLine("Z/X: level down/up   Space: pause   1/2/3: speed   Enter: (debug) complete all");
         sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists");
         // StringBuilder uses \r\n on Windows, which Label renders as an extra blank line.
         _hud.Text = sb.ToString().Replace("\r", "").TrimEnd();
+    }
+
+    /// <summary>"Stock: Logs 40, Stone 12 (loose: Stone 30)": stored totals, then what still lies around.</summary>
+    private string StockLine()
+    {
+        var stored = _sim.Items.Totals(_sim.Stockpiles.Contains);
+        var loose = _sim.Items.Totals(p => !_sim.Stockpiles.Contains(p));
+        static string List(int[] totals)
+        {
+            var parts = new List<string>();
+            for (int t = 0; t < totals.Length; t++)
+                if (totals[t] > 0) parts.Add($"{Colony.Core.Items.ItemInfo.Name((Colony.Core.Items.ItemType)t)} {totals[t]}");
+            return parts.Count == 0 ? "nothing" : string.Join(", ", parts);
+        }
+        string looseText = List(loose);
+        return $"Stock: {List(stored)}" + (looseText == "nothing" ? "" : $"    (loose: {looseText})") +
+               $"    Stockpile cells: {_sim.Stockpiles.Count}";
     }
 
     // ---- Dev aids -------------------------------------------------------------------------------
@@ -171,7 +201,7 @@ public partial class Main : Node3D
     private const int BenchFrames = 120;
     private int _frames;
     private TilePos? _stairsDemoAt;
-    private ulong _startMs;
+    private ulong _startMs, _firstFrameMs;
     private bool _benchActive;
     private ulong _meshedAtMs;
     private readonly List<double> _frameMs = new();
@@ -207,9 +237,11 @@ public partial class Main : Node3D
         _frames++;
         if (_frames == 1)
         {
+            _firstFrameMs = Time.GetTicksMsec();
             if (int.TryParse(Arg("--level"), out int level)) _world.ViewLevel = level;
             if (Arg("--dig-demo") != null) DigDemo();
             if (Arg("--stairs-demo") != null) StairsDemo();
+            if (Arg("--haul-demo") != null) HaulDemo();
             if (int.TryParse(Arg("--ticks"), out int ticks))
                 for (int i = 0; i < ticks; i++) _sim.Step();
             if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
@@ -220,7 +252,7 @@ public partial class Main : Node3D
 
         if (_meshedAtMs == 0)
         {
-            if (_frames > 2 && _world.PendingSections == 0)
+            if (_frames > 2 && _world.PendingSections == 0 && _flora.PendingRegions == 0)
             {
                 _meshedAtMs = Time.GetTicksMsec();
                 _maxSimMs = 0;
@@ -236,7 +268,8 @@ public partial class Main : Node3D
         foreach (var f in _frameMs) avg += f;
         avg /= _frameMs.Count;
         GD.Print($"[bench] world {WorldWidth}x{WorldDepth}x{WorldHeight}: {_sim.StartupReport}");
-        GD.Print($"[bench] fully meshed {_meshedAtMs - _startMs} ms after start; {_world.SectionCount} sections, {_world.VisibleQuads} quads");
+        GD.Print($"[bench] fully meshed {_meshedAtMs - _startMs} ms after start; {_world.SectionCount} sections, {_world.VisibleQuads} quads " +
+                 $"(main thread: snapshots {_world.SnapshotMs:0} ms, uploads {_world.UploadMs:0} ms; workers: meshing {_world.WorkerMs:0} ms; first frame at {_firstFrameMs - _startMs} ms)");
         GD.Print($"[bench] frame ms over {BenchFrames} frames: avg {avg:0.00}, p95 {_frameMs[(int)(_frameMs.Count * 0.95)]:0.00}, max {_frameMs[^1]:0.00}; max sim step batch {_maxSimMs:0.00} ms");
         GD.Print($"[bench] draw calls {Performance.GetMonitor(Performance.Monitor.RenderTotalDrawCallsInFrame)}, " +
                  $"video mem {Performance.GetMonitor(Performance.Monitor.RenderVideoMemUsed) / 1048576:0} MB, " +
@@ -257,13 +290,27 @@ public partial class Main : Node3D
         _sim.Designations.DesignateBox(new TilePos(cx - 6, cy - 4, z), new TilePos(cx + 6, cy + 4, z));
     }
 
-    /// <summary>Designates a 2x2 staircase in the ground right next to the colonists.</summary>
+/// <summary>Fells the woods around the colony and zones a stockpile next to it.</summary>
+    private void HaulDemo()
+    {
+        var c = _sim.Colonists[0].Position;
+        int chopped = _sim.Designations.DesignateBox(new TilePos(c.X - 16, c.Y - 16, c.Z - 8), new TilePos(c.X + 16, c.Y + 16, c.Z + 8),
+            Colony.Core.Orders.DesignationKind.Chop);
+        // Only surface ground qualifies (a buried tile has no walkable cell above it), so a tall box is fine.
+        int cells = _sim.Stockpiles.AddFloorBox(new TilePos(c.X - 7, c.Y - 3, c.Z - 6), new TilePos(c.X - 2, c.Y + 3, c.Z));
+        _stairsDemoAt = c;
+        GD.Print($"Haul demo: {chopped} trees to chop, {cells} stockpile cells");
+    }
+
+    /// <summary>Designates a 1x1 stair shaft 6 levels down next to the colonists, with a small room at the bottom.</summary>
     private void StairsDemo()
     {
         var c = _sim.Colonists[0].Position;
         var a = new TilePos(c.X + 3, c.Y + 3, _sim.World.SurfaceLevel(c.X + 3, c.Y + 3));
-        _sim.Designations.DesignateStairs(a, a.Offset(1, 1, 0), a.Z, 6);
-        _stairsDemoAt = a;
-        GD.Print($"Stairs demo: footprint {a}..{a.Offset(1, 1, 0)}, levels {a.Z}..{a.Z - 5}");
+        var bottom = a.Offset(0, 0, -5);
+        _sim.Designations.DesignateStairs(a, bottom);
+        _sim.Designations.DesignateBox(bottom.Offset(1, -1, 0), bottom.Offset(3, 1, 0));
+        _stairsDemoAt = bottom.Offset(1, 0, 0);
+        GD.Print($"Stairs demo: shaft at ({a.X},{a.Y}), levels {a.Z}..{bottom.Z}, room east of the bottom");
     }
 }

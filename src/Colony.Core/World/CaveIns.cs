@@ -57,7 +57,7 @@ public sealed class CaveIns
         }
     }
 
-    private bool IsSolid(TilePos p) => _world.InBounds(p) && TileInfo.IsSolid(_world.Get(p));
+    private bool IsSolid(TilePos p) => _world.InBounds(p) && TileInfo.IsStructural(_world.Get(p));
 
     private long Key(TilePos p) => ((long)p.Z * _world.Depth + p.Y) * _world.Width + p.X;
 
@@ -104,7 +104,7 @@ public sealed class CaveIns
             var below = p.Offset(0, 0, -1);
             if (_seen.TryGetValue(Key(below), out int f) && f == flood) continue; // part of the mass itself
             int free = 0;
-            for (int z = p.Z - 1; z >= 0 && !TileInfo.IsSolid(_world.Get(p.X, p.Y, z)); z--)
+            for (int z = p.Z - 1; z >= 0 && !TileInfo.IsStructural(_world.Get(p.X, p.Y, z)); z--)
                 if (++free >= drop) break;
             drop = Math.Min(drop, free);
             if (drop == 0) break;

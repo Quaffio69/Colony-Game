@@ -37,6 +37,14 @@ public partial class ColonistView : Node3D
             },
             Position = new Vector3(0, BodyHeight / 2f, 0),
         });
+        var load = new MeshInstance3D
+        {
+            Name = "Load",
+            Mesh = new BoxMesh { Size = new Vector3(0.34f, 0.22f, 0.3f) },
+            Position = new Vector3(0, BodyHeight + 0.08f, 0),
+            Visible = false,
+        };
+        root.AddChild(load);
         root.AddChild(new Label3D
         {
             Text = c.Name,
@@ -69,6 +77,12 @@ public partial class ColonistView : Node3D
             }
 
             root.Position = pos;
+
+            // Carried load: a box on the head, coloured by item type.
+            var load = root.GetNode<MeshInstance3D>("Load");
+            load.Visible = c.CarryingCount > 0;
+            if (load.Visible && (load.MaterialOverride as StandardMaterial3D)?.AlbedoColor != ItemView.ItemColor(c.CarryingType))
+                load.MaterialOverride = new StandardMaterial3D { AlbedoColor = ItemView.ItemColor(c.CarryingType) };
             // Colonists stand in the cell above the solid they walk on, so show those on the cut surface too.
             root.Visible = c.Position.Z <= _world.ViewLevel + 1;
         }

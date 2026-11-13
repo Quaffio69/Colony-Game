@@ -78,13 +78,67 @@ public class NavigationTests
     }
 
     [Fact]
-    public void StairFloors_MakeClimbingCheaper()
+    public void Stairs_ConnectVertically_OnlyWhenTheyMatch()
+    {
+        var w = Flat();
+        var low = new TilePos(5, 5, 1);
+        var high = new TilePos(5, 5, 2);
+        w.Set(low, TileType.UpStair);
+        Assert.Null(Movement.MoveCost(w, low, high)); // nothing to arrive on
+
+        w.Set(high, TileType.DownStair);
+        Assert.True(Movement.IsStandable(w, high)); // a stair is its own footing
+        Assert.Equal(Movement.StairCost, Movement.MoveCost(w, low, high));
+        Assert.Equal(Movement.StairCost, Movement.MoveCost(w, high, low));
+
+        w.Set(low, TileType.DownStair); // down onto down: no connection
+        Assert.Null(Movement.MoveCost(w, high, low));
+    }
+
+    [Fact]
+    public void ClimbingIntoOrOutOfAStair_IsCheap_RawClimbsAreNot()
     {
         var w = Flat();
         w.Set(6, 5, 1, TileType.Stone);
-        w.Set(6, 6, 1, TileType.Stairs);
         Assert.Equal(Movement.ClimbUpCost, Movement.MoveCost(w, new TilePos(5, 5, 1), new TilePos(6, 5, 2)));
-        Assert.Equal(Movement.StairCost, Movement.MoveCost(w, new TilePos(5, 6, 1), new TilePos(6, 6, 2)));
+        // A down stair cut into the raised level next to it: step down into it from the top.
+        w.Set(6, 6, 1, TileType.DownStair);
+        Assert.Equal(Movement.StairCost, Movement.MoveCost(w, new TilePos(6, 5, 2), new TilePos(6, 6, 1)));
+        Assert.Equal(Movement.StairCost, Movement.MoveCost(w, new TilePos(6, 6, 1), new TilePos(6, 5, 2)));
+    }
+
+    [Fact]
+    public void MoveGraph_IsUndirected_WithStairsEverywhere()
+    {
+        var rng = new Random(4);
+        var w = new VoxelWorld(20, 20, 10);
+        TileType[] palette = [TileType.Air, TileType.Air, TileType.Air, TileType.Stone, TileType.Stone,
+            TileType.UpStair, TileType.DownStair, TileType.UpDownStair];
+        for (int z = 0; z < 10; z++)
+        for (int y = 0; y < 20; y++)
+        for (int x = 0; x < 20; x++)
+            w.Set(x, y, z, z == 0 ? TileType.Stone : palette[rng.Next(palette.Length)]);
+
+        var moves = new List<(TilePos, float)>();
+        int checkedMoves = 0;
+        for (int z = 1; z < 10; z++)
+        for (int y = 0; y < 20; y++)
+        for (int x = 0; x < 20; x++)
+        {
+            var p = new TilePos(x, y, z);
+            if (!Movement.IsStandable(w, p)) continue;
+            Movement.GetMoves(w, p, moves);
+            foreach (var (q, cost) in moves.ToList())
+            {
+                Assert.True(Movement.IsStandable(w, q));
+                // Legality is symmetric (connectivity needs that); costs may differ (raw climbs vs drops).
+                var back = Movement.MoveCost(w, q, p);
+                Assert.True(back.HasValue, $"{p} -> {q} has no reverse move");
+                if (q.Z == p.Z) Assert.Equal(cost, back.Value);
+                checkedMoves++;
+            }
+        }
+        Assert.True(checkedMoves > 500, $"only {checkedMoves} moves");
     }
 
     [Fact]

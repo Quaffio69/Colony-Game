@@ -1,4 +1,4 @@
-using Colony.Core.World;
+﻿using Colony.Core.World;
 
 namespace Colony.Core.Navigation;
 
@@ -19,13 +19,16 @@ public sealed class Connectivity
 {
     private const int Pad = 2; // moves read up to two tiles below and one around a cell
 
+    /// <summary>A move from local region <see cref="From"/> into region <see cref="Region"/> of chunk <see cref="Other"/>.</summary>
+    private readonly record struct Link(ushort From, ushort Region, int Other);
+
     private sealed class ChunkNav
     {
         public int LabeledVersion = int.MinValue;
         public ushort[]? Labels;           // 0 = not standable, else local region id (1-based)
         public int RegionCount;
         public List<(ushort From, long TargetCell)> CellLinks = new();
-        public List<(ushort From, int OtherChunk, ushort OtherRegion)> RegionLinks = new();
+        public Link[] RegionLinks = [];
         public int DenseBase;
     }
 
@@ -33,6 +36,8 @@ public sealed class Connectivity
     private readonly ChunkNav[] _nav;
     private int[] _componentOfRegion = [];
     private bool _built;
+    private readonly List<int> _active = new();
+    private bool _activeDirty = true;
 
     /// <summary>Increments each time components are recomputed.</summary>
     public int Version { get; private set; }
@@ -50,7 +55,13 @@ public sealed class Connectivity
         _world = world;
         _nav = new ChunkNav[world.Chunks.Count];
         for (int i = 0; i < _nav.Length; i++) _nav[i] = new ChunkNav();
+        _baseOf = new int[_nav.Length];
+        _countOf = new int[_nav.Length];
+        world.ChunkChanged += i => _changed.Add(i);
     }
+
+    // Chunks changed since the last update (fed by VoxelWorld.ChunkChanged), so updates never scan the world.
+    private readonly HashSet<int> _changed = new();
 
     /// <summary>
     /// Component id of a standable tile, or -1 if it is not standable (or out of bounds). Two tiles are
@@ -75,17 +86,39 @@ public sealed class Connectivity
     /// <summary>Brings components up to date with the world. Cheap when nothing changed.</summary>
     public void Update()
     {
+        if (_built && _changed.Count == 0) return; // O(1) when the world is unchanged
+
         var chunks = _world.Chunks;
-        var dirty = new List<int>();
-        for (int i = 0; i < chunks.Count; i++)
-            if (chunks[i].Version != _nav[i].LabeledVersion)
-                dirty.Add(i);
-        if (dirty.Count == 0 && _built) return;
+        List<int> dirty;
+        if (_built)
+        {
+            dirty = new List<int>(_changed);
+            dirty.Sort(); // deterministic order (results don't depend on it, but keep runs identical)
+        }
+        else
+        {
+            dirty = new List<int>(chunks.Count);
+            for (int i = 0; i < chunks.Count; i++) dirty.Add(i);
+        }
+        _changed.Clear();
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
+        var hadRegions = new bool[dirty.Count];
+        for (int i = 0; i < dirty.Count; i++) hadRegions[i] = _nav[dirty[i]].RegionCount > 0;
         if (dirty.Count > 8) Parallel.ForEach(dirty, Relabel);
         else foreach (int i in dirty) Relabel(i);
         LastRelabelCount = dirty.Count;
+        for (int i = 0; i < dirty.Count && !_activeDirty; i++)
+            _activeDirty = hadRegions[i] != _nav[dirty[i]].RegionCount > 0;
+        if (_activeDirty)
+        {
+            // Chunks with walkable regions, in index order (keeps dense region ids deterministic). Only a
+            // small share of a deep world's chunks: the rest are solid rock or open sky.
+            _active.Clear();
+            for (int i = 0; i < _nav.Length; i++)
+                if (_nav[i].RegionCount > 0) _active.Add(i);
+            _activeDirty = false;
+        }
 
         // Links into a relabelled chunk must be re-resolved, since its region numbering changed.
         var resolve = new HashSet<int>();
@@ -98,12 +131,13 @@ public sealed class Connectivity
                 if (_world.GetChunk(c.X + dx, c.Y + dy, c.Z + dz) is { } n)
                     resolve.Add(_world.ChunkIndex(n.Coord.X, n.Coord.Y, n.Coord.Z));
         }
-        foreach (int i in resolve) ResolveLinks(i);
+        if (resolve.Count > 32) Parallel.ForEach(resolve, ResolveLinks); // each writes only its own chunk
+        else foreach (int i in resolve) ResolveLinks(i);
         double relabelMs = clock.Elapsed.TotalMilliseconds;
         clock.Restart();
 
         RebuildComponents();
-        LastTimings = $"relabel+resolve {relabelMs:0.00} ms, components {clock.Elapsed.TotalMilliseconds:0.00} ms, {_edgeCount} region edges";
+        LastTimings = $"relabel+resolve {relabelMs:0.00} ms, components {clock.Elapsed.TotalMilliseconds:0.00} ms ({_componentPhases}), {_edgeCount} region edges";
         _built = true;
         Version++;
     }
@@ -115,12 +149,14 @@ public sealed class Connectivity
         nav.LabeledVersion = chunk.Version;
         nav.CellLinks = new List<(ushort, long)>();
         nav.RegionCount = 0;
+        _countOf[chunkIndex] = 0;
         nav.Labels = null;
 
-        // Fully solid chunks have no open cells; empty chunks above empty chunks have no floors.
+        // Fully solid chunks have no open cells (stairs are open, so they don't count as solid); empty chunks
+        // (no stairs either) above chunks with nothing solid have no floors.
         if (chunk.SolidCount == Chunk.Size * Chunk.Size * Chunk.Size) return;
         var c = chunk.Coord;
-        if (chunk.SolidCount == 0 && (_world.GetChunk(c.X, c.Y, c.Z - 1)?.SolidCount ?? 0) == 0) return;
+        if (chunk.NonAirCount == 0 && (_world.GetChunk(c.X, c.Y, c.Z - 1)?.SolidCount ?? 0) == 0) return;
 
         var o = chunk.Origin;
         var box = TileBox.Capture(_world, o.X - Pad, o.Y - Pad, o.Z - Pad,
@@ -167,13 +203,19 @@ public sealed class Connectivity
         if (regions == 0) return;
         nav.Labels = labels;
         nav.RegionCount = regions;
+        _countOf[chunkIndex] = regions;
     }
 
     private void ResolveLinks(int chunkIndex)
     {
         var nav = _nav[chunkIndex];
-        var seen = new HashSet<(ushort, int, ushort)>();
-        var resolved = new List<(ushort, int, ushort)>();
+        if (nav.CellLinks.Count == 0)
+        {
+            nav.RegionLinks = [];
+            return;
+        }
+        var seen = new HashSet<long>();
+        var resolved = new List<Link>();
         foreach (var (from, cell) in nav.CellLinks)
         {
             long x = cell % _world.Width, rest = cell / _world.Width;
@@ -183,76 +225,88 @@ public sealed class Connectivity
             if (labels is null) continue;
             ushort region = labels[Chunk.Index((int)x & Chunk.Mask, (int)y & Chunk.Mask, (int)z & Chunk.Mask)];
             if (region == 0) continue; // the target stopped being standable; this link is stale
-            if (seen.Add((from, other, region))) resolved.Add((from, other, region));
+            if (seen.Add(((long)other << 32) | ((long)region << 16) | from)) resolved.Add(new Link(from, region, other));
         }
-        nav.RegionLinks = resolved;
+        nav.RegionLinks = resolved.ToArray();
     }
 
     // Reused across updates: these get large on big maps, and reallocating them every update would put
     // multi-megabyte arrays on the large object heap and trigger full GCs.
-    private int[] _parent = [];
+    private int[] _queue = [];
     private int[] _edgeA = [], _edgeB = [];
-    private int[] _rootToId = [];
     private int[] _regionChunk = [];
+    private readonly int[] _baseOf, _countOf; // per chunk index: dense id of its first region; region count (kept by Relabel)
+
+    private string _componentPhases = "";
 
     private void RebuildComponents()
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         int total = 0;
         int edgeCount = 0;
-        foreach (var nav in _nav)
+        foreach (int c in _active)
         {
+            var nav = _nav[c];
             nav.DenseBase = total;
+            _baseOf[c] = total;
             total += nav.RegionCount;
-            edgeCount += nav.RegionLinks.Count;
+            edgeCount += nav.RegionLinks.Length;
         }
         RegionCount = total;
 
-        Grow(ref _parent, total);
-        Grow(ref _rootToId, total);
+        Grow(ref _queue, total);
         Grow(ref _componentOfRegion, total);
         Grow(ref _regionChunk, total);
-        for (int c = 0; c < _nav.Length; c++)
+        foreach (int c in _active)
             for (int r = 0; r < _nav[c].RegionCount; r++) _regionChunk[_nav[c].DenseBase + r] = c;
         Grow(ref _edgeA, edgeCount);
         Grow(ref _edgeB, edgeCount);
-        var parent = _parent;
-        for (int i = 0; i < total; i++) parent[i] = i;
-
-        int Find(int a)
-        {
-            while (parent[a] != a)
-            {
-                parent[a] = parent[parent[a]];
-                a = parent[a];
-            }
-            return a;
-        }
+        double tPrep = sw.Elapsed.TotalMilliseconds;
 
         int edges = 0;
-        foreach (var nav in _nav)
-        foreach (var (from, other, region) in nav.RegionLinks)
+        var baseOf = _baseOf;
+        var countOf = _countOf;
+        foreach (int c in _active)
         {
-            var on = _nav[other];
-            if (region > on.RegionCount) continue; // defensive: stale link to a relabelled chunk
-            int ra = nav.DenseBase + from - 1, rb = on.DenseBase + region - 1;
-            _edgeA[edges] = ra;
-            _edgeB[edges] = rb;
-            edges++;
-            int a = Find(ra), b = Find(rb);
-            if (a != b) parent[Math.Max(a, b)] = Math.Min(a, b);
+            int baseA = baseOf[c] - 1;
+            foreach (var link in _nav[c].RegionLinks)
+            {
+                if (link.Region > countOf[link.Other]) continue; // defensive: stale link to a relabelled chunk
+                _edgeA[edges] = baseA + link.From;
+                _edgeB[edges] = baseOf[link.Other] + link.Region - 1;
+                edges++;
+            }
         }
+        double tEdges = sw.Elapsed.TotalMilliseconds;
         BuildRegionGraph(total, edges);
+        double tGraph = sw.Elapsed.TotalMilliseconds;
 
-        // Compact component ids to 0..ComponentCount-1.
-        Array.Fill(_rootToId, -1, 0, total);
+        // Components: breadth-first over the region graph, numbered in order of their lowest region id.
+        // Linear in regions + edges (union-find with naive linking built long chains and was ~5x slower).
+        var comp = _componentOfRegion;
+        Array.Fill(comp, -1, 0, total);
+        var queue = _queue;
         int components = 0;
         for (int i = 0; i < total; i++)
         {
-            int root = Find(i);
-            if (_rootToId[root] < 0) _rootToId[root] = components++;
-            _componentOfRegion[i] = _rootToId[root];
+            if (comp[i] >= 0) continue;
+            int id = components++, head = 0, tail = 0;
+            comp[i] = id;
+            queue[tail++] = i;
+            while (head < tail)
+            {
+                int r = queue[head++];
+                for (int k = _adjStart[r]; k < _adjStart[r + 1]; k++)
+                {
+                    int n = _adj[k];
+                    if (comp[n] >= 0) continue;
+                    comp[n] = id;
+                    queue[tail++] = n;
+                }
+            }
         }
         ComponentCount = components;
+        _componentPhases = $"prep {tPrep:0.00}, edges {tEdges - tPrep:0.00}, graph {tGraph - tEdges:0.00}, bfs {sw.Elapsed.TotalMilliseconds - tGraph:0.00}";
     }
 
     private static void Grow(ref int[] array, int size)

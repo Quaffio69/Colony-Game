@@ -1,4 +1,4 @@
-using Colony.Core.Procedural;
+﻿using Colony.Core.Procedural;
 using Colony.Core.World;
 
 namespace Colony.Core.Tests;
@@ -34,28 +34,118 @@ public class WorldGeneratorTests
     }
 
     [Fact]
-    public void EveryColumn_HasGrassOnTop_SolidBottom_AndOpenSky()
+    public void EveryColumn_MatchesTheTerrain_WithSolidBottom_AndOpenSky()
     {
-        var w = WorldGenerator.Generate(Settings);
+        var (w, t) = WorldGenerator.GenerateWithTerrain(Settings);
 
         for (int y = 0; y < w.Depth; y++)
         for (int x = 0; x < w.Width; x++)
         {
             int surface = w.SurfaceLevel(x, y);
+            Assert.Equal(t.SurfaceAt(x, y), surface);
             Assert.InRange(surface, 1, w.Height - 2);
-            Assert.Equal(TileType.Grass, w.Get(x, y, surface));
+            Assert.Contains(w.Get(x, y, surface), new[] { TileType.Grass, TileType.Soil, TileType.Stone });
             Assert.True(w.IsSolid(x, y, 0));
+            for (int z = 0; z <= surface; z++) Assert.True(w.IsSolid(x, y, z)); // no voids under the surface
             Assert.Equal(TileType.Air, w.Get(x, y, w.Height - 1));
         }
     }
 
+    /// <summary>A mid-sized map: big enough for rivers to form.</summary>
+    private static readonly WorldGenSettings Large = new(Seed: 12345, Width: 512, Depth: 512, Height: 192);
+
     [Fact]
-    public void CentreIsHigherThanEdges()
+    public void DeepRock_IsStoredAsUniformChunks()
     {
-        var w = WorldGenerator.Generate(Settings);
-        int centre = w.SurfaceLevel(w.Width / 2, w.Depth / 2);
-        int corner = w.SurfaceLevel(0, 0);
-        Assert.True(centre > corner, $"Expected mountain at centre: centre={centre}, corner={corner}");
+        var w = WorldGenerator.Generate(Large);
+        int stored = w.Chunks.Count(c => !c.IsUniform);
+        int deepStone = w.Chunks.Count(c => c.IsUniform && c.UniformType == TileType.Stone);
+        Assert.True(stored < w.Chunks.Count / 3, $"{stored} of {w.Chunks.Count} chunks store tiles");
+        Assert.True(deepStone > w.Chunks.Count / 4, $"only {deepStone} uniform stone chunks");
+
+        // Ore exists, and deposits are clustered rather than speckled: most ore touches other ore.
+        int ore = 0, clustered = 0;
+        foreach (var c in w.Chunks.Where(c => !c.IsUniform))
+        {
+            var o = c.Origin;
+            for (int z = 0; z < Chunk.Size; z++)
+            for (int y = 0; y < Chunk.Size; y++)
+            for (int x = 0; x < Chunk.Size; x++)
+            {
+                if (c.Get(x, y, z) != TileType.Ore) continue;
+                ore++;
+                int wx = o.X + x, wy = o.Y + y, wz = o.Z + z;
+                if (w.Get(wx + 1, wy, wz) == TileType.Ore || w.Get(wx - 1, wy, wz) == TileType.Ore ||
+                    w.Get(wx, wy + 1, wz) == TileType.Ore || w.Get(wx, wy - 1, wz) == TileType.Ore ||
+                    w.Get(wx, wy, wz + 1) == TileType.Ore || w.Get(wx, wy, wz - 1) == TileType.Ore) clustered++;
+            }
+        }
+        Assert.True(ore > 1000, $"only {ore} ore tiles");
+        Assert.True(clustered > ore * 0.8, $"{clustered} of {ore} ore tiles have an ore neighbour");
+    }
+
+    [Fact]
+    public void Terrain_IsMostlyGentle_WithRiversAndAWalkableSpawn()
+    {
+        var (w, t) = WorldGenerator.GenerateWithTerrain(Large);
+
+        int gentle = 0, total = 0;
+        for (int y = 0; y < w.Depth; y++)
+        for (int x = 1; x < w.Width; x++, total++)
+            if (Math.Abs(t.SurfaceAt(x, y) - t.SurfaceAt(x - 1, y)) <= 1) gentle++;
+        Assert.True(gentle > total * 0.85, $"only {gentle * 100 / total}% of steps are walkable");
+
+        Assert.True(t.RiverCells > 50, $"{t.RiverCells} river cells");
+        for (int i = 0; i < t.Water.Length; i++)
+            Assert.Equal(t.Kind[i] != SurfaceKind.Land, t.Water[i] > 0);
+
+        var spawn = new TilePos(t.SpawnX, t.SpawnY, t.SurfaceAt(t.SpawnX, t.SpawnY) + 1);
+        Assert.Equal(SurfaceKind.Land, t.Kind[t.SpawnY * w.Width + t.SpawnX]);
+        Assert.True(Navigation.Movement.IsStandable(w, spawn));
+    }
+
+    [Fact]
+    public void RiverWater_NeverFlowsUphill_ToTheMapEdge()
+    {
+        var t = Terrain.Generate(Large);
+        // Water surfaces: from any river tile there is a path of river/lake tiles to the map edge
+        // whose water surface never rises (checked with a flood from the edges, lowest first).
+        int w = t.Width, d = t.Depth;
+        int Top(int i) => t.Surface[i] + t.Water[i];
+        var reached = new bool[w * d];
+        var open = new PriorityQueue<int, int>();
+        for (int i = 0; i < w * d; i++)
+        {
+            int x = i % w, y = i / w;
+            if (t.Kind[i] != SurfaceKind.Land && (x == 0 || y == 0 || x == w - 1 || y == d - 1))
+            {
+                reached[i] = true;
+                open.Enqueue(i, Top(i));
+            }
+        }
+        while (open.TryDequeue(out int i, out _))
+        {
+            int x = i % w, y = i / w;
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                int nx = x + dx, ny = y + dy;
+                if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) continue;
+                int j = ny * w + nx;
+                if (reached[j] || t.Kind[j] == SurfaceKind.Land || Top(j) < Top(i) - 1) continue;
+                reached[j] = true;
+                open.Enqueue(j, Top(j));
+            }
+        }
+        int rivers = 0, ok = 0;
+        for (int i = 0; i < w * d; i++)
+        {
+            if (t.Kind[i] != SurfaceKind.RiverBed) continue;
+            rivers++;
+            if (reached[i]) ok++;
+        }
+        Assert.True(rivers > 0);
+        Assert.True(ok > rivers * 0.9, $"{ok} of {rivers} river tiles drain downhill to the edge");
     }
 
     [Fact]
