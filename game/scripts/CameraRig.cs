@@ -9,19 +9,22 @@ public partial class CameraRig : Node3D
     [Export] public float RotateSpeed { get; set; } = 90f;
 
     private Camera3D _camera = null!;
-    private float _yaw = 45f, _pitch = -50f, _distance = 70f;
+    private float _yaw = 45f, _pitch = -50f, _distance = 120f;
     private bool _orbiting;
 
     public override void _Ready()
     {
-        _camera = new Camera3D { Current = true, Far = 1000f };
+        _camera = new Camera3D { Current = true, Far = 4000f };
         AddChild(_camera);
         ApplyTransform();
     }
 
-    public void Focus(Vector3 point)
+    public void Focus(Vector3 point, float? distance = null, float? yaw = null, float? pitch = null)
     {
         Position = point;
+        if (distance is { } d) _distance = d;
+        if (yaw is { } y) _yaw = y;
+        if (pitch is { } p) _pitch = p;
         ApplyTransform();
     }
 
@@ -54,7 +57,7 @@ public partial class CameraRig : Node3D
                 _distance = Mathf.Max(8f, _distance * 0.9f);
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.WheelDown, Pressed: true }:
-                _distance = Mathf.Min(250f, _distance * 1.1f);
+                _distance = Mathf.Min(900f, _distance * 1.1f);
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Middle } mb:
                 _orbiting = mb.Pressed;
