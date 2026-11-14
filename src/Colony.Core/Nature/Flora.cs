@@ -89,6 +89,17 @@ public sealed class Flora
         return true;
     }
 
+    /// <summary>Replaces the plant in an occupied cell (same position), e.g. after a harvest cut it back.</summary>
+    public bool Update(Plant plant)
+    {
+        var p = plant.Position;
+        if (!_world.InBounds(p) || !_index.TryGetValue(Key(p), out int i)) return false;
+        int r = RegionOf(p);
+        _regions[r][i] = plant;
+        Changed(r);
+        return true;
+    }
+
     /// <summary>Removes the plant at <paramref name="p"/> if the ground changed so it can no longer grow there.</summary>
     public bool Validate(TilePos p) => _index.ContainsKey(Key(p)) && !PlantInfo.CanGrowAt(_world, p) && Remove(p, out _);
 

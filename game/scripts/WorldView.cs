@@ -119,6 +119,7 @@ public partial class WorldView : Node3D
         DesignationKind.DownStair => new Color(0.3f, 0.55f, 1f, 0.45f),
         DesignationKind.UpDownStair => new Color(0.3f, 0.85f, 1f, 0.45f),
         DesignationKind.Chop => new Color(0.45f, 1f, 0.25f, 0.4f),
+        DesignationKind.Gather => new Color(1f, 0.4f, 0.75f, 0.4f),
         _ => new Color(1f, 0.85f, 0.2f, 0.45f),
     };
 
@@ -452,8 +453,8 @@ public partial class WorldView : Node3D
         {
             var visible = new List<TilePos>();
             foreach (var (p, k) in _sim.Designations.All)
-                // Chop marks always show: felling happens on the surface whatever level is in view.
-                if (k == kind && (k == DesignationKind.Chop || p.Z <= _viewLevel)) visible.Add(p);
+                // Plant orders always show: that work happens on the surface whatever level is in view.
+                if (k == kind && (Designations.IsPlantOrder(k) || p.Z <= _viewLevel)) visible.Add(p);
 
             var mm = marks.Multimesh;
             mm.InstanceCount = visible.Count;

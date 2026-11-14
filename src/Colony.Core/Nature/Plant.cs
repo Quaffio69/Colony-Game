@@ -65,6 +65,24 @@ public static class PlantInfo
         _ => 1f,
     };
 
+    /// <summary>Growth a gatherable plant needs before it can be harvested.</summary>
+    public const byte RipeGrowth = 160;
+    /// <summary>Growth a plant is cut back to by gathering (it regrows once growth is simulated).</summary>
+    public const byte GatheredGrowth = 40;
+
+    /// <summary>What gathering this kind yields, or null if it can't be gathered.</summary>
+    public static Items.ItemType? Harvest(PlantKind k) => k switch
+    {
+        PlantKind.BerryBush => Items.ItemType.Berries,
+        PlantKind.Reeds or PlantKind.Shrub => Items.ItemType.Fiber,
+        _ => null,
+    };
+
+    public static bool IsGatherable(Plant p) => Harvest(p.Kind) is not null && p.Growth >= RipeGrowth;
+
+    /// <summary>Units a ripe plant yields: 2-5, more the more grown it is.</summary>
+    public static int HarvestYield(Plant p) => 2 + (p.Growth - RipeGrowth) * 3 / (255 - RipeGrowth);
+
     /// <summary>Plants grow in an open cell whose floor is grass or soil.</summary>
     public static bool CanGrowAt<T>(in T tiles, TilePos p) where T : ITileReader
     {

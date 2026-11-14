@@ -21,6 +21,8 @@ public partial class ItemView : Node3D
         ItemType.Ore => new Color(0.78f, 0.48f, 0.22f),
         ItemType.Log => new Color(0.55f, 0.38f, 0.22f),
         ItemType.Plank => new Color(0.86f, 0.7f, 0.46f),
+        ItemType.Berries => new Color(0.75f, 0.12f, 0.3f),
+        ItemType.Fiber => new Color(0.78f, 0.74f, 0.42f),
         _ => Colors.Magenta,
     };
 

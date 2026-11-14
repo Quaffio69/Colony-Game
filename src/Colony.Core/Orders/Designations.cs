@@ -14,6 +14,8 @@ public enum DesignationKind : byte
     UpDownStair,
     /// <summary>Fell the tree standing in this (open) cell; leaves logs.</summary>
     Chop,
+    /// <summary>Harvest the ripe plant in this (open) cell (berries, fiber); the plant is cut back, not removed.</summary>
+    Gather,
 }
 
 /// <summary>
@@ -43,9 +45,9 @@ public sealed class Designations
     public bool Designate(TilePos p, DesignationKind kind = DesignationKind.Dig)
     {
         if (!_world.InBounds(p)) return false;
-        if (kind == DesignationKind.Chop)
+        if (IsPlantOrder(kind))
         {
-            if (Flora is null || !Flora.TryGet(p, out var plant) || !Nature.PlantInfo.IsTree(plant.Kind)) return false;
+            if (Flora is null || !Flora.TryGet(p, out var plant) || !Accepts(kind, plant)) return false;
         }
         else
         {
@@ -76,18 +78,26 @@ public sealed class Designations
     /// <summary>Cancels every designation in the inclusive box between two corners; returns how many were removed.</summary>
     public int CancelBox(TilePos a, TilePos b) => ForBox(a, b, Cancel);
 
+    /// <summary>Orders that target a plant (standing in an open cell) rather than a tile.</summary>
+    public static bool IsPlantOrder(DesignationKind kind) => kind is DesignationKind.Chop or DesignationKind.Gather;
+
+    private static bool Accepts(DesignationKind kind, Nature.Plant plant) => kind == DesignationKind.Chop
+        ? Nature.PlantInfo.IsTree(plant.Kind)
+        : Nature.PlantInfo.IsGatherable(plant);
+
     /// <summary>
-    /// Chop orders on every tree whose column lies in the rectangle between two corners, at any level:
-    /// felling always happens on the surface, so the area is picked in 2D. Returns how many trees were marked.
+    /// Plant orders (<see cref="DesignationKind.Chop"/>, <see cref="DesignationKind.Gather"/>) on every plant they
+    /// apply to whose column lies in the rectangle between two corners, at any level: this work always happens
+    /// on the surface, so the area is picked in 2D. Returns how many plants were marked.
     /// </summary>
-    public int DesignateChopArea(int x0, int y0, int x1, int y1) =>
-        ForTreesInArea(x0, y0, x1, y1, p => Designate(p, DesignationKind.Chop));
+    public int DesignatePlantArea(DesignationKind kind, int x0, int y0, int x1, int y1) =>
+        ForPlantsInArea(x0, y0, x1, y1, plant => Accepts(kind, plant), p => Designate(p, kind));
 
-    /// <summary>Cancels chop orders in the columns of a rectangle (any level). Returns how many were removed.</summary>
-    public int CancelChopArea(int x0, int y0, int x1, int y1) =>
-        ForTreesInArea(x0, y0, x1, y1, p => _orders.TryGetValue(p, out var k) && k == DesignationKind.Chop && Cancel(p));
+    /// <summary>Cancels orders of one plant kind in the columns of a rectangle (any level). Returns how many.</summary>
+    public int CancelPlantArea(DesignationKind kind, int x0, int y0, int x1, int y1) =>
+        ForPlantsInArea(x0, y0, x1, y1, _ => true, p => _orders.TryGetValue(p, out var k) && k == kind && Cancel(p));
 
-    private int ForTreesInArea(int x0, int y0, int x1, int y1, Func<TilePos, bool> action)
+    private int ForPlantsInArea(int x0, int y0, int x1, int y1, Func<Nature.Plant, bool> filter, Func<TilePos, bool> action)
     {
         if (Flora is null) return 0;
         (x0, x1) = (Math.Max(0, Math.Min(x0, x1)), Math.Min(_world.Width - 1, Math.Max(x0, x1)));
@@ -98,7 +108,7 @@ public sealed class Designations
             foreach (var plant in Flora.InRegion(rx, ry))
             {
                 var p = plant.Position;
-                if (p.X >= x0 && p.X <= x1 && p.Y >= y0 && p.Y <= y1 && Nature.PlantInfo.IsTree(plant.Kind)) hits.Add(p);
+                if (p.X >= x0 && p.X <= x1 && p.Y >= y0 && p.Y <= y1 && filter(plant)) hits.Add(p);
             }
         // Region lists reorder on removal: sort so the result never depends on that history.
         hits.Sort((a, b) => a.Z != b.Z ? a.Z.CompareTo(b.Z) : a.Y != b.Y ? a.Y.CompareTo(b.Y) : a.X.CompareTo(b.X));
@@ -135,7 +145,7 @@ public sealed class Designations
     /// </summary>
     public static TileType Result(DesignationKind kind, TileType current)
     {
-        if (kind == DesignationKind.Chop) return current;
+        if (IsPlantOrder(kind)) return current;
         if (kind == DesignationKind.Dig) return TileType.Air;
         bool up = kind is DesignationKind.UpStair or DesignationKind.UpDownStair || TileInfo.GoesUp(current);
         bool down = kind is DesignationKind.DownStair or DesignationKind.UpDownStair || TileInfo.GoesDown(current);
@@ -169,7 +179,7 @@ public sealed class Designations
     {
         if (!_orders.Remove(p, out var kind)) return false;
         _claims.Remove(p);
-        if (kind != DesignationKind.Chop) _world.Set(p, Result(kind, _world.Get(p)));
+        if (!IsPlantOrder(kind)) _world.Set(p, Result(kind, _world.Get(p)));
         Version++;
         return true;
     }

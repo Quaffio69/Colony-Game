@@ -82,6 +82,7 @@ public partial class Main : Node3D
         _tool.Initialize(_sim, _world);
 
         _rig = GetNode<CameraRig>("CameraRig");
+        _rig.GroundHeight = VisibleGround;
         FocusOnColony();
 
         var ui = new CanvasLayer();
@@ -150,7 +151,7 @@ public partial class Main : Node3D
     {
         var sb = new StringBuilder();
         string hover = _tool.Hovered is { } h
-            ? $"{_sim.World.Get(h)} at {h}" + (_sim.Flora.TryGet(h.Offset(0, 0, 1), out var plant) ? $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" : "")
+            ? $"{_sim.World.Get(h)} at {h}" + (_sim.Flora.TryGet(h.Offset(0, 0, 1), out var plant) ? $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" + (Colony.Core.Nature.PlantInfo.IsGatherable(plant) ? " (ripe)" : "") : "")
             : "-";
         string time = _paused ? "PAUSED" : $"{Speeds[_speedIndex]}x";
         string tool = _tool.ModeName(_tool.Mode);
@@ -180,6 +181,23 @@ public partial class Main : Node3D
         sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists");
         // StringBuilder uses \r\n on Windows, which Label renders as an extra blank line.
         _hud.Text = sb.ToString().Replace("\r", "").TrimEnd();
+    }
+
+    /// <summary>
+    /// Top of the ground you can see in a column (Godot Y): the highest solid tile at or below the view level,
+    /// i.e. the cut surface once levels are peeled away. Null over open void (keeps the camera height).
+    /// </summary>
+    private float? VisibleGround(float gx, float gz)
+    {
+        var world = _sim.World;
+        int x = (int)Mathf.Floor(gx), y = (int)Mathf.Floor(gz);
+        if (x < 0 || y < 0 || x >= world.Width || y >= world.Depth) return null;
+        int top = System.Math.Min(_world.ViewLevel, world.Height - 1);
+        // Start just above the generated surface when that's lower (digging only lowers ground).
+        if (_sim.Terrain is { } t) top = System.Math.Min(top, t.SurfaceAt(x, y) + 8);
+        for (int z = top; z >= System.Math.Max(0, top - 128); z--)
+            if (world.IsSolid(x, y, z)) return z + 1;
+        return null;
     }
 
     /// <summary>Builder info panel for the room under the cursor.</summary>

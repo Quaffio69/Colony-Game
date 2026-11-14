@@ -62,11 +62,37 @@ public class ItemTests
         Assert.True(sim.Flora.Add(new Nature.Plant(new TilePos(9, 9, 4), Nature.PlantKind.Fern, 200, 0)));
         Assert.True(sim.Flora.Add(new Nature.Plant(new TilePos(20, 20, 4), Nature.PlantKind.Birch, 200, 0)));
 
-        Assert.Equal(2, sim.Designations.DesignateChopArea(10, 10, 0, 0)); // corners in any order; the fern isn't a tree
+        Assert.Equal(2, sim.Designations.DesignatePlantArea(DesignationKind.Chop, 10, 10, 0, 0)); // corners in any order; the fern isn't a tree
         Assert.True(sim.Designations.Contains(new TilePos(2, 2, 6)));
         Assert.True(sim.Designations.Contains(new TilePos(8, 8, 4)));
-        Assert.Equal(1, sim.Designations.CancelChopArea(0, 0, 3, 3));
+        Assert.Equal(1, sim.Designations.CancelPlantArea(DesignationKind.Chop, 0, 0, 3, 3));
         Assert.False(sim.Designations.Contains(new TilePos(2, 2, 6)));
+    }
+
+    [Fact]
+    public void Gathering_TakesRipePlantsOnly_YieldsTheirCrop_AndCutsThemBack()
+    {
+        var sim = Meadow();
+        var ripeBerries = new Plant(new TilePos(4, 4, 4), PlantKind.BerryBush, 255, 0);
+        var reeds = new Plant(new TilePos(5, 4, 4), PlantKind.Reeds, 200, 0);
+        sim.Flora.Add(ripeBerries);
+        sim.Flora.Add(reeds);
+        sim.Flora.Add(new Plant(new TilePos(6, 4, 4), PlantKind.BerryBush, 100, 0)); // unripe
+        sim.Flora.Add(new Plant(new TilePos(7, 4, 4), PlantKind.Fern, 255, 0));      // nothing to gather
+        sim.Flora.Add(new Plant(new TilePos(8, 4, 4), PlantKind.Oak, 255, 0));       // a tree: chop, not gather
+
+        Assert.Equal(2, sim.Designations.DesignatePlantArea(DesignationKind.Gather, 0, 0, 20, 20));
+        sim.AddColonist("Gatherer", new TilePos(10, 10, 4));
+        for (int i = 0; i < 3000 && sim.Designations.Count > 0; i++) sim.Step();
+        Assert.Equal(0, sim.Designations.Count);
+
+        var totals = sim.Items.Totals();
+        Assert.Equal(PlantInfo.HarvestYield(ripeBerries), totals[(int)ItemType.Berries]);
+        Assert.Equal(PlantInfo.HarvestYield(reeds), totals[(int)ItemType.Fiber]);
+        Assert.True(sim.Flora.TryGet(ripeBerries.Position, out var bush));
+        Assert.Equal(PlantInfo.GatheredGrowth, bush.Growth);
+        Assert.False(PlantInfo.IsGatherable(bush));
+        Assert.Equal(0, sim.Designations.DesignatePlantArea(DesignationKind.Gather, 0, 0, 20, 20)); // nothing ripe left
     }
 
     [Fact]

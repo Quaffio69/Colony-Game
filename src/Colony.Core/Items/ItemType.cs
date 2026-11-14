@@ -7,11 +7,15 @@ public enum ItemType : byte
     Ore,
     Log,
     Plank,
+    /// <summary>Gathered from berry bushes; food once needs exist.</summary>
+    Berries,
+    /// <summary>Gathered from reeds and shrubs; a future input for rope and cloth.</summary>
+    Fiber,
 }
 
 public static class ItemInfo
 {
-    public const int TypeCount = 4;
+    public const int TypeCount = 6;
 
     public static string Name(ItemType t) => t switch
     {
@@ -19,6 +23,8 @@ public static class ItemInfo
         ItemType.Ore => "Ore",
         ItemType.Log => "Logs",
         ItemType.Plank => "Planks",
+        ItemType.Berries => "Berries",
+        ItemType.Fiber => "Fiber",
         _ => t.ToString(),
     };
 
@@ -27,6 +33,7 @@ public static class ItemInfo
     {
         ItemType.Log => 20,
         ItemType.Plank => 40,
+        ItemType.Berries or ItemType.Fiber => 30,
         _ => 25,
     };
 
@@ -35,6 +42,7 @@ public static class ItemInfo
     {
         ItemType.Log => 3,
         ItemType.Plank => 8,
+        ItemType.Berries or ItemType.Fiber => 10,
         _ => 5,
     };
 }

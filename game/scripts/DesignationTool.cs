@@ -28,7 +28,7 @@ public partial class DesignationTool : Node3D
     public enum ToolMode
     {
         // Orders
-        Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Stockpile,
+        Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile,
         // Build
         SawmillRoom, Sawbench, ToolRack, Lantern, InputCrate, OutputCrate,
     }
@@ -51,16 +51,17 @@ public partial class DesignationTool : Node3D
     private bool _rotated;
     private readonly Dictionary<PartType, int> _sizes = new();
 
-    // Chop areas are picked in 2D and drawn draped over the surface, whatever level is in view.
+    // Plant orders (chop, gather) are picked as 2D areas drawn draped over the surface, whatever level is in view.
     private MultiMeshInstance3D _drape = null!;
-    private StandardMaterial3D _drapeMat = null!, _drapeCancelMat = null!;
+    private StandardMaterial3D _drapeCancelMat = null!;
+    private readonly Dictionary<ToolMode, StandardMaterial3D> _drapeMats = new();
     private readonly Dictionary<(int X, int Y), int> _surface = new();
     private (int X0, int Y0, int X1, int Y1) _drapeRect = (-1, -1, -1, -1);
     private const int MaxDrapeColumns = 160_000; // beyond this only the outline is drawn
 
     /// <summary>Selected size (1..<see cref="PartInfo.Sizes"/>) for a part family; [ and ] change it.</summary>
     public int SizeFor(PartType part) => PartInfo.ClampSize(part, _sizes.GetValueOrDefault(part, 1));
-    private static bool IsAreaTool(ToolMode m) => m == ToolMode.Chop;
+    private static bool IsAreaTool(ToolMode m) => m is ToolMode.Chop or ToolMode.Gather;
 
     public ToolMode Mode { get; private set; } = ToolMode.Dig;
     public TilePos? Hovered { get; private set; }
@@ -94,6 +95,7 @@ public partial class DesignationTool : Node3D
         ToolMode.DownStair => "Down stair",
         ToolMode.UpDownStair => "Up/Down stair",
         ToolMode.Chop => "Chop trees",
+        ToolMode.Gather => "Gather plants",
         ToolMode.Stockpile => "Stockpile",
         ToolMode.SawmillRoom => "Build: Sawmill room",
         _ => $"Build: {PartInfo.Name(PartFor(m)!.Value)}",
@@ -185,7 +187,8 @@ public partial class DesignationTool : Node3D
         };
         AddChild(_ghost);
 
-        _drapeMat = Overlay.Material(WorldView.DesignationColor(DesignationKind.Chop) with { A = 0.35f });
+        foreach (var m in new[] { ToolMode.Chop, ToolMode.Gather })
+            _drapeMats[m] = Overlay.Material(WorldView.DesignationColor(KindFor(m, 0, 0, 0)) with { A = 0.35f });
         _drapeCancelMat = Overlay.Material(new Color(1f, 0.25f, 0.2f, 0.35f));
         _drape = new MultiMeshInstance3D
         {
@@ -227,6 +230,7 @@ public partial class DesignationTool : Node3D
         ToolMode.DownStair => DesignationKind.DownStair,
         ToolMode.UpDownStair => DesignationKind.UpDownStair,
         ToolMode.Chop => DesignationKind.Chop,
+        ToolMode.Gather => DesignationKind.Gather,
         _ => top == bottom ? DesignationKind.UpDownStair
             : z == top ? DesignationKind.DownStair
             : z == bottom ? DesignationKind.UpStair
@@ -375,7 +379,7 @@ public partial class DesignationTool : Node3D
             else if (PartFor(Mode) is not null)
                 LastAction = $"Removed {_sim.Rooms.RemovePartsIn(a, b)} parts";
             else if (IsAreaTool(Mode))
-                LastAction = $"Cancelled {d.CancelChopArea(a.X, a.Y, b.X, b.Y)} chop orders";
+                LastAction = $"Cancelled {d.CancelPlantArea(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y)} {BaseModeName(Mode).ToLowerInvariant()} orders";
             else
             {
                 // Box corners are ground tiles: also clear tree/stockpile cells standing on them.
@@ -394,12 +398,17 @@ public partial class DesignationTool : Node3D
             int n = Mode switch
             {
                 ToolMode.Stairs => d.DesignateStairs(a, b),
-                // Felling is always on the surface: every tree in the area's columns, whatever the level.
-                ToolMode.Chop => d.DesignateChopArea(a.X, a.Y, b.X, b.Y),
+                // Plant work is always on the surface: every plant in the area's columns, whatever the level.
+                ToolMode.Chop or ToolMode.Gather => d.DesignatePlantArea(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y),
                 ToolMode.Stockpile => _sim.Stockpiles.AddFloorBox(a, b),
                 _ => d.DesignateBox(a, b, KindFor(Mode, 0, 0, 0)),
             };
-            LastAction = Mode == ToolMode.Chop ? $"Chop trees: marked {n} trees" : $"{ModeName(Mode)}: designated {n} tiles";
+            LastAction = Mode switch
+            {
+                ToolMode.Chop => $"Chop trees: marked {n} trees",
+                ToolMode.Gather => $"Gather plants: marked {n} ripe plants",
+                _ => $"{ModeName(Mode)}: designated {n} tiles",
+            };
         }
         EndSelection();
     }
@@ -467,7 +476,7 @@ public partial class DesignationTool : Node3D
     {
         var (a, b) = Corners();
         var rect = (Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y));
-        _drape.MaterialOverride = _selection == Selection.Cancel ? _drapeCancelMat : _drapeMat;
+        _drape.MaterialOverride = _selection == Selection.Cancel ? _drapeCancelMat : _drapeMats[Mode];
         _drape.Visible = true;
         if (rect == _drapeRect) return;
         _drapeRect = rect;

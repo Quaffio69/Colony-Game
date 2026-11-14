@@ -121,8 +121,13 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - **Designations (DF-style UI):** click to anchor a corner, click again to apply; Z/X while selecting move
   the free corner between levels and the view follows. Tools (Tab/Shift+Tab): Dig, Stairs (auto: down on
   top, up/down between, up at bottom), Up, Down, Up/Down. Right-click starts a cancel box or aborts.
-  Exception: Chop is a 2D area draped on the surface (`DesignateChopArea`, any level, ignores the view
-  level), since felling always happens on the surface; chop marks are drawn whatever level is viewed.
+  Exception: plant orders (Chop, Gather; `Designations.IsPlantOrder`) are 2D areas draped on the surface
+  (`DesignatePlantArea`, any level, ignores the view level), since that work always happens on the surface;
+  their marks are drawn whatever level is viewed. Dig/stairs/stockpiles/rooms stay level-based boxes.
+- **Gathering:** berry bushes -> Berries, reeds/shrubs -> Fiber, only when ripe (`PlantInfo.RipeGrowth`); the
+  plant is cut back to `GatheredGrowth`, not removed, so regrowth can drive future yields.
+- **Camera:** the rig's pivot follows the visible ground (highest solid tile at or below the view level), so
+  zoom stays relative to what's on screen when levels are peeled away.
 - **Cave-ins (DF-style):** a solid tile is supported if face-adjacent solid tiles connect it to z=0. After a
   dig (`ColonySim.CompleteDesignation` -> `World.CaveIns`), each unsupported neighbouring mass falls as one
   rigid piece until it lands; designations on it are cancelled; colonists ride it down or pop out on top.

@@ -101,6 +101,16 @@ public sealed class ColonySim
             if (Flora.Remove(p, out var tree)) Items.Drop(p, ItemType.Log, LogYield(tree));
             return true;
         }
+        if (kind == DesignationKind.Gather)
+        {
+            Designations.Complete(p);
+            if (Flora.TryGet(p, out var plant) && PlantInfo.IsGatherable(plant) && PlantInfo.Harvest(plant.Kind) is { } crop)
+            {
+                Items.Drop(p, crop, PlantInfo.HarvestYield(plant));
+                Flora.Update(plant with { Growth = PlantInfo.GatheredGrowth });
+            }
+            return true;
+        }
 
         var before = World.Get(p);
         if (!Designations.Complete(p)) return false;
@@ -108,7 +118,7 @@ public sealed class ColonySim
 
         // Whatever stood on this tile lost (or changed) its ground.
         var above = p.Offset(0, 0, 1);
-        if (Flora.Validate(above)) CancelChop(above);
+        if (Flora.Validate(above)) CancelPlantOrder(above);
         Items.Resettle(above);
         Rooms.ValidateCell(above); // a room floor dug out (or carved into stairs)
         Rooms.ValidateCell(p);
@@ -120,6 +130,7 @@ public sealed class ColonySim
     /// <summary>Simulation ticks of work a designation takes.</summary>
     public int WorkTicks(TilePos target, DesignationKind kind)
     {
+        if (kind == DesignationKind.Gather) return 30;
         if (kind != DesignationKind.Chop) return Designations.WorkTicks(kind, World.Get(target));
         if (!Flora.TryGet(target, out var tree)) return 1;
         return 40 + (int)(PlantInfo.MatureHeight(tree.Kind) * tree.Growth / 255f * 14f);
@@ -137,9 +148,9 @@ public sealed class ColonySim
         _ => null,
     };
 
-    private void CancelChop(TilePos p)
+    private void CancelPlantOrder(TilePos p)
     {
-        if (Designations.TryGet(p, out var k) && k == DesignationKind.Chop) Designations.Cancel(p);
+        if (Designations.TryGet(p, out var k) && Designations.IsPlantOrder(k)) Designations.Cancel(p);
     }
 
     /// <summary>Call after removing a solid tile by any other means (tests, future tools).</summary>
@@ -156,11 +167,11 @@ public sealed class ColonySim
         {
             var top = q.Offset(0, 0, caveIn.Drop + 1);
             if (!Flora.Remove(top, out var plant)) continue;
-            CancelChop(top);
+            CancelPlantOrder(top);
             riders.Add(plant with { Position = plant.Position.Offset(0, 0, -caveIn.Drop) });
         }
         foreach (var q in landed)
-            if (Flora.Remove(q, out _)) CancelChop(q);
+            if (Flora.Remove(q, out _)) CancelPlantOrder(q);
         foreach (var plant in riders) Flora.Add(plant);
 
         // Item piles: buried ones are pushed up out of the rock, ones left floating fall to the new floor.

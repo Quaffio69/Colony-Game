@@ -12,6 +12,9 @@ public partial class CameraRig : Node3D
     private float _yaw = 45f, _pitch = -50f, _distance = 120f;
     private bool _orbiting;
 
+    /// <summary>Height (Godot Y) of the visible ground at a Godot (x, z), or null to leave the pivot height alone.</summary>
+    public System.Func<float, float, float?>? GroundHeight { get; set; }
+
     public override void _Ready()
     {
         _camera = new Camera3D { Current = true, Far = 4000f };
@@ -45,6 +48,11 @@ public partial class CameraRig : Node3D
             var move = yawBasis * new Vector3(input.X, 0, input.Y).Normalized();
             Position += move * PanSpeed * dt * (_distance / 70f);
         }
+
+        // Keep the pivot on the ground that's actually visible (e.g. the cut surface after peeling levels
+        // away), so zoom is always relative to what's on screen. Eased, so cliffs don't jolt the view.
+        if (GroundHeight?.Invoke(Position.X, Position.Z) is { } ground)
+            Position = Position with { Y = Mathf.Lerp(Position.Y, ground, 1f - Mathf.Exp(-dt * 10f)) };
 
         ApplyTransform();
     }
