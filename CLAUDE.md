@@ -106,8 +106,12 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   `WorkTicks / Efficiency`, store; a partial batch is allowed when the crate isn't being refilled, so
   remainders never strand. **Part sizes (1-5)** are the core trade-off: bigger machines cost more per tile
   but need less labour per unit (batch x time); bigger tools cost exponentially more but give more bonus and
-  coverage per tile. Costs (planks) are data + shown in the builder; building is free until construction
-  jobs exist. Internals are deliberately not an optimisation puzzle. Parts don't block movement.
+  coverage per tile. **Construction:** placed parts are blueprints (`Part.Built` false; they do nothing).
+  Haulers deliver `PartInfo.Cost` onto the footprint as ordinary piles (`StorageRole.Construction`, one pile
+  per cell, so costs never exceed tiles x stack limit); a builder (Designations labor) reserves them, works
+  `BuildTicks`, consumes them. Smallest parts cost logs so the first sawmill bootstraps from felling;
+  bigger ones cost planks. Cancelled blueprints leave their materials as loose piles. `Rooms.InstantBuild`
+  is the sandbox/test switch. Internals are deliberately not an optimisation puzzle. Parts don't block movement.
   Labor preference rotates by colonist id (designations / industry / hauling first) until job priorities.
 - **Movement:** agents are 1 tile tall and occupy an open cell; standable = solid floor below, or the cell is
   itself a stair. Walk 8-way (no corner cutting); climb/drop exactly one level onto an orthogonal neighbour
@@ -184,9 +188,10 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       (B cycles build tools, R rotates, ghost with reasons, room info panel on hover), `RoomView`.
       Dev flags `--factory-demo` (fell woods, log stockpile, equipped sawmill, plank stockpile) and
       `--parts-demo` (levelled showroom with every saw and tool size). Parts come in 5 sizes ([ ] in the builder).
+- [x] Construction: blueprints, material delivery, builders (log-cost starter parts, plank-cost big ones).
 - [ ] Next for industry: more room types/recipes chained off planks (carpenter -> furniture) and stone
-      (mason) and ore (smelter); conveyors between output and input crates; building costs + construction
-      jobs; job priorities; per-room worker assignment; stockpile filters when needed.
+      (mason) and ore (smelter); conveyors between output and input crates; rooms themselves costing
+      (walls/floors); job priorities; per-room worker assignment; stockpile filters when needed.
 - [ ] Next for flora: growth and spreading/regrowth (staggered, deterministic), farming plots as a
       factory-style input.
 - [ ] Geology: rock strata by depth (several stone types, layered/warped), so deep digging varies;

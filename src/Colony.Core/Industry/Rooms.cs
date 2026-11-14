@@ -25,6 +25,12 @@ public sealed class Part
     public bool Working { get; internal set; }
     /// <summary>Set once the part is removed, so anyone holding a reference notices.</summary>
     public bool Removed { get; internal set; }
+
+    /// <summary>False while it is a blueprint: it does nothing until its materials arrive and a builder puts it up.</summary>
+    public bool Built { get; internal set; }
+    /// <summary>Colonist building this blueprint (-1 = nobody).</summary>
+    public int BuilderId { get; internal set; } = -1;
+    public BuildCost Cost => PartInfo.Cost(Type, Size);
 }
 
 /// <summary>
@@ -43,8 +49,11 @@ public sealed class Room
     public Recipe Recipe => RoomInfo.Recipe(Type);
     public string Name => $"{RoomInfo.Name(Type)} #{Id}";
 
-    public IEnumerable<Part> PartsWithRole(PartRole role) => PartList.Where(p => p.Role == role);
-    public int Count(PartRole role) => PartList.Count(p => p.Role == role);
+    /// <summary>Built parts with a role (blueprints don't work yet).</summary>
+    public IEnumerable<Part> PartsWithRole(PartRole role) => PartList.Where(p => p.Built && p.Role == role);
+    public int Count(PartRole role) => PartList.Count(p => p.Built && p.Role == role);
+    /// <summary>Parts still waiting for materials or a builder.</summary>
+    public IEnumerable<Part> Blueprints => PartList.Where(p => !p.Built);
 
     /// <summary>Work-speed multiplier from auxiliaries (see <see cref="Rooms.Efficiency"/>).</summary>
     public float Efficiency => Rooms.Efficiency(this);
@@ -54,10 +63,14 @@ public sealed class Room
 /// All factory rooms and their parts. Rooms are always contiguous: painting merges into the same-type room it
 /// touches and splits disconnected pieces into separate rooms; erasing or losing floor (digging, cave-ins)
 /// re-splits, and parts follow the piece they stand on (or are removed if cut in two). Deterministic.
-/// Building is free for now; costs and construction jobs come later.
+/// Placed parts start as blueprints (see <see cref="Part.Built"/>): haulers bring their materials onto the
+/// footprint and a builder turns them into working parts.
 /// </summary>
 public sealed class Rooms
 {
+    /// <summary>Sandbox/dev switch: parts are placed already built, at no cost.</summary>
+    public bool InstantBuild { get; set; }
+
     private readonly VoxelWorld _world;
     private readonly List<Room> _rooms = new();
     private readonly Dictionary<TilePos, Room> _cellRoom = new();
@@ -283,7 +296,11 @@ public sealed class Rooms
         if (CanPlace(type, origin, rotated, size) is not null) return null;
         var cells = Footprint(type, origin, rotated, size);
         var room = RoomAt(cells[0])!;
-        var part = new Part { Id = _nextPartId++, Type = type, Size = size, Origin = origin, Rotated = rotated, Cells = cells, Room = room };
+        var part = new Part
+        {
+            Id = _nextPartId++, Type = type, Size = size, Origin = origin, Rotated = rotated, Cells = cells, Room = room,
+            Built = InstantBuild,
+        };
         room.PartList.Add(part);
         foreach (var c in cells) _cellPart[c] = part;
         Version++;
@@ -299,6 +316,25 @@ public sealed class Rooms
         part.ClaimedBy = -1;
         part.Working = false;
         Version++;
+    }
+
+    /// <summary>A builder finished the blueprint (its materials are used up by the caller).</summary>
+    internal void CompleteConstruction(Part part)
+    {
+        if (part.Removed || part.Built) return;
+        part.Built = true;
+        part.BuilderId = -1;
+        Version++;
+    }
+
+    /// <summary>Units of the blueprint's material lying on its footprint (<paramref name="available"/>: unreserved only).</summary>
+    public static int MaterialsOnSite(Part part, Items.ItemPiles items, bool available = false)
+    {
+        var material = part.Cost.Material;
+        int n = 0;
+        foreach (var c in part.Cells)
+            if (items.TryGet(c, out var pile) && pile.Type == material) n += available ? pile.Available : pile.Count;
+        return n;
     }
 
     /// <summary>Removes every part with a cell in the box. Returns how many were removed.</summary>
@@ -320,9 +356,9 @@ public sealed class Rooms
     {
         var recipe = room.Recipe;
         int machines = room.Count(PartRole.Machine);
-        if (machines == 0) return "needs a machine";
-        if (room.Count(PartRole.Input) == 0) return "needs an input crate";
-        if (room.Count(PartRole.Output) == 0) return "needs an output crate";
+        if (machines == 0) return Pending(room, PartRole.Machine) ? "machine under construction" : "needs a machine";
+        if (room.Count(PartRole.Input) == 0) return Pending(room, PartRole.Input) ? "input crate under construction" : "needs an input crate";
+        if (room.Count(PartRole.Output) == 0) return Pending(room, PartRole.Output) ? "output crate under construction" : "needs an output crate";
         int manned = room.PartsWithRole(PartRole.Machine).Count(m => m.ClaimedBy >= 0);
         if (manned > 0) return $"working ({manned}/{machines} machines manned)";
         // Machines take partial batches when nothing more is coming, so one unit is the least they can start on.
@@ -333,6 +369,8 @@ public sealed class Rooms
             return "output crates full";
         return "waiting for workers";
     }
+
+    private static bool Pending(Room room, PartRole role) => room.Blueprints.Any(p => p.Role == role);
 
     /// <summary>Units of <paramref name="type"/> in the room's crates with the given role.</summary>
     public static int Stock(Room room, PartRole role, Items.ItemType type, Items.ItemPiles items)
@@ -355,12 +393,12 @@ public sealed class Rooms
     {
         int machineTiles = 0;
         foreach (var p in room.PartList)
-            if (p.Role == PartRole.Machine) machineTiles += p.Cells.Length;
+            if (p.Built && p.Role == PartRole.Machine) machineTiles += p.Cells.Length;
         if (machineTiles == 0) return 1f;
 
         var aux = new List<(PartType Type, float Bonus, int Coverage)>();
         foreach (var p in room.PartList)
-            if (p.Role == PartRole.Auxiliary) aux.Add((p.Type, PartInfo.Bonus(p.Type, p.Size), PartInfo.Coverage(p.Type, p.Size)));
+            if (p.Built && p.Role == PartRole.Auxiliary) aux.Add((p.Type, PartInfo.Bonus(p.Type, p.Size), PartInfo.Coverage(p.Type, p.Size)));
         aux.Sort((a, b) => a.Type != b.Type ? a.Type.CompareTo(b.Type) : b.Bonus.CompareTo(a.Bonus));
 
         float e = 1f, sum = 0f;

@@ -9,7 +9,7 @@ namespace Colony.Core.Agents;
 public enum ColonistState { Idle, Moving, Working }
 
 /// <summary>What a colonist is doing beyond walking: a designation, one leg of a haul trip, or factory work.</summary>
-public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore }
+public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build }
 
 /// <summary>Kinds of work, in the order a colonist prefers them (see <see cref="Colonist.Labors"/>).</summary>
 public enum Labor { Designations, Hauling, Industry }
@@ -41,6 +41,10 @@ public sealed class Colonist
     private int _pathFailedConnectivity = -1;
     private HaulPlan _haul;
     private CraftPlan _craft;
+    private BuildPlan _build;
+
+    /// <summary>Putting up a blueprint from the materials reserved on its footprint.</summary>
+    private readonly record struct BuildPlan(Part Part, List<(TilePos Cell, int Amount)> Materials);
 
     /// <summary>One production cycle: input crate -> machine -> output crate.</summary>
     private readonly record struct CraftPlan(Part Machine, TilePos InputCell, TilePos OutputCell, Recipe Recipe);
@@ -89,17 +93,19 @@ public sealed class Colonist
         (ColonistTask.Designation, ColonistState.Working) =>
             $"working at {JobTarget} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
         (ColonistTask.HaulPickup, _) => $"fetching {ItemInfo.Name(_haul.Type).ToLowerInvariant()} at {_haul.Source}",
-        (ColonistTask.HaulDeliver, _) => $"hauling {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {(_haulToFactory ? "a factory" : "stockpile")}",
+        (ColonistTask.HaulDeliver, _) => $"hauling {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {_haulDestination}",
         (ColonistTask.CraftFetch, _) => $"fetching {ItemInfo.Name(_craft.Recipe.Input).ToLowerInvariant()} for the {_craft.Machine.Name.ToLowerInvariant()}",
         (ColonistTask.CraftWork, ColonistState.Working) =>
             $"working the {_craft.Machine.Name.ToLowerInvariant()} in {_craft.Machine.Room.Name} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
         (ColonistTask.CraftWork, _) => $"carrying {ItemInfo.Name(CarryingType).ToLowerInvariant()} to the {_craft.Machine.Name.ToLowerInvariant()}",
         (ColonistTask.CraftStore, _) => $"storing {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()}",
+        (ColonistTask.Build, ColonistState.Working) =>
+            $"building a {_build.Part.Name.ToLowerInvariant()} in {_build.Part.Room.Name} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
+        (ColonistTask.Build, _) => $"walking to build a {_build.Part.Name.ToLowerInvariant()}",
         _ => "idle",
     };
 
-    private string Destination(TilePos p) => _haulToFactory ? "a factory" : "stockpile";
-    private bool _haulToFactory;
+    private string _haulDestination = "stockpile";
 
     /// <summary>Tiles a colonist standing at <paramref name="at"/> can work on: all 26 neighbours.</summary>
     public static bool InReach(TilePos at, TilePos target) =>
@@ -111,6 +117,8 @@ public sealed class Colonist
 
         if (Task == ColonistTask.Designation && JobTarget is { } job && !sim.Designations.IsClaimedBy(job, Id))
             Abandon(sim); // cancelled, re-designated, or completed by someone else
+        else if (Task == ColonistTask.Build && _build.Part.Removed)
+            Abandon(sim); // the blueprint was cancelled (or its floor lost)
         else if (Task is ColonistTask.CraftFetch or ColonistTask.CraftWork && _craft.Machine.Removed)
             Abandon(sim); // the machine was removed (or its floor lost)
 
@@ -182,6 +190,9 @@ public sealed class Colonist
                     case ColonistTask.CraftStore:
                         Deliver(sim, _craft.OutputCell);
                         break;
+                    case ColonistTask.Build:
+                        FinishBuild(sim);
+                        break;
                 }
                 break;
         }
@@ -220,7 +231,7 @@ public sealed class Colonist
         {
             bool found = labor switch
             {
-                Labor.Designations => TryTakeJob(sim, component),
+                Labor.Designations => TryTakeJob(sim, component) || (!_deferred && TryBuild(sim, component)),
                 Labor.Hauling => TryHaul(sim, component),
                 _ => TryCraft(sim, component),
             };
@@ -288,7 +299,12 @@ public sealed class Colonist
                 continue;
             }
             _haul = plan;
-            _haulToFactory = sim.Rooms.PartAt(plan.Destination)?.Role == PartRole.Input;
+            _haulDestination = sim.Rooms.PartAt(plan.Destination) switch
+            {
+                { Built: false } => "a construction site",
+                { Role: PartRole.Input } => "a factory",
+                _ => "stockpile",
+            };
             Begin(ColonistTask.HaulPickup, plan.Source, path);
             return true;
         }
@@ -357,6 +373,77 @@ public sealed class Colonist
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Construction: a blueprint nobody is building whose materials are all on its footprint. Reserves them,
+    /// then walks next to the part.
+    /// </summary>
+    private bool TryBuild(ColonySim sim, int component)
+    {
+        foreach (var room in sim.Rooms.All)
+        foreach (var part in room.Blueprints)
+        {
+            if (part.BuilderId >= 0) continue;
+            var (material, cost) = part.Cost;
+            if (Rooms.MaterialsOnSite(part, sim.Items, available: true) < cost) continue;
+            var spots = MachineSpots(sim, part, component);
+            if (spots.Count == 0) continue;
+            if (sim.PathBudgetExhausted)
+            {
+                _deferred = true;
+                return false;
+            }
+            var path = Route(sim, spots, part.Origin);
+            if (path is null)
+            {
+                _pathFailed.Add(part.Origin);
+                continue;
+            }
+            var reserved = new List<(TilePos, int)>();
+            int left = cost;
+            foreach (var c in part.Cells)
+            {
+                if (left == 0) break;
+                if (!sim.Items.TryGet(c, out var pile) || pile.Type != material || pile.Available <= 0) continue;
+                int take = Math.Min(left, pile.Available);
+                if (!sim.Items.Reserve(c, take)) continue;
+                reserved.Add((c, take));
+                left -= take;
+            }
+            if (left > 0)
+            {
+                foreach (var (c, n) in reserved) sim.Items.Unreserve(c, n);
+                continue;
+            }
+            part.BuilderId = Id;
+            _build = new BuildPlan(part, reserved);
+            Begin(ColonistTask.Build, part.Origin, path);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Construction done: the materials are used up and the part starts working.</summary>
+    private void FinishBuild(ColonySim sim)
+    {
+        var part = _build.Part;
+        int needed = 0, taken = 0;
+        foreach (var (c, n) in _build.Materials)
+        {
+            needed += n;
+            taken += sim.Items.TakeReserved(c, n);
+        }
+        if (taken < needed)
+        {
+            // Something took materials from under us (shouldn't happen with reservations): give them back.
+            if (taken > 0) sim.Items.Drop(_build.Materials[0].Cell, part.Cost.Material, taken);
+            part.BuilderId = -1;
+            Finish();
+            return;
+        }
+        sim.Rooms.CompleteConstruction(part);
+        Finish();
     }
 
     /// <summary>Unclaimed machines, biggest (least labour per unit) first, then in placement order.</summary>
@@ -449,9 +536,12 @@ public sealed class Colonist
     private void Arrive(ColonySim sim)
     {
         var target = JobTarget!.Value;
-        bool inReach = Task == ColonistTask.CraftWork
-            ? _craft.Machine.Cells.Any(c => InReach(Position, c)) // machines can be several tiles long
-            : InReach(Position, target);
+        bool inReach = Task switch
+        {
+            ColonistTask.CraftWork => _craft.Machine.Cells.Any(c => InReach(Position, c)), // machines can be several tiles long
+            ColonistTask.Build => _build.Part.Cells.Any(c => InReach(Position, c)),
+            _ => InReach(Position, target),
+        };
         if (!inReach)
         {
             Abandon(sim);
@@ -466,6 +556,9 @@ public sealed class Colonist
             case ColonistTask.CraftWork:
                 _craft.Machine.Working = true;
                 StartWorking((int)MathF.Round(_craft.Recipe.WorkTicks / _craft.Machine.Room.Efficiency));
+                break;
+            case ColonistTask.Build:
+                StartWorking(PartInfo.BuildTicks(_build.Part.Type, _build.Part.Size));
                 break;
             case ColonistTask.Designation:
                 if (!sim.Designations.TryGet(target, out var kind))
@@ -561,6 +654,10 @@ public sealed class Colonist
                 break;
             case ColonistTask.CraftStore:
                 sim.Items.ReleaseIncoming(_craft.OutputCell, _craft.Recipe.OutCount);
+                break;
+            case ColonistTask.Build:
+                foreach (var (c, n) in _build.Materials) sim.Items.Unreserve(c, n);
+                if (_build.Part.BuilderId == Id) _build.Part.BuilderId = -1;
                 break;
         }
         if (CarryingCount > 0)

@@ -38,6 +38,9 @@ public enum PartType : byte
 /// </summary>
 public readonly record struct Recipe(ItemType Input, int InCount, ItemType Output, int OutCount, int WorkTicks);
 
+/// <summary><see cref="Count"/> units of <see cref="Material"/> to build a part.</summary>
+public readonly record struct BuildCost(ItemType Material, int Count);
+
 public static class RoomInfo
 {
     public const int TypeCount = 1;
@@ -70,7 +73,7 @@ public static class RoomInfo
 /// <item>Tools: cost grows exponentially with size, but bonus and coverage per tile grow too, so big tool
 /// cribs equip a large factory in little floor space.</item>
 /// </list>
-/// Costs are in planks and shown in the builder; building is still free until construction jobs exist.
+/// Placed parts are blueprints until haulers deliver their <see cref="Cost"/> and a builder puts them up.
 /// </summary>
 public static class PartInfo
 {
@@ -82,13 +85,13 @@ public static class PartInfo
     private static readonly int[] SawBatch = { 1, 2, 4, 6, 8 };
     /// <summary>Batch time as a multiple of the recipe's per-unit work (labour per unit: 1, .75, .55, .4, .3).</summary>
     private static readonly float[] SawTime = { 1f, 1.5f, 2.2f, 2.4f, 2.4f };
-    private static readonly int[] SawCost = { 4, 12, 30, 64, 144 };
+    private static readonly int[] SawCost = { 2, 12, 30, 64, 144 }; // size 1 in logs (bootstraps the sawmill), then planks
 
     private static readonly string[] ToolNames = { "Tool pegs", "Tool rack", "Tool wall", "Tool bench", "Tool crib" };
     private static readonly (int W, int D)[] ToolFootprint = { (1, 1), (2, 1), (3, 1), (2, 2), (3, 2) };
     private static readonly float[] ToolBonus = { 0.20f, 0.30f, 0.40f, 0.50f, 0.60f };
     private static readonly int[] ToolCoverage = { 4, 10, 18, 32, 54 };
-    private static readonly int[] ToolCost = { 2, 6, 18, 54, 162 };
+    private static readonly int[] ToolCost = { 1, 6, 18, 54, 162 }; // size 1 in logs, then planks
 
     /// <summary>Family name (e.g. for grouping).</summary>
     public static string Name(PartType t) => t switch
@@ -138,14 +141,25 @@ public static class PartInfo
         return w * d;
     }
 
-    /// <summary>Build cost in planks (not charged yet).</summary>
-    public static int Cost(PartType t, int size = 1) => t switch
+    /// <summary>
+    /// Materials delivered to a part's blueprint before it can be built. The smallest parts (saw horse, tool
+    /// pegs, lantern, crates) take logs, so a first sawmill can be built straight from felling; bigger ones
+    /// take planks. Never more than the footprint can hold (one pile per cell).
+    /// </summary>
+    public static BuildCost Cost(PartType t, int size = 1)
     {
-        PartType.Sawbench => SawCost[Index(t, size)],
-        PartType.ToolRack => ToolCost[Index(t, size)],
-        PartType.Lantern => 3,
-        _ => 4,
-    };
+        size = ClampSize(t, size);
+        return t switch
+        {
+            PartType.Sawbench => new BuildCost(size == 1 ? ItemType.Log : ItemType.Plank, SawCost[size - 1]),
+            PartType.ToolRack => new BuildCost(size == 1 ? ItemType.Log : ItemType.Plank, ToolCost[size - 1]),
+            PartType.Lantern => new BuildCost(ItemType.Log, 1),
+            _ => new BuildCost(ItemType.Log, 2),
+        };
+    }
+
+    /// <summary>Ticks of builder work once the materials are on site.</summary>
+    public static int BuildTicks(PartType t, int size = 1) => 40 + 3 * Cost(t, size).Count;
 
     /// <summary>Recipe units a machine processes per batch.</summary>
     public static int Batch(PartType t, int size = 1) => t == PartType.Sawbench ? SawBatch[Index(t, size)] : 1;

@@ -18,6 +18,8 @@ public enum StorageRole : byte
     Input,
     /// <summary>Factory output crate: products to be taken away (to stockpiles or other factories).</summary>
     Output,
+    /// <summary>Building materials on a blueprint's footprint: stays until a builder uses it.</summary>
+    Construction,
 }
 
 /// <summary>
@@ -38,6 +40,7 @@ public static class Hauling
     public static StorageRole RoleOf(TilePos p, ItemType type, Stockpiles stockpiles, Rooms rooms)
     {
         var part = rooms.PartAt(p);
+        if (part is { Built: false }) return part.Cost.Material == type ? StorageRole.Construction : StorageRole.Loose;
         if (part?.Role == PartRole.Input) return part.Room.Recipe.Input == type ? StorageRole.Input : StorageRole.Loose;
         if (part?.Role == PartRole.Output) return StorageRole.Output;
         return stockpiles.Contains(p) ? StorageRole.Stockpile : StorageRole.Loose;
@@ -60,6 +63,22 @@ public static class Hauling
                 int space = items.RoomAt(cell, type);
                 if (space > 0 && Usable(cell)) demands.Offer(Dist(cell, from), (cell, type, space));
             }
+            // Blueprints want their materials, spread over their footprint (one pile per cell).
+            foreach (var bp in room.Blueprints)
+            {
+                var (material, cost) = bp.Cost;
+                int need = cost;
+                foreach (var c in bp.Cells)
+                    if (items.TryGet(c, out var pile) && pile.Type == material) need -= pile.Count + pile.Incoming;
+                if (need <= 0) continue;
+                foreach (var c in bp.Cells)
+                {
+                    int space = Math.Min(items.RoomAt(c, material), need);
+                    if (space <= 0 || !Usable(c)) continue;
+                    demands.Offer(Dist(c, from), (c, material, space));
+                    break;
+                }
+            }
         }
         foreach (var (cell, type, space) in demands.Items)
         {
@@ -67,7 +86,7 @@ public static class Hauling
             foreach (var (p, pile) in items.All)
             {
                 if (pile.Type != type || pile.Available <= 0 || !Usable(p)) continue;
-                if (RoleOf(p, pile.Type, stockpiles, rooms) == StorageRole.Input) continue;
+                if (RoleOf(p, pile.Type, stockpiles, rooms) is StorageRole.Input or StorageRole.Construction) continue;
                 source.Offer(Dist(p, cell), (p, pile.Available));
             }
             foreach (var (src, available) in source.Items)

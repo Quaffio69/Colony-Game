@@ -121,7 +121,9 @@ public partial class DesignationTool : Node3D
                 int size = SizeFor(part);
                 var (fw, fd) = PartInfo.Footprint(part, size);
                 if (_rotated) (fw, fd) = (fd, fw);
-                int tiles = fw * fd, cost = PartInfo.Cost(part, size);
+                int tiles = fw * fd;
+                var (material, cost) = PartInfo.Cost(part, size);
+                string mat = Colony.Core.Items.ItemInfo.Name(material).ToLowerInvariant();
                 string role = PartInfo.Role(part) switch
                 {
                     PartRole.Machine => MachineInfo(part, size),
@@ -131,7 +133,7 @@ public partial class DesignationTool : Node3D
                     PartRole.Input => "holds the room's input",
                     _ => "holds the room's products",
                 };
-                return $"{PartInfo.Name(part, size)} {fw}x{fd}: {role}   cost {cost} planks ({cost / (float)tiles:0.#}/tile, free for now)   " +
+                return $"{PartInfo.Name(part, size)} {fw}x{fd}: {role}   cost {cost} {mat} ({cost / (float)tiles:0.#}/tile)   " +
                        "R: rotate   " + (PlacementProblem is { } p ? $"can't place: {p}" : "click to place");
             }
             return null;
@@ -364,7 +366,7 @@ public partial class DesignationTool : Node3D
         string name = PartInfo.Name(part, size).ToLowerInvariant();
         var placed = _sim.Rooms.Place(part, cell, _rotated, size);
         LastAction = placed is not null
-            ? $"Placed a {name} in {placed.Room.Name}"
+            ? (placed.Built ? $"Placed a {name} in {placed.Room.Name}" : $"Placed a {name} blueprint in {placed.Room.Name}: needs {placed.Cost.Count} {Colony.Core.Items.ItemInfo.Name(placed.Cost.Material).ToLowerInvariant()} and a builder")
             : $"Can't place {name}: {_sim.Rooms.CanPlace(part, cell, _rotated, size)}";
     }
 

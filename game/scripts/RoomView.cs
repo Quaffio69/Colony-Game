@@ -28,6 +28,7 @@ public partial class RoomView : Node3D
     private readonly Dictionary<(PartType, int), Mesh> _meshes = new();
     private readonly Dictionary<int, Mesh> _blades = new(); // by size
     private Material _wood = null!, _darkWood = null!, _metal = null!, _inputWood = null!, _outputWood = null!, _flame = null!;
+    private readonly Material _blueprint = Overlay.Material(new Color(0.45f, 0.75f, 1f, 0.35f));
     private readonly List<(Part Part, Node3D Node, List<Node3D> Blades)> _parts = new();
     private readonly List<MultiMeshInstance3D> _floors = new();
     private Node3D _root = null!;
@@ -100,12 +101,14 @@ public partial class RoomView : Node3D
         var last = part.Cells[^1];
         var centre = new Vector3((part.Origin.X + last.X + 1) / 2f, part.Origin.Z, (part.Origin.Y + last.Y + 1) / 2f);
         var node = new Node3D { Position = centre, Rotation = new Vector3(0, part.Rotated ? Mathf.Pi / 2 : 0, 0) };
-        node.AddChild(new MeshInstance3D { Mesh = MeshFor(part.Type, part.Size) });
+        // Blueprints are translucent ghosts until built.
+        var ghost = part.Built ? null : _blueprint;
+        node.AddChild(new MeshInstance3D { Mesh = MeshFor(part.Type, part.Size), MaterialOverride = ghost, CastShadow = part.Built ? GeometryInstance3D.ShadowCastingSetting.On : GeometryInstance3D.ShadowCastingSetting.Off });
         var blades = new List<Node3D>();
         if (part.Type == PartType.Sawbench)
             foreach (var at in BladePositions(part.Size))
             {
-                var blade = new MeshInstance3D { Mesh = Blade(part.Size), Position = at };
+                var blade = new MeshInstance3D { Mesh = Blade(part.Size), Position = at, MaterialOverride = ghost };
                 node.AddChild(blade);
                 blades.Add(blade);
             }

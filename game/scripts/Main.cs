@@ -208,11 +208,17 @@ public partial class Main : Node3D
         string In(Colony.Core.Items.ItemType t) => Colony.Core.Items.ItemInfo.Name(t).ToLowerInvariant();
         sb.AppendLine($"[{room.Name}]  {room.Cells.Count} cells on {levels} level{(levels == 1 ? "" : "s")}    " +
                       $"Status: {Colony.Core.Industry.Rooms.Status(room, _sim.Items)}");
-        var parts = room.Parts.OrderBy(p => p.Type).ThenByDescending(p => p.Size).GroupBy(p => p.Name)
+        var parts = room.Parts.Where(p => p.Built).OrderBy(p => p.Type).ThenByDescending(p => p.Size).GroupBy(p => p.Name)
             .Select(g => $"{g.Count()} {g.Key.ToLowerInvariant()}");
-        int cost = room.Parts.Sum(p => Colony.Core.Industry.PartInfo.Cost(p.Type, p.Size));
-        sb.AppendLine($"   Parts: {(room.Parts.Count == 0 ? "none" : string.Join(", ", parts))}    Efficiency {room.Efficiency:P0}    " +
-                      $"Build value {cost} planks");
+        sb.AppendLine($"   Parts: {(!parts.Any() ? "none" : string.Join(", ", parts))}    Efficiency {room.Efficiency:P0}");
+        // Blueprints: what each still needs, so it's clear whether hauling or building is the bottleneck.
+        var blueprints = room.Blueprints.Select(p =>
+        {
+            int have = Colony.Core.Industry.Rooms.MaterialsOnSite(p, _sim.Items);
+            string state = p.BuilderId >= 0 ? "building" : have >= p.Cost.Count ? "waiting for a builder" : $"{have}/{p.Cost.Count} {In(p.Cost.Material)}";
+            return $"{p.Name.ToLowerInvariant()} ({state})";
+        }).ToList();
+        if (blueprints.Count > 0) sb.AppendLine($"   Under construction: {string.Join(", ", blueprints)}");
         int input = Colony.Core.Industry.Rooms.Stock(room, Colony.Core.Industry.PartRole.Input, recipe.Input, _sim.Items);
         int output = Colony.Core.Industry.Rooms.Stock(room, Colony.Core.Industry.PartRole.Output, recipe.Output, _sim.Items);
         // Capacity with every machine manned (ignores fetching and storing walks).
@@ -371,10 +377,10 @@ public partial class Main : Node3D
         }
         Put(Colony.Core.Industry.PartType.InputCrate, false);
         Put(Colony.Core.Industry.PartType.OutputCrate, true);
-        Put(Colony.Core.Industry.PartType.Sawbench, false, size: 4);
-        Put(Colony.Core.Industry.PartType.Sawbench, true, size: 2);
+        Put(Colony.Core.Industry.PartType.Sawbench, false);
+        Put(Colony.Core.Industry.PartType.Sawbench, true, size: 2); // costs planks: built once the sawmill runs
         Put(Colony.Core.Industry.PartType.Sawbench, true);
-        Put(Colony.Core.Industry.PartType.ToolRack, false, size: 3);
+        Put(Colony.Core.Industry.PartType.ToolRack, false);
         Put(Colony.Core.Industry.PartType.ToolRack, true);
         Put(Colony.Core.Industry.PartType.Lantern, true);
         int planks = _sim.Stockpiles.AddFloorBox(new TilePos(c.X + 2, c.Y + 5, g - 6), new TilePos(c.X + 6, c.Y + 7, g));
@@ -401,6 +407,7 @@ public partial class Main : Node3D
             }
         }
         var rooms = _sim.Rooms;
+        rooms.InstantBuild = true; // a showroom, not a construction site
         rooms.Paint(Colony.Core.Industry.RoomType.Sawmill, new TilePos(x0, y0, g), new TilePos(x1, y1, g));
         int f = g + 1, x = x0 + 1;
         for (int s = 1; s <= 5; s++)
@@ -417,6 +424,7 @@ public partial class Main : Node3D
         rooms.Place(Colony.Core.Industry.PartType.InputCrate, new TilePos(x0, y1, f), false);
         rooms.Place(Colony.Core.Industry.PartType.OutputCrate, new TilePos(x1, y1, f), false);
         rooms.Place(Colony.Core.Industry.PartType.Lantern, new TilePos(x1, y0 + 7, f), false);
+        rooms.InstantBuild = false;
         _rig.Focus(SimSpace.TileCenter(new TilePos((x0 + x1) / 2, (y0 + y1) / 2, f)), 17f, yaw: 200f, pitch: -58f);
         GD.Print($"Parts demo: {rooms.All.Sum(r => r.Parts.Count)} parts, efficiency {rooms.All[0].Efficiency:P0}");
     }

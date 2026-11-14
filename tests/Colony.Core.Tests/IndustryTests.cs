@@ -18,7 +18,9 @@ public class IndustryTests
             for (int z = 0; z <= 2; z++) w.Set(x, y, z, TileType.Stone);
             w.Set(x, y, 3, TileType.Grass);
         }
-        return new ColonySim(w);
+        var sim = new ColonySim(w);
+        sim.Rooms.InstantBuild = true; // most tests are about running factories; construction has its own tests
+        return sim;
     }
 
     private static TilePos G(int x, int y, int z = 3) => new(x, y, z); // a ground tile (click target)
@@ -128,7 +130,7 @@ public class IndustryTests
         for (int s = 1; s <= PartInfo.MaxSize; s++)
         {
             // Machines: dearer per tile, less labour per unit.
-            double costPerTile = PartInfo.Cost(PartType.Sawbench, s) / (double)PartInfo.Tiles(PartType.Sawbench, s);
+            double costPerTile = PartInfo.Cost(PartType.Sawbench, s).Count / (double)PartInfo.Tiles(PartType.Sawbench, s);
             var batch = PartInfo.MachineRecipe(PartType.Sawbench, s, unit);
             double labour = batch.WorkTicks / (double)batch.InCount;
             Assert.True(costPerTile > prevCostPerTile && labour < prevLabour, $"saw size {s}");
@@ -136,7 +138,7 @@ public class IndustryTests
             Assert.True(batch.InCount <= Items.ItemInfo.StackLimit(batch.Input), "a batch must fit one input crate");
 
             // Tools: cost grows exponentially (at least x2.5 per size), effect per tile grows.
-            double toolCost = PartInfo.Cost(PartType.ToolRack, s);
+            double toolCost = PartInfo.Cost(PartType.ToolRack, s).Count;
             double effect = PartInfo.Bonus(PartType.ToolRack, s) * PartInfo.Coverage(PartType.ToolRack, s) / (double)PartInfo.Tiles(PartType.ToolRack, s);
             Assert.True(toolCost >= prevToolCost * 2.5 && effect > prevEffectPerTile, $"tool size {s}");
             (prevCostPerTile, prevLabour, prevToolCost, prevEffectPerTile) = (costPerTile, labour, toolCost, effect);
@@ -237,6 +239,55 @@ public class IndustryTests
 
         Assert.All(sim.Colonists, c => Assert.Equal(0, c.CarryingCount));
         Assert.Equal(10, sim.Items.Totals()[(int)ItemType.Log] + (int)sim.ItemsProduced / 4); // nothing lost
+        Assert.All(sim.Items.All, kv => Assert.True(kv.Value is { Reserved: 0, Incoming: 0 }, $"{kv.Key}: {kv.Value}"));
+    }
+
+    [Fact]
+    public void Construction_BootstrapsFromLogs_ThenPlanksBuildTheBiggerMachines()
+    {
+        var sim = Meadow();
+        sim.Rooms.InstantBuild = false;
+        sim.Stockpiles.AddFloorBox(G(2, 2), G(6, 6));
+        for (int i = 0; i < 4; i++) sim.Items.Drop(new TilePos(3 + i, 3, 4), ItemType.Log, 10);
+        var rooms = sim.Rooms;
+        rooms.Paint(RoomType.Sawmill, G(20, 20), G(28, 26));
+        var horse = rooms.Place(PartType.Sawbench, new TilePos(21, 21, 4), false)!;
+        var input = rooms.Place(PartType.InputCrate, new TilePos(20, 20, 4), false)!;
+        var output = rooms.Place(PartType.OutputCrate, new TilePos(28, 26, 4), false)!;
+        Assert.False(horse.Built);
+        Assert.Equal(new BuildCost(ItemType.Log, 2), horse.Cost);
+        Assert.Equal("machine under construction", Rooms.Status(rooms.All[0], sim.Items));
+        for (int i = 0; i < 4; i++) sim.AddColonist($"C{i}", new TilePos(10 + i, 12, 4));
+
+        int t = 0;
+        for (; t < 20_000 && !(horse.Built && input.Built && output.Built); t++) sim.Step();
+        Assert.True(horse.Built && input.Built && output.Built, $"not built after {t} ticks");
+        // Materials were used up, not left lying on the footprints.
+        foreach (var part in new[] { horse, input, output })
+            Assert.Equal(0, Rooms.MaterialsOnSite(part, sim.Items) - (part.Role == PartRole.Input ? Rooms.Stock(rooms.All[0], PartRole.Input, ItemType.Log, sim.Items) : 0));
+
+        // The working sawmill's planks pay for a saw table.
+        var table = rooms.Place(PartType.Sawbench, new TilePos(24, 21, 4), false, size: 2)!;
+        Assert.Equal(ItemType.Plank, table.Cost.Material);
+        for (t = 0; t < 60_000 && !table.Built; t++) sim.Step();
+        Assert.True(table.Built, $"saw table not built after {t} ticks");
+        Assert.All(sim.Items.All, kv => Assert.True(kv.Value.Reserved >= 0 && kv.Value.Incoming >= 0));
+    }
+
+    [Fact]
+    public void CancellingABlueprint_LeavesItsMaterialsToBeHauledAway()
+    {
+        var sim = Meadow();
+        sim.Rooms.InstantBuild = false;
+        sim.Stockpiles.AddFloorBox(G(2, 2), G(4, 4));
+        sim.Rooms.Paint(RoomType.Sawmill, G(20, 20), G(24, 24));
+        var crate = sim.Rooms.Place(PartType.InputCrate, new TilePos(22, 22, 4), false)!;
+        sim.Items.Drop(new TilePos(22, 22, 4), ItemType.Log, 1); // half delivered
+        sim.Rooms.RemovePart(crate);
+
+        sim.AddColonist("Hauler", new TilePos(10, 10, 4));
+        for (int i = 0; i < 4000; i++) sim.Step();
+        Assert.Equal(1, sim.Items.Totals(sim.Stockpiles.Contains)[(int)ItemType.Log]);
         Assert.All(sim.Items.All, kv => Assert.True(kv.Value is { Reserved: 0, Incoming: 0 }, $"{kv.Key}: {kv.Value}"));
     }
 
