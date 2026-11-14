@@ -6,17 +6,19 @@ public enum ItemType : byte
     Stone,
     Ore,
     Log,
+    Plank,
 }
 
 public static class ItemInfo
 {
-    public const int TypeCount = 3;
+    public const int TypeCount = 4;
 
     public static string Name(ItemType t) => t switch
     {
         ItemType.Stone => "Stone",
         ItemType.Ore => "Ore",
         ItemType.Log => "Logs",
+        ItemType.Plank => "Planks",
         _ => t.ToString(),
     };
 
@@ -24,6 +26,7 @@ public static class ItemInfo
     public static int StackLimit(ItemType t) => t switch
     {
         ItemType.Log => 20,
+        ItemType.Plank => 40,
         _ => 25,
     };
 
@@ -31,6 +34,7 @@ public static class ItemInfo
     public static int CarryLimit(ItemType t) => t switch
     {
         ItemType.Log => 3,
+        ItemType.Plank => 8,
         _ => 5,
     };
 }

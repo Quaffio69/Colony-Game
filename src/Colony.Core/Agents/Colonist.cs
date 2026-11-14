@@ -1,3 +1,4 @@
+﻿using Colony.Core.Industry;
 using Colony.Core.Items;
 using Colony.Core.Navigation;
 using Colony.Core.Orders;
@@ -7,8 +8,11 @@ namespace Colony.Core.Agents;
 
 public enum ColonistState { Idle, Moving, Working }
 
-/// <summary>What a colonist is doing beyond walking: a designation, or one leg of a haul trip.</summary>
-public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver }
+/// <summary>What a colonist is doing beyond walking: a designation, one leg of a haul trip, or factory work.</summary>
+public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore }
+
+/// <summary>Kinds of work, in the order a colonist prefers them (see <see cref="Colonist.Labors"/>).</summary>
+public enum Labor { Designations, Hauling, Industry }
 
 /// <summary>
 /// A colony member. When idle it looks for work in its own connectivity component (so unreachable work never
@@ -36,6 +40,10 @@ public sealed class Colonist
     private readonly HashSet<TilePos> _pathFailed = new();
     private int _pathFailedConnectivity = -1;
     private HaulPlan _haul;
+    private CraftPlan _craft;
+
+    /// <summary>One production cycle: input crate -> machine -> output crate.</summary>
+    private readonly record struct CraftPlan(Part Machine, TilePos InputCell, TilePos OutputCell, Recipe Recipe);
 
     public int Id { get; }
     public string Name { get; }
@@ -57,8 +65,16 @@ public sealed class Colonist
     public ItemType CarryingType { get; private set; }
     public int CarryingCount { get; private set; }
 
-    /// <summary>Prefers hauling over designations (a third of the colony, until job priorities exist).</summary>
-    public bool PrefersHauling => Id % 3 == 2;
+    /// <summary>
+    /// Work kinds in preference order. Rotates by id so a third of the colony leans to each kind, and everyone
+    /// falls back on the others; real job priorities will replace this.
+    /// </summary>
+    public Labor[] Labors => (Id % 3) switch
+    {
+        0 => [Labor.Designations, Labor.Hauling, Labor.Industry],
+        1 => [Labor.Industry, Labor.Designations, Labor.Hauling],
+        _ => [Labor.Hauling, Labor.Industry, Labor.Designations],
+    };
 
     public Colonist(int id, string name, TilePos position)
     {
@@ -73,9 +89,17 @@ public sealed class Colonist
         (ColonistTask.Designation, ColonistState.Working) =>
             $"working at {JobTarget} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
         (ColonistTask.HaulPickup, _) => $"fetching {ItemInfo.Name(_haul.Type).ToLowerInvariant()} at {_haul.Source}",
-        (ColonistTask.HaulDeliver, _) => $"hauling {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()} to stockpile",
+        (ColonistTask.HaulDeliver, _) => $"hauling {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {(_haulToFactory ? "a factory" : "stockpile")}",
+        (ColonistTask.CraftFetch, _) => $"fetching {ItemInfo.Name(_craft.Recipe.Input).ToLowerInvariant()} for the {_craft.Machine.Name.ToLowerInvariant()}",
+        (ColonistTask.CraftWork, ColonistState.Working) =>
+            $"working the {_craft.Machine.Name.ToLowerInvariant()} in {_craft.Machine.Room.Name} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
+        (ColonistTask.CraftWork, _) => $"carrying {ItemInfo.Name(CarryingType).ToLowerInvariant()} to the {_craft.Machine.Name.ToLowerInvariant()}",
+        (ColonistTask.CraftStore, _) => $"storing {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()}",
         _ => "idle",
     };
+
+    private string Destination(TilePos p) => _haulToFactory ? "a factory" : "stockpile";
+    private bool _haulToFactory;
 
     /// <summary>Tiles a colonist standing at <paramref name="at"/> can work on: all 26 neighbours.</summary>
     public static bool InReach(TilePos at, TilePos target) =>
@@ -87,6 +111,8 @@ public sealed class Colonist
 
         if (Task == ColonistTask.Designation && JobTarget is { } job && !sim.Designations.IsClaimedBy(job, Id))
             Abandon(sim); // cancelled, re-designated, or completed by someone else
+        else if (Task is ColonistTask.CraftFetch or ColonistTask.CraftWork && _craft.Machine.Removed)
+            Abandon(sim); // the machine was removed (or its floor lost)
 
         switch (State)
         {
@@ -147,6 +173,15 @@ public sealed class Colonist
                     case ColonistTask.HaulDeliver:
                         Deliver(sim);
                         break;
+                    case ColonistTask.CraftFetch:
+                        CraftPickUp(sim);
+                        break;
+                    case ColonistTask.CraftWork:
+                        CraftFinish(sim);
+                        break;
+                    case ColonistTask.CraftStore:
+                        Deliver(sim, _craft.OutputCell);
+                        break;
                 }
                 break;
         }
@@ -156,7 +191,10 @@ public sealed class Colonist
 
     private bool NothingNewSinceLastSearch(ColonySim sim) =>
         _searchedDesignations == sim.Designations.Version && _searchedConnectivity == sim.Connectivity.Version &&
-        _searchedItems == sim.Items.Version && _searchedStockpiles == sim.Stockpiles.Version;
+        _searchedItems == sim.Items.Version && _searchedStockpiles == sim.Stockpiles.Version &&
+        _searchedRooms == sim.Rooms.Version;
+
+    private int _searchedRooms = -1;
 
     private void FindWork(ColonySim sim)
     {
@@ -166,6 +204,7 @@ public sealed class Colonist
         _searchedConnectivity = sim.Connectivity.Version;
         _searchedItems = sim.Items.Version;
         _searchedStockpiles = sim.Stockpiles.Version;
+        _searchedRooms = sim.Rooms.Version;
         _deferred = false;
 
         if (_pathFailedConnectivity != sim.Connectivity.Version)
@@ -177,10 +216,17 @@ public sealed class Colonist
         int component = sim.Connectivity.ComponentOf(Position);
         if (component < 0) return;
 
-        bool found = PrefersHauling
-            ? TryHaul(sim, component) || TryTakeJob(sim, component)
-            : TryTakeJob(sim, component) || TryHaul(sim, component);
-        if (found) return;
+        foreach (var labor in Labors)
+        {
+            bool found = labor switch
+            {
+                Labor.Designations => TryTakeJob(sim, component),
+                Labor.Hauling => TryHaul(sim, component),
+                _ => TryCraft(sim, component),
+            };
+            if (found) return;
+            if (_deferred) break;
+        }
 
         if (_deferred)
         {
@@ -222,7 +268,7 @@ public sealed class Colonist
 
     private bool TryHaul(ColonySim sim, int component)
     {
-        foreach (var plan in Hauling.Plans(sim.Items, sim.Stockpiles, sim.World, sim.Connectivity, Position, component, _pathFailed))
+        foreach (var plan in Hauling.Plans(sim.Items, sim.Stockpiles, sim.Rooms, sim.Connectivity, Position, component, _pathFailed))
         {
             if (sim.PathBudgetExhausted)
             {
@@ -242,10 +288,128 @@ public sealed class Colonist
                 continue;
             }
             _haul = plan;
+            _haulToFactory = sim.Rooms.PartAt(plan.Destination)?.Role == PartRole.Input;
             Begin(ColonistTask.HaulPickup, plan.Source, path);
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Factory work: a free machine (biggest first) in a room whose input crate holds a batch for it and whose
+    /// output crate has room for the products. Reserves all three, then walks to the input crate.
+    /// </summary>
+    private bool TryCraft(ColonySim sim, int component)
+    {
+        foreach (var room in sim.Rooms.All)
+        foreach (var machine in FreeMachinesBiggestFirst(room))
+        {
+            if (MachineSpots(sim, machine, component).Count == 0) continue;
+            // A full batch if any crate holds one; otherwise whatever is left in a crate nobody is refilling
+            // (so the last logs still get sawn), in proportionally less time.
+            var full = machine.Batch;
+            int unitIn = room.Recipe.InCount, batchUnits = full.InCount / unitIn;
+            TilePos? input = null, output = null, partialCell = null;
+            int partialUnits = 0;
+            foreach (var crate in room.PartsWithRole(PartRole.Input))
+            {
+                var c = crate.Cells[0];
+                if (!sim.Items.TryGet(c, out var pile) || pile.Type != full.Input || sim.Connectivity.ComponentOf(c) != component)
+                    continue;
+                int units = Math.Min(batchUnits, pile.Available / unitIn);
+                if (units == batchUnits) { input = c; break; }
+                if (units > partialUnits && pile.Incoming == 0) (partialCell, partialUnits) = (c, units);
+            }
+            var recipe = full;
+            if (input is null && partialCell is not null)
+            {
+                input = partialCell;
+                recipe = PartInfo.PartialBatch(full, partialUnits, batchUnits);
+            }
+            foreach (var crate in room.PartsWithRole(PartRole.Output))
+            {
+                var c = crate.Cells[0];
+                if (sim.Items.RoomAt(c, recipe.Output) >= recipe.OutCount && sim.Connectivity.ComponentOf(c) == component)
+                { output = c; break; }
+            }
+            if (input is not { } inCell || output is not { } outCell) continue;
+            if (sim.PathBudgetExhausted)
+            {
+                _deferred = true;
+                return false;
+            }
+
+            var path = Route(sim, ReachableAround(sim, inCell, component), inCell);
+            if (path is null)
+            {
+                _pathFailed.Add(inCell);
+                continue;
+            }
+            if (!sim.Items.Reserve(inCell, recipe.InCount)) continue;
+            if (!sim.Items.ReserveIncoming(outCell, recipe.Output, recipe.OutCount))
+            {
+                sim.Items.Unreserve(inCell, recipe.InCount);
+                continue;
+            }
+            machine.ClaimedBy = Id;
+            _craft = new CraftPlan(machine, inCell, outCell, recipe);
+            Begin(ColonistTask.CraftFetch, inCell, path);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Unclaimed machines, biggest (least labour per unit) first, then in placement order.</summary>
+    private static IEnumerable<Part> FreeMachinesBiggestFirst(Room room) =>
+        room.PartsWithRole(PartRole.Machine).Where(m => m.ClaimedBy < 0).OrderByDescending(m => m.Size).ThenBy(m => m.Id);
+
+    /// <summary>Standable tiles in reach of any of the machine's cells, within the component.</summary>
+    private static HashSet<TilePos> MachineSpots(ColonySim sim, Part machine, int component)
+    {
+        var spots = new HashSet<TilePos>();
+        foreach (var c in machine.Cells) spots.UnionWith(ReachableAround(sim, c, component));
+        return spots;
+    }
+
+    private void CraftPickUp(ColonySim sim)
+    {
+        int taken = sim.Items.TakeReserved(_craft.InputCell, _craft.Recipe.InCount);
+        // The input reservation is used up now: from here on, cleanup is the work phase's (see Abandon).
+        Task = ColonistTask.CraftWork;
+        CarryingType = _craft.Recipe.Input;
+        CarryingCount = taken;
+        if (taken < _craft.Recipe.InCount)
+        {
+            Abandon(sim); // someone or something took the batch; drops what we got
+            return;
+        }
+        int component = sim.Connectivity.ComponentOf(Position);
+        var path = Route(sim, MachineSpots(sim, _craft.Machine, component), _craft.Machine.Origin);
+        if (path is null)
+        {
+            Abandon(sim);
+            return;
+        }
+        Begin(ColonistTask.CraftWork, _craft.Machine.Origin, path);
+    }
+
+    /// <summary>Batch processed: the input is used up and the products are in hand.</summary>
+    private void CraftFinish(ColonySim sim)
+    {
+        _craft.Machine.Working = false;
+        _craft.Machine.ClaimedBy = -1; // free for the next worker while we carry the products away
+        CarryingType = _craft.Recipe.Output;
+        CarryingCount = _craft.Recipe.OutCount;
+        sim.ItemsProduced += _craft.Recipe.OutCount;
+
+        int component = sim.Connectivity.ComponentOf(Position);
+        var path = Route(sim, ReachableAround(sim, _craft.OutputCell, component), _craft.OutputCell);
+        if (path is null)
+        {
+            Abandon(sim);
+            return;
+        }
+        Begin(ColonistTask.CraftStore, _craft.OutputCell, path);
     }
 
     private void Begin(ColonistTask task, TilePos target, List<TilePos> path)
@@ -285,13 +449,24 @@ public sealed class Colonist
     private void Arrive(ColonySim sim)
     {
         var target = JobTarget!.Value;
-        if (!InReach(Position, target))
+        bool inReach = Task == ColonistTask.CraftWork
+            ? _craft.Machine.Cells.Any(c => InReach(Position, c)) // machines can be several tiles long
+            : InReach(Position, target);
+        if (!inReach)
         {
             Abandon(sim);
             return;
         }
         switch (Task)
         {
+            case ColonistTask.CraftFetch:
+            case ColonistTask.CraftStore:
+                StartWorking(HandleTicks);
+                break;
+            case ColonistTask.CraftWork:
+                _craft.Machine.Working = true;
+                StartWorking((int)MathF.Round(_craft.Recipe.WorkTicks / _craft.Machine.Room.Efficiency));
+                break;
             case ColonistTask.Designation:
                 if (!sim.Designations.TryGet(target, out var kind))
                 {
@@ -340,9 +515,12 @@ public sealed class Colonist
         Begin(ColonistTask.HaulDeliver, _haul.Destination, path);
     }
 
-    private void Deliver(ColonySim sim)
+    private void Deliver(ColonySim sim) => Deliver(sim, _haul.Destination);
+
+    /// <summary>Puts the load into <paramref name="destination"/> (whose incoming reservation it fills); spills the rest.</summary>
+    private void Deliver(ColonySim sim, TilePos destination)
     {
-        int added = sim.Items.Deliver(_haul.Destination, CarryingType, CarryingCount);
+        int added = sim.Items.Deliver(destination, CarryingType, CarryingCount);
         if (added < CarryingCount) sim.Items.Drop(Position, CarryingType, CarryingCount - added);
         CarryingCount = 0;
         Finish();
@@ -372,6 +550,18 @@ public sealed class Colonist
             case ColonistTask.HaulDeliver:
                 sim.Items.ReleaseIncoming(_haul.Destination, _haul.Amount);
                 break;
+            case ColonistTask.CraftFetch:
+                sim.Items.Unreserve(_craft.InputCell, _craft.Recipe.InCount);
+                sim.Items.ReleaseIncoming(_craft.OutputCell, _craft.Recipe.OutCount);
+                ReleaseMachine();
+                break;
+            case ColonistTask.CraftWork:
+                sim.Items.ReleaseIncoming(_craft.OutputCell, _craft.Recipe.OutCount);
+                ReleaseMachine();
+                break;
+            case ColonistTask.CraftStore:
+                sim.Items.ReleaseIncoming(_craft.OutputCell, _craft.Recipe.OutCount);
+                break;
         }
         if (CarryingCount > 0)
         {
@@ -381,6 +571,14 @@ public sealed class Colonist
         _path.Clear();
         NextStep = null;
         Finish();
+    }
+
+    private void ReleaseMachine()
+    {
+        var m = _craft.Machine;
+        if (m.ClaimedBy != Id) return;
+        m.ClaimedBy = -1;
+        m.Working = false;
     }
 
     /// <summary>

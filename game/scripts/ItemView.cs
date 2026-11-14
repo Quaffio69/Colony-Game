@@ -20,6 +20,7 @@ public partial class ItemView : Node3D
         ItemType.Stone => new Color(0.62f, 0.62f, 0.64f),
         ItemType.Ore => new Color(0.78f, 0.48f, 0.22f),
         ItemType.Log => new Color(0.55f, 0.38f, 0.22f),
+        ItemType.Plank => new Color(0.86f, 0.7f, 0.46f),
         _ => Colors.Magenta,
     };
 
@@ -131,6 +132,18 @@ public partial class ItemView : Node3D
             for (int i = 0; i < 3; i++) st.AppendFrom(log, 0, new Transform3D(lying, new Vector3(0, 0.11f, -0.24f + i * 0.24f)));
             for (int i = 0; i < 2; i++) st.AppendFrom(log, 0, new Transform3D(lying, new Vector3(0, 0.31f, -0.12f + i * 0.24f)));
             st.AppendFrom(log, 0, new Transform3D(lying, new Vector3(0, 0.51f, 0)));
+        }
+        else if (type == ItemType.Plank)
+        {
+            // A neat stack of boards, alternating direction.
+            var board = new BoxMesh { Size = new Vector3(0.8f, 0.07f, 0.16f) };
+            for (int layer = 0; layer < 6; layer++)
+            for (int i = 0; i < 3; i++)
+            {
+                var basis = layer % 2 == 0 ? Basis.Identity : new Basis(Vector3.Up, Mathf.Pi / 2);
+                var offset = layer % 2 == 0 ? new Vector3(0, 0, -0.22f + i * 0.22f) : new Vector3(-0.22f + i * 0.22f, 0, 0);
+                st.AppendFrom(board, 0, new Transform3D(basis, offset + new Vector3(0, 0.035f + layer * 0.08f, 0)));
+            }
         }
         else
         {

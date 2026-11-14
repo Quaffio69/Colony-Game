@@ -77,6 +77,38 @@ public sealed class Designations
     public int CancelBox(TilePos a, TilePos b) => ForBox(a, b, Cancel);
 
     /// <summary>
+    /// Chop orders on every tree whose column lies in the rectangle between two corners, at any level:
+    /// felling always happens on the surface, so the area is picked in 2D. Returns how many trees were marked.
+    /// </summary>
+    public int DesignateChopArea(int x0, int y0, int x1, int y1) =>
+        ForTreesInArea(x0, y0, x1, y1, p => Designate(p, DesignationKind.Chop));
+
+    /// <summary>Cancels chop orders in the columns of a rectangle (any level). Returns how many were removed.</summary>
+    public int CancelChopArea(int x0, int y0, int x1, int y1) =>
+        ForTreesInArea(x0, y0, x1, y1, p => _orders.TryGetValue(p, out var k) && k == DesignationKind.Chop && Cancel(p));
+
+    private int ForTreesInArea(int x0, int y0, int x1, int y1, Func<TilePos, bool> action)
+    {
+        if (Flora is null) return 0;
+        (x0, x1) = (Math.Max(0, Math.Min(x0, x1)), Math.Min(_world.Width - 1, Math.Max(x0, x1)));
+        (y0, y1) = (Math.Max(0, Math.Min(y0, y1)), Math.Min(_world.Depth - 1, Math.Max(y0, y1)));
+        var hits = new List<TilePos>();
+        for (int ry = y0 >> Nature.Flora.RegionShift; ry <= y1 >> Nature.Flora.RegionShift; ry++)
+        for (int rx = x0 >> Nature.Flora.RegionShift; rx <= x1 >> Nature.Flora.RegionShift; rx++)
+            foreach (var plant in Flora.InRegion(rx, ry))
+            {
+                var p = plant.Position;
+                if (p.X >= x0 && p.X <= x1 && p.Y >= y0 && p.Y <= y1 && Nature.PlantInfo.IsTree(plant.Kind)) hits.Add(p);
+            }
+        // Region lists reorder on removal: sort so the result never depends on that history.
+        hits.Sort((a, b) => a.Z != b.Z ? a.Z.CompareTo(b.Z) : a.Y != b.Y ? a.Y.CompareTo(b.Y) : a.X.CompareTo(b.X));
+        int n = 0;
+        foreach (var p in hits)
+            if (action(p)) n++;
+        return n;
+    }
+
+    /// <summary>
     /// Designates a connected staircase in the inclusive box between two corners (any size, any number of
     /// levels): down stairs on the top level, up/down stairs in between, up stairs on the bottom level.
     /// A single-level box gets up/down stairs. The world's bottom layer is never touched.

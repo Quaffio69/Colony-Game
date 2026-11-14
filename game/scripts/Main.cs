@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Colony.Core;
 using Colony.Core.Procedural;
@@ -70,6 +71,10 @@ public partial class Main : Node3D
         _items = new ItemView { Name = "ItemView" };
         AddChild(_items);
         _items.Initialize(_sim, _world);
+
+        var rooms = new RoomView { Name = "RoomView" };
+        AddChild(rooms);
+        rooms.Initialize(_sim, _world);
 
         GetNode<ColonistView>("ColonistView").Initialize(_sim, _world);
 
@@ -148,7 +153,7 @@ public partial class Main : Node3D
             ? $"{_sim.World.Get(h)} at {h}" + (_sim.Flora.TryGet(h.Offset(0, 0, 1), out var plant) ? $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" : "")
             : "-";
         string time = _paused ? "PAUSED" : $"{Speeds[_speedIndex]}x";
-        string tool = DesignationTool.ModeName(_tool.Mode);
+        string tool = _tool.ModeName(_tool.Mode);
         double seconds = _sim.Tick / (double)ColonySim.TicksPerSecond;
 
         sb.AppendLine($"Level {_world.ViewLevel} / {_sim.World.Height - 1}    Time {seconds:0}s [{time}]    " +
@@ -157,6 +162,7 @@ public partial class Main : Node3D
         sb.AppendLine($"Tool: {tool}    Hover: {hover}");
         sb.AppendLine($"Designations: {_sim.Designations.Count}    {_tool.SelectionInfo ?? _tool.LastAction}");
         sb.AppendLine(StockLine());
+        if (_tool.Hovered is { } hc && _sim.Rooms.RoomAt(hc.Offset(0, 0, 1)) is { } room) AppendRoomPanel(sb, room);
         if (_sim.RecentCaveIns.Count > 0)
         {
             var last = _sim.RecentCaveIns[^1];
@@ -168,11 +174,41 @@ public partial class Main : Node3D
         foreach (var c in _sim.Colonists)
             sb.AppendLine($"  {c.Name,-8} {c.Describe()}");
         sb.AppendLine();
-        sb.AppendLine("Tab/Shift+Tab: tool   LMB: start/confirm box (Z/X while selecting: span levels)   RMB: cancel box");
+        sb.AppendLine("Tab/Shift+Tab: orders   B/Shift+B: build (room, then parts; R rotates, [ ] size)   LMB: start/confirm box or place   RMB: remove box");
+        sb.AppendLine("Z/X while selecting: span levels");
         sb.AppendLine("Z/X: level down/up   Space: pause   1/2/3: speed   Enter: (debug) complete all");
         sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists");
         // StringBuilder uses \r\n on Windows, which Label renders as an extra blank line.
         _hud.Text = sb.ToString().Replace("\r", "").TrimEnd();
+    }
+
+    /// <summary>Builder info panel for the room under the cursor.</summary>
+    private void AppendRoomPanel(StringBuilder sb, Colony.Core.Industry.Room room)
+    {
+        var recipe = room.Recipe;
+        int levels = room.Cells.Select(c => c.Z).Distinct().Count();
+        string In(Colony.Core.Items.ItemType t) => Colony.Core.Items.ItemInfo.Name(t).ToLowerInvariant();
+        sb.AppendLine($"[{room.Name}]  {room.Cells.Count} cells on {levels} level{(levels == 1 ? "" : "s")}    " +
+                      $"Status: {Colony.Core.Industry.Rooms.Status(room, _sim.Items)}");
+        var parts = room.Parts.OrderBy(p => p.Type).ThenByDescending(p => p.Size).GroupBy(p => p.Name)
+            .Select(g => $"{g.Count()} {g.Key.ToLowerInvariant()}");
+        int cost = room.Parts.Sum(p => Colony.Core.Industry.PartInfo.Cost(p.Type, p.Size));
+        sb.AppendLine($"   Parts: {(room.Parts.Count == 0 ? "none" : string.Join(", ", parts))}    Efficiency {room.Efficiency:P0}    " +
+                      $"Build value {cost} planks");
+        int input = Colony.Core.Industry.Rooms.Stock(room, Colony.Core.Industry.PartRole.Input, recipe.Input, _sim.Items);
+        int output = Colony.Core.Industry.Rooms.Stock(room, Colony.Core.Industry.PartRole.Output, recipe.Output, _sim.Items);
+        // Capacity with every machine manned (ignores fetching and storing walks).
+        double perMinute = 0;
+        int machines = 0;
+        foreach (var m in room.PartsWithRole(Colony.Core.Industry.PartRole.Machine))
+        {
+            var b = m.Batch;
+            perMinute += b.InCount * 60.0 * ColonySim.TicksPerSecond * room.Efficiency / b.WorkTicks;
+            machines++;
+        }
+        sb.AppendLine($"   Recipe: {recipe.InCount} {In(recipe.Input)} -> {recipe.OutCount} {In(recipe.Output)}" +
+                      (machines > 0 ? $", up to {perMinute:0} {In(recipe.Input)}/min with {machines} worker{(machines == 1 ? "" : "s")}" : "") +
+                      $"    Input: {input} {In(recipe.Input)}    Output: {output} {In(recipe.Output)}");
     }
 
     /// <summary>"Stock: Logs 40, Stone 12 (loose: Stone 30)": stored totals, then what still lies around.</summary>
@@ -242,6 +278,8 @@ public partial class Main : Node3D
             if (Arg("--dig-demo") != null) DigDemo();
             if (Arg("--stairs-demo") != null) StairsDemo();
             if (Arg("--haul-demo") != null) HaulDemo();
+            if (Arg("--factory-demo") != null) FactoryDemo();
+            if (Arg("--parts-demo") != null) PartsDemo();
             if (int.TryParse(Arg("--ticks"), out int ticks))
                 for (int i = 0; i < ticks; i++) _sim.Step();
             if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
@@ -290,7 +328,82 @@ public partial class Main : Node3D
         _sim.Designations.DesignateBox(new TilePos(cx - 6, cy - 4, z), new TilePos(cx + 6, cy + 4, z));
     }
 
-/// <summary>Fells the woods around the colony and zones a stockpile next to it.</summary>
+    /// <summary>
+    /// A whole chain next to the colony: fell the woods, stockpile the logs, a sawmill (two benches, a tool rack,
+    /// a lantern, input and output crates) and a stockpile for the planks.
+    /// </summary>
+    private void FactoryDemo()
+    {
+        HaulDemo();
+        var c = _sim.Colonists[0].Position;
+        int g = c.Z - 1; // ground under the colonists
+        var rooms = _sim.Rooms;
+        int cells = rooms.Paint(Colony.Core.Industry.RoomType.Sawmill, new TilePos(c.X + 2, c.Y - 3, g - 4), new TilePos(c.X + 8, c.Y + 2, g));
+        // The ground here is uneven, so put each part on the first floor cell (in a fixed order) where it fits,
+        // spreading them out by trying cells from different ends of the room.
+        var room = rooms.All.OrderByDescending(r => r.Cells.Count).First();
+        var floor = room.Cells.OrderBy(p => p.Y).ThenBy(p => p.X).ToList();
+        // Tries the asked size first, then smaller ones if nothing that big fits.
+        void Put(Colony.Core.Industry.PartType t, bool fromEnd, int size = 1)
+        {
+            var order = fromEnd ? Enumerable.Reverse(floor).ToList() : floor;
+            for (int s = size; s >= 1; s--)
+            foreach (var cell in order)
+                if (rooms.Place(t, cell, false, s) != null || rooms.Place(t, cell, true, s) != null) return;
+        }
+        Put(Colony.Core.Industry.PartType.InputCrate, false);
+        Put(Colony.Core.Industry.PartType.OutputCrate, true);
+        Put(Colony.Core.Industry.PartType.Sawbench, false, size: 4);
+        Put(Colony.Core.Industry.PartType.Sawbench, true, size: 2);
+        Put(Colony.Core.Industry.PartType.Sawbench, true);
+        Put(Colony.Core.Industry.PartType.ToolRack, false, size: 3);
+        Put(Colony.Core.Industry.PartType.ToolRack, true);
+        Put(Colony.Core.Industry.PartType.Lantern, true);
+        int planks = _sim.Stockpiles.AddFloorBox(new TilePos(c.X + 2, c.Y + 5, g - 6), new TilePos(c.X + 6, c.Y + 7, g));
+        GD.Print($"Factory demo: sawmill of {cells} cells with {rooms.All.Sum(r => r.Parts.Count)} parts, plank stockpile {planks} cells");
+        _stairsDemoAt = new TilePos(c.X + 5, c.Y, c.Z);
+    }
+
+    /// <summary>
+    /// A showroom next to the colony: levels a pad (dev only: edits tiles directly), paints a sawmill on it and
+    /// lays out every size of saw (back row) and tools (front row), with crates and a lantern.
+    /// </summary>
+    private void PartsDemo()
+    {
+        var c = _sim.Colonists[0].Position;
+        int g = c.Z - 1, x0 = c.X + 10, y0 = c.Y - 6, x1 = x0 + 25, y1 = y0 + 12;
+        for (int y = y0 - 8; y <= y1 + 8; y++)
+        for (int px = x0 - 8; px <= x1 + 8; px++)
+        {
+            for (int z = g - 3; z <= g; z++) _sim.World.Set(px, y, z, z == g ? TileType.Grass : TileType.Soil);
+            for (int z = g + 1; z <= g + 16; z++)
+            {
+                _sim.World.Set(px, y, z, TileType.Air);
+                _sim.Flora.Remove(new TilePos(px, y, z), out _);
+            }
+        }
+        var rooms = _sim.Rooms;
+        rooms.Paint(Colony.Core.Industry.RoomType.Sawmill, new TilePos(x0, y0, g), new TilePos(x1, y1, g));
+        int f = g + 1, x = x0 + 1;
+        for (int s = 1; s <= 5; s++)
+        {
+            rooms.Place(Colony.Core.Industry.PartType.Sawbench, new TilePos(x, y0 + 1, f), false, s);
+            x += Colony.Core.Industry.PartInfo.Footprint(Colony.Core.Industry.PartType.Sawbench, s).W + 1;
+        }
+        x = x0 + 1;
+        for (int s = 1; s <= 5; s++)
+        {
+            rooms.Place(Colony.Core.Industry.PartType.ToolRack, new TilePos(x, y0 + 7, f), false, s);
+            x += Colony.Core.Industry.PartInfo.Footprint(Colony.Core.Industry.PartType.ToolRack, s).W + 1;
+        }
+        rooms.Place(Colony.Core.Industry.PartType.InputCrate, new TilePos(x0, y1, f), false);
+        rooms.Place(Colony.Core.Industry.PartType.OutputCrate, new TilePos(x1, y1, f), false);
+        rooms.Place(Colony.Core.Industry.PartType.Lantern, new TilePos(x1, y0 + 7, f), false);
+        _rig.Focus(SimSpace.TileCenter(new TilePos((x0 + x1) / 2, (y0 + y1) / 2, f)), 17f, yaw: 200f, pitch: -58f);
+        GD.Print($"Parts demo: {rooms.All.Sum(r => r.Parts.Count)} parts, efficiency {rooms.All[0].Efficiency:P0}");
+    }
+
+    /// <summary>Fells the woods around the colony and zones a stockpile next to it.</summary>
     private void HaulDemo()
     {
         var c = _sim.Colonists[0].Position;

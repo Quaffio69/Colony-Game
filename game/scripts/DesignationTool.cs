@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using Colony.Core;
+using Colony.Core.Industry;
 using Colony.Core.Orders;
 using Colony.Core.World;
 using Godot;
@@ -8,21 +9,31 @@ using Godot;
 namespace ColonyGame;
 
 /// <summary>
-/// Mouse picking and DF-style box designations. Hover highlights the tile under the cursor (respecting the view
-/// slice). Click once to anchor a corner, move the mouse (and Z/X to extend the box across levels; the view
-/// follows the selection's level), click again to apply. Right-click starts a cancel box, or aborts a pending
-/// selection; Esc aborts too. Tab / Shift+Tab cycle the tool:
+/// Mouse picking, DF-style box orders, and the factory builder.
+/// <para>
+/// Box tools: click once to anchor a corner, move the mouse (Z/X extend the box across levels; the view
+/// follows), click again to apply. Right-click starts a removal box (or aborts a pending one); Esc aborts.
+/// </para>
 /// <list type="bullet">
-/// <item>Dig: mine out every tile in the box.</item>
-/// <item>Stairs: a connected staircase: down stairs on the top level, up/down between, up stairs at the bottom.</item>
-/// <item>Up / Down / Up-Down stair: carve exactly that stair type into every tile in the box.</item>
-/// <item>Chop trees: fell every tree standing on the box.</item>
-/// <item>Stockpile: zone the floor on top of the box for storage (haulers bring loose items there).</item>
+/// <item>Orders (Tab / Shift+Tab): dig, stairs (auto / up / down / up-down), chop trees, stockpile zones.
+/// Removal boxes cancel designations and stockpile cells.</item>
+/// <item>Build (B / Shift+B): paint a room (box over the floor, any number of levels; it must stay one
+/// walkable piece, which the core enforces), then place parts: machines, auxiliaries, input and output
+/// crates. Parts are placed with a single click on the floor; R rotates; a ghost shows the footprint in green
+/// or red with the reason. Removal boxes erase room cells (room tool) or remove parts (part tools).</item>
 /// </list>
 /// </summary>
 public partial class DesignationTool : Node3D
 {
-    public enum ToolMode { Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Stockpile }
+    public enum ToolMode
+    {
+        // Orders
+        Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Stockpile,
+        // Build
+        SawmillRoom, Sawbench, ToolRack, Lantern, InputCrate, OutputCrate,
+    }
+
+    private const ToolMode LastOrder = ToolMode.Stockpile;
     private enum Selection { None, Designate, Cancel }
 
     private ColonySim _sim = null!;
@@ -30,18 +41,52 @@ public partial class DesignationTool : Node3D
 
     private MeshInstance3D _cursor = null!;
     private MeshInstance3D _box = null!;
+    private MeshInstance3D _ghost = null!;
     private readonly Dictionary<ToolMode, StandardMaterial3D> _modeMats = new();
-    private StandardMaterial3D _cancelMat = null!;
+    private StandardMaterial3D _cancelMat = null!, _ghostOk = null!, _ghostBad = null!;
 
     private Selection _selection;
     private TilePos _anchor;
     private int _cornerZ, _cornerX, _cornerY;
+    private bool _rotated;
+    private readonly Dictionary<PartType, int> _sizes = new();
+
+    // Chop areas are picked in 2D and drawn draped over the surface, whatever level is in view.
+    private MultiMeshInstance3D _drape = null!;
+    private StandardMaterial3D _drapeMat = null!, _drapeCancelMat = null!;
+    private readonly Dictionary<(int X, int Y), int> _surface = new();
+    private (int X0, int Y0, int X1, int Y1) _drapeRect = (-1, -1, -1, -1);
+    private const int MaxDrapeColumns = 160_000; // beyond this only the outline is drawn
+
+    /// <summary>Selected size (1..<see cref="PartInfo.Sizes"/>) for a part family; [ and ] change it.</summary>
+    public int SizeFor(PartType part) => PartInfo.ClampSize(part, _sizes.GetValueOrDefault(part, 1));
+    private static bool IsAreaTool(ToolMode m) => m == ToolMode.Chop;
 
     public ToolMode Mode { get; private set; } = ToolMode.Dig;
     public TilePos? Hovered { get; private set; }
     public string? LastAction { get; private set; }
+    /// <summary>Why the part under the cursor can't be placed (null if it can, or not placing).</summary>
+    public string? PlacementProblem { get; private set; }
 
-    public static string ModeName(ToolMode m) => m switch
+    public static bool IsBuild(ToolMode m) => m > LastOrder;
+    public static PartType? PartFor(ToolMode m) => m switch
+    {
+        ToolMode.Sawbench => PartType.Sawbench,
+        ToolMode.ToolRack => PartType.ToolRack,
+        ToolMode.Lantern => PartType.Lantern,
+        ToolMode.InputCrate => PartType.InputCrate,
+        ToolMode.OutputCrate => PartType.OutputCrate,
+        _ => null,
+    };
+
+    public string ModeName(ToolMode m)
+    {
+        if (PartFor(m) is { } part && PartInfo.Sizes(part) > 1)
+            return $"Build: {PartInfo.Name(part, SizeFor(part))} (size {SizeFor(part)}/{PartInfo.Sizes(part)}, [ ] to change)";
+        return BaseModeName(m);
+    }
+
+    private static string BaseModeName(ToolMode m) => m switch
     {
         ToolMode.Dig => "Dig",
         ToolMode.Stairs => "Stairs (auto)",
@@ -49,22 +94,60 @@ public partial class DesignationTool : Node3D
         ToolMode.DownStair => "Down stair",
         ToolMode.UpDownStair => "Up/Down stair",
         ToolMode.Chop => "Chop trees",
-        _ => "Stockpile",
+        ToolMode.Stockpile => "Stockpile",
+        ToolMode.SawmillRoom => "Build: Sawmill room",
+        _ => $"Build: {PartInfo.Name(PartFor(m)!.Value)}",
     };
 
-    /// <summary>Describes the pending selection for the HUD, or null when none.</summary>
+    /// <summary>One HUD line about the current tool (selection in progress, or placement preview).</summary>
     public string? SelectionInfo
     {
         get
         {
-            if (_selection == Selection.None) return null;
-            var (a, b) = Corners();
-            int w = Math.Abs(a.X - b.X) + 1, d = Math.Abs(a.Y - b.Y) + 1, h = Math.Abs(a.Z - b.Z) + 1;
-            string what = _selection == Selection.Cancel ? "Cancel" : ModeName(Mode);
-            string levels = h > 1 ? $"levels {Math.Min(a.Z, b.Z)}..{Math.Max(a.Z, b.Z)}" : $"level {a.Z}";
-            return $"{what}: {w}x{d}x{h} ({levels})   click to confirm, Z/X: change level, Esc/RMB: abort";
+            if (_selection != Selection.None)
+            {
+                var (a, b) = Corners();
+                int w = Math.Abs(a.X - b.X) + 1, d = Math.Abs(a.Y - b.Y) + 1, h = Math.Abs(a.Z - b.Z) + 1;
+                string what = _selection == Selection.Cancel ? RemovalName() : ModeName(Mode);
+                if (IsAreaTool(Mode))
+                    return $"{what}: {w}x{d} area on the surface   click to confirm, Esc/RMB: abort";
+                string levels = h > 1 ? $"levels {Math.Min(a.Z, b.Z)}..{Math.Max(a.Z, b.Z)}" : $"level {a.Z}";
+                return $"{what}: {w}x{d}x{h} ({levels})   click to confirm, Z/X: change level, Esc/RMB: abort";
+            }
+            if (PartFor(Mode) is { } part)
+            {
+                int size = SizeFor(part);
+                var (fw, fd) = PartInfo.Footprint(part, size);
+                if (_rotated) (fw, fd) = (fd, fw);
+                int tiles = fw * fd, cost = PartInfo.Cost(part, size);
+                string role = PartInfo.Role(part) switch
+                {
+                    PartRole.Machine => MachineInfo(part, size),
+                    PartRole.Auxiliary =>
+                        $"+{PartInfo.Bonus(part, size):P0} for up to {PartInfo.Coverage(part, size)} machine tiles " +
+                        $"({PartInfo.Coverage(part, size) / (float)tiles:0.#} per own tile)",
+                    PartRole.Input => "holds the room's input",
+                    _ => "holds the room's products",
+                };
+                return $"{PartInfo.Name(part, size)} {fw}x{fd}: {role}   cost {cost} planks ({cost / (float)tiles:0.#}/tile, free for now)   " +
+                       "R: rotate   " + (PlacementProblem is { } p ? $"can't place: {p}" : "click to place");
+            }
+            return null;
         }
     }
+
+    /// <summary>"4 logs -> 16 planks per batch, 0.6 s labour per log" for the sawmill recipe.</summary>
+    private static string MachineInfo(PartType part, int size)
+    {
+        var unit = RoomInfo.Recipe(RoomType.Sawmill);
+        var batch = PartInfo.MachineRecipe(part, size, unit);
+        string In(Colony.Core.Items.ItemType t) => Colony.Core.Items.ItemInfo.Name(t).ToLowerInvariant();
+        double labour = batch.WorkTicks / (double)batch.InCount / ColonySim.TicksPerSecond;
+        return $"{batch.InCount} {In(batch.Input)} -> {batch.OutCount} {In(batch.Output)} per batch, " +
+               $"{labour:0.00} s labour per {In(batch.Input).TrimEnd('s')}";
+    }
+
+    private string RemovalName() => Mode == ToolMode.SawmillRoom ? "Erase room" : PartFor(Mode) is not null ? "Remove parts" : "Cancel";
 
     public void Initialize(ColonySim sim, WorldView view)
     {
@@ -80,10 +163,13 @@ public partial class DesignationTool : Node3D
         AddChild(_cursor);
 
         foreach (var mode in Enum.GetValues<ToolMode>())
-            _modeMats[mode] = Overlay.Material(mode == ToolMode.Stockpile
-                ? ItemView.StockpileColor with { A = 0.3f }
+            _modeMats[mode] = Overlay.Material(
+                mode == ToolMode.Stockpile ? ItemView.StockpileColor with { A = 0.3f }
+                : IsBuild(mode) ? RoomView.RoomColor(RoomType.Sawmill) with { A = 0.3f }
                 : WorldView.DesignationColor(KindFor(mode, 0, 0, 0)) with { A = 0.3f });
         _cancelMat = Overlay.Material(new Color(1f, 0.25f, 0.2f, 0.3f));
+        _ghostOk = Overlay.Material(new Color(0.3f, 1f, 0.4f, 0.4f));
+        _ghostBad = Overlay.Material(new Color(1f, 0.3f, 0.25f, 0.4f));
         _box = new MeshInstance3D
         {
             Mesh = new BoxMesh { Size = Vector3.One },
@@ -91,6 +177,46 @@ public partial class DesignationTool : Node3D
             Visible = false,
         };
         AddChild(_box);
+        _ghost = new MeshInstance3D
+        {
+            Mesh = new BoxMesh { Size = Vector3.One },
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Visible = false,
+        };
+        AddChild(_ghost);
+
+        _drapeMat = Overlay.Material(WorldView.DesignationColor(DesignationKind.Chop) with { A = 0.35f });
+        _drapeCancelMat = Overlay.Material(new Color(1f, 0.25f, 0.2f, 0.35f));
+        _drape = new MultiMeshInstance3D
+        {
+            Multimesh = new MultiMesh
+            {
+                TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+                Mesh = new PlaneMesh { Size = Vector2.One },
+            },
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Visible = false,
+        };
+        AddChild(_drape);
+    }
+
+    /// <summary>Top of the ground in a column (the highest solid tile), cached for the current selection.</summary>
+    private int SurfaceAt(int x, int y)
+    {
+        if (_surface.TryGetValue((x, y), out int z)) return z;
+        var world = _sim.World;
+        // Start just above the generated surface (digging only lowers it); fall back to a full scan if solid there.
+        int start = world.Height - 1;
+        if (_sim.Terrain is { } t)
+        {
+            int hint = Math.Min(world.Height - 1, t.SurfaceAt(x, y) + 8);
+            if (!world.IsSolid(x, y, hint)) start = hint;
+        }
+        z = -1;
+        for (int k = start; k >= 0; k--)
+            if (world.IsSolid(x, y, k)) { z = k; break; }
+        _surface[(x, y)] = z;
+        return z;
     }
 
     /// <summary>Designation kind a mode places on level z of a box spanning bottom..top (Stairs mode varies by level).</summary>
@@ -118,13 +244,19 @@ public partial class DesignationTool : Node3D
 
         var hit = VoxelRaycast.Cast(_sim.World, origin, dir, 5000f, _view.ViewLevel);
         Hovered = hit?.Tile;
-        _cursor.Visible = Hovered.HasValue && _selection == Selection.None;
-        if (Hovered is { } h) _cursor.Position = SimSpace.TileCenter(h);
+        bool placing = PartFor(Mode) is not null && _selection == Selection.None;
+        _cursor.Visible = Hovered.HasValue && _selection == Selection.None && !placing;
+        if (Hovered is { } h)
+            _cursor.Position = SimSpace.TileCenter(IsAreaTool(Mode) && SurfaceAt(h.X, h.Y) is >= 0 and var s ? h with { Z = s } : h);
+        UpdateGhost(placing);
 
         if (_selection != Selection.None)
         {
-            // The free corner slides on the top plane of its level, so it tracks the mouse over open air too.
-            if (VoxelRaycast.IntersectLevelPlane(origin, dir, _cornerZ + 1) is { } pt)
+            // Area tools follow the picked column; box tools slide the free corner on the top plane of its
+            // level, so it tracks the mouse over open air too.
+            if (IsAreaTool(Mode) && Hovered is { } col)
+                (_cornerX, _cornerY) = (col.X, col.Y);
+            else if (VoxelRaycast.IntersectLevelPlane(origin, dir, _cornerZ + 1) is { } pt)
             {
                 _cornerX = Math.Clamp((int)MathF.Floor(pt.X), 0, _sim.World.Width - 1);
                 _cornerY = Math.Clamp((int)MathF.Floor(pt.Y), 0, _sim.World.Depth - 1);
@@ -150,11 +282,19 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
+            // Parts go down with a single click (no box).
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when PartFor(Mode) is { } part:
+                if (Hovered is { } at) PlacePart(part, at.Offset(0, 0, 1));
+                Handled();
+                break;
+
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left or MouseButton.Right } mb
                 when Hovered is { } start:
                 _selection = mb.ButtonIndex == MouseButton.Left ? Selection.Designate : Selection.Cancel;
                 _anchor = start;
                 (_cornerX, _cornerY, _cornerZ) = (start.X, start.Y, start.Z);
+                _surface.Clear(); // the ground may have changed since the last selection
+                _drapeRect = (-1, -1, -1, -1);
                 UpdateBox();
                 Handled();
                 break;
@@ -166,7 +306,7 @@ public partial class DesignationTool : Node3D
 
             // While selecting, Z/X move the free corner between levels and the view follows it (DF-style cursor).
             case InputEventKey { Pressed: true, Keycode: Key.Z or Key.X or Key.Pagedown or Key.Pageup } k
-                when _selection != Selection.None:
+                when _selection != Selection.None && !IsAreaTool(Mode):
                 int step = k.Keycode is Key.X or Key.Pageup ? 1 : -1;
                 _cornerZ = Math.Clamp(_cornerZ + step, 1, _sim.World.Height - 1);
                 _view.ViewLevel = _cornerZ;
@@ -174,8 +314,25 @@ public partial class DesignationTool : Node3D
                 break;
 
             case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Tab } tab:
-                int n = Enum.GetValues<ToolMode>().Length;
-                Mode = (ToolMode)(((int)Mode + (tab.ShiftPressed ? n - 1 : 1)) % n);
+                Mode = Cycle(Mode, ToolMode.Dig, LastOrder, tab.ShiftPressed);
+                EndSelection();
+                Handled();
+                break;
+
+            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.B } b:
+                Mode = Cycle(Mode, ToolMode.SawmillRoom, ToolMode.OutputCrate, b.ShiftPressed);
+                EndSelection();
+                Handled();
+                break;
+
+            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.R } when PartFor(Mode) is not null:
+                _rotated = !_rotated;
+                Handled();
+                break;
+
+            case InputEventKey { Pressed: true, Keycode: Key.Bracketleft or Key.Bracketright } sk
+                when PartFor(Mode) is { } sized && PartInfo.Sizes(sized) > 1:
+                _sizes[sized] = PartInfo.ClampSize(sized, SizeFor(sized) + (sk.Keycode == Key.Bracketright ? 1 : -1));
                 Handled();
                 break;
 
@@ -185,9 +342,27 @@ public partial class DesignationTool : Node3D
         }
     }
 
+    /// <summary>Next mode within [first, last]; entering the group from outside starts at its first mode.</summary>
+    private static ToolMode Cycle(ToolMode current, ToolMode first, ToolMode last, bool back)
+    {
+        if (current < first || current > last) return first;
+        int n = last - first + 1, i = current - first;
+        return first + (i + (back ? n - 1 : 1)) % n;
+    }
+
     private void Handled() => GetViewport().SetInputAsHandled();
 
     private (TilePos A, TilePos B) Corners() => (_anchor, new TilePos(_cornerX, _cornerY, _cornerZ));
+
+    private void PlacePart(PartType part, TilePos cell)
+    {
+        int size = SizeFor(part);
+        string name = PartInfo.Name(part, size).ToLowerInvariant();
+        var placed = _sim.Rooms.Place(part, cell, _rotated, size);
+        LastAction = placed is not null
+            ? $"Placed a {name} in {placed.Room.Name}"
+            : $"Can't place {name}: {_sim.Rooms.CanPlace(part, cell, _rotated, size)}";
+    }
 
     private void Apply()
     {
@@ -195,22 +370,36 @@ public partial class DesignationTool : Node3D
         var (a, b) = Corners();
         if (_selection == Selection.Cancel)
         {
-            // Box corners are ground tiles: also clear tree/stockpile cells standing on them.
-            int orders = d.CancelBox(a with { Z = Math.Min(a.Z, b.Z) }, b with { Z = Math.Max(a.Z, b.Z) + 1 });
-            int zones = _sim.Stockpiles.RemoveBox(a, b);
-            LastAction = $"Cancelled {orders} designations, removed {zones} stockpile cells";
+            if (Mode == ToolMode.SawmillRoom)
+                LastAction = $"Erased {_sim.Rooms.Erase(a, b)} room cells";
+            else if (PartFor(Mode) is not null)
+                LastAction = $"Removed {_sim.Rooms.RemovePartsIn(a, b)} parts";
+            else if (IsAreaTool(Mode))
+                LastAction = $"Cancelled {d.CancelChopArea(a.X, a.Y, b.X, b.Y)} chop orders";
+            else
+            {
+                // Box corners are ground tiles: also clear tree/stockpile cells standing on them.
+                int orders = d.CancelBox(a with { Z = Math.Min(a.Z, b.Z) }, b with { Z = Math.Max(a.Z, b.Z) + 1 });
+                int zones = _sim.Stockpiles.RemoveBox(a, b);
+                LastAction = $"Cancelled {orders} designations, removed {zones} stockpile cells";
+            }
+        }
+        else if (Mode == ToolMode.SawmillRoom)
+        {
+            int n = _sim.Rooms.Paint(RoomType.Sawmill, a, b);
+            LastAction = n > 0 ? $"Sawmill: painted {n} floor cells" : "Sawmill: no free floor in that box";
         }
         else
         {
             int n = Mode switch
             {
                 ToolMode.Stairs => d.DesignateStairs(a, b),
-                // Corners are picked on the ground; trees stand in the cell above it.
-                ToolMode.Chop => d.DesignateBox(a.Offset(0, 0, 1), b.Offset(0, 0, 1), DesignationKind.Chop),
+                // Felling is always on the surface: every tree in the area's columns, whatever the level.
+                ToolMode.Chop => d.DesignateChopArea(a.X, a.Y, b.X, b.Y),
                 ToolMode.Stockpile => _sim.Stockpiles.AddFloorBox(a, b),
                 _ => d.DesignateBox(a, b, KindFor(Mode, 0, 0, 0)),
             };
-            LastAction = $"{ModeName(Mode)}: designated {n} tiles";
+            LastAction = Mode == ToolMode.Chop ? $"Chop trees: marked {n} trees" : $"{ModeName(Mode)}: designated {n} tiles";
         }
         EndSelection();
     }
@@ -219,6 +408,7 @@ public partial class DesignationTool : Node3D
     {
         _selection = Selection.None;
         _box.Visible = false;
+        _drape.Visible = false;
     }
 
     /// <summary>Debug shortcut: instantly completes every designation.</summary>
@@ -232,8 +422,33 @@ public partial class DesignationTool : Node3D
         LastAction = $"Debug: completed {all.Count} designations";
     }
 
+    private void UpdateGhost(bool placing)
+    {
+        PlacementProblem = null;
+        if (!placing || Hovered is not { } h || PartFor(Mode) is not { } part)
+        {
+            _ghost.Visible = false;
+            return;
+        }
+        var origin = h.Offset(0, 0, 1);
+        int partSize = SizeFor(part);
+        PlacementProblem = _sim.Rooms.CanPlace(part, origin, _rotated, partSize);
+        var cells = Rooms.Footprint(part, origin, _rotated, partSize);
+        var last = cells[^1];
+        var size = new Vector3(last.X - origin.X + 1, 0.7f, last.Y - origin.Y + 1);
+        _ghost.Position = new Vector3(origin.X + size.X / 2f, origin.Z + size.Y / 2f, origin.Y + size.Z / 2f);
+        _ghost.Scale = size;
+        _ghost.MaterialOverride = PlacementProblem is null ? _ghostOk : _ghostBad;
+        _ghost.Visible = true;
+    }
+
     private void UpdateBox()
     {
+        if (IsAreaTool(Mode))
+        {
+            UpdateDrape();
+            return;
+        }
         var (a, b) = Corners();
         int x0 = Math.Min(a.X, b.X), x1 = Math.Max(a.X, b.X) + 1;
         int y0 = Math.Min(a.Y, b.Y), y1 = Math.Max(a.Y, b.Y) + 1;
@@ -245,5 +460,34 @@ public partial class DesignationTool : Node3D
         _box.Scale = size + Vector3.One * pad;
         _box.MaterialOverride = _selection == Selection.Cancel ? _cancelMat : _modeMats[Mode];
         _box.Visible = true;
+    }
+
+    /// <summary>The selected area as one plate per column on top of the ground (only rebuilt when the area changes).</summary>
+    private void UpdateDrape()
+    {
+        var (a, b) = Corners();
+        var rect = (Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y));
+        _drape.MaterialOverride = _selection == Selection.Cancel ? _drapeCancelMat : _drapeMat;
+        _drape.Visible = true;
+        if (rect == _drapeRect) return;
+        _drapeRect = rect;
+
+        var (x0, y0, x1, y1) = rect;
+        bool outlineOnly = (long)(x1 - x0 + 1) * (y1 - y0 + 1) > MaxDrapeColumns;
+        var columns = new List<(int X, int Y, int Z)>();
+        for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++)
+        {
+            if (outlineOnly && x != x0 && x != x1 && y != y0 && y != y1) continue;
+            int z = SurfaceAt(x, y);
+            if (z >= 0) columns.Add((x, y, z));
+        }
+        var mm = _drape.Multimesh;
+        mm.InstanceCount = columns.Count;
+        for (int i = 0; i < columns.Count; i++)
+        {
+            var (x, y, z) = columns[i];
+            mm.SetInstanceTransform(i, new Transform3D(Basis.Identity, new Vector3(x + 0.5f, z + 1.04f, y + 0.5f)));
+        }
     }
 }

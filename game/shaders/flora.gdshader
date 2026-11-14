@@ -10,13 +10,15 @@ uniform vec3 albedo : source_color = vec3(0.3, 0.6, 0.25);
 uniform float tint_mix = 0.35;
 uniform float roughness = 0.9;
 uniform float cut_height = 100000.0;
+// False for plain (non-MultiMesh) meshes, which have no per-instance data: no tint.
+uniform bool instanced = true;
 
 varying vec3 v_world;
 varying vec3 v_tint;
 
 void vertex() {
 	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	v_tint = INSTANCE_CUSTOM.rgb;
+	v_tint = instanced ? INSTANCE_CUSTOM.rgb : vec3(1.0);
 }
 
 void fragment() {

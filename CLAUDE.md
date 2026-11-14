@@ -92,6 +92,23 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   cave-ins). `Stockpiles` are zoned floor cells (all types for now); `Hauling.Plans` pairs the nearest loose
   piles with the nearest stockpile cell with room (linear scans; spatial index is the scale-up path).
   Colonists with `Id % 3 == 2` prefer hauling until job priorities exist.
+- **Factory builder (`Industry`):** a `Room` is a typed set of walkable floor cells that is always
+  contiguous under the movement rules (so it may span levels joined by stairs/steps). `Rooms.Paint` takes
+  every walkable cell in a click-click box (all its levels), merges into touching same-type rooms and splits
+  disconnected pieces; `Erase`/lost floor (`ValidateCell`, wired into digs and cave-ins) re-split, and parts
+  follow their piece or are removed if cut. Rooms and stockpiles never overlap. Parts (`PartInfo`) have
+  footprints + rotation and a role: Machine (worker processes the room's `Recipe` in batches), Auxiliary
+  (covers N machine tiles with a bonus; per family the best are assigned first, so efficiency scales with the
+  room, not raw count, and lesser extras never hurt), Input crate (haulers fill it with
+  the recipe input from loose piles, stockpiles or other factories' output crates; this is the factory
+  link point, conveyors plug in here later), Output crate (haulers empty it). Workers loop: reserve batch at
+  input crate + space at output crate + claim machine (biggest free machine first), fetch, work
+  `WorkTicks / Efficiency`, store; a partial batch is allowed when the crate isn't being refilled, so
+  remainders never strand. **Part sizes (1-5)** are the core trade-off: bigger machines cost more per tile
+  but need less labour per unit (batch x time); bigger tools cost exponentially more but give more bonus and
+  coverage per tile. Costs (planks) are data + shown in the builder; building is free until construction
+  jobs exist. Internals are deliberately not an optimisation puzzle. Parts don't block movement.
+  Labor preference rotates by colonist id (designations / industry / hauling first) until job priorities.
 - **Movement:** agents are 1 tile tall and occupy an open cell; standable = solid floor below, or the cell is
   itself a stair. Walk 8-way (no corner cutting); climb/drop exactly one level onto an orthogonal neighbour
   through plain air above the lower end (raw climbs slow, cheap if either end is a stair cell). Legality
@@ -104,6 +121,8 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - **Designations (DF-style UI):** click to anchor a corner, click again to apply; Z/X while selecting move
   the free corner between levels and the view follows. Tools (Tab/Shift+Tab): Dig, Stairs (auto: down on
   top, up/down between, up at bottom), Up, Down, Up/Down. Right-click starts a cancel box or aborts.
+  Exception: Chop is a 2D area draped on the surface (`DesignateChopArea`, any level, ignores the view
+  level), since felling always happens on the surface; chop marks are drawn whatever level is viewed.
 - **Cave-ins (DF-style):** a solid tile is supported if face-adjacent solid tiles connect it to z=0. After a
   dig (`ColonySim.CompleteDesignation` -> `World.CaveIns`), each unsupported neighbouring mass falls as one
   rigid piece until it lands; designations on it are cancelled; colonists ride it down or pop out on top.
@@ -155,8 +174,14 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - [x] M4a: items as counted piles, mining/chop yields, `Chop` area designation, stockpile zones, hauling
       with reservations; HUD stock totals; `ItemView` draws piles/zones, colonists show carried loads.
       Dev flag `--haul-demo` (fells the woods around the colony and zones a stockpile).
-- [ ] M4b: stockpile filters/priorities, job priorities (replace the Id%3 hauler rule), gathering
-      (berries, reeds), then the factory builder: player-sized production rooms consuming stock.
+- [x] M4b: factory builder v1: Sawmill room (logs -> planks), Sawbench machine, Tool rack/Lantern
+      auxiliaries, input/output crates, demand-driven hauling between stockpiles and factories, builder UI
+      (B cycles build tools, R rotates, ghost with reasons, room info panel on hover), `RoomView`.
+      Dev flags `--factory-demo` (fell woods, log stockpile, equipped sawmill, plank stockpile) and
+      `--parts-demo` (levelled showroom with every saw and tool size). Parts come in 5 sizes ([ ] in the builder).
+- [ ] Next for industry: more room types/recipes chained off planks (carpenter -> furniture) and stone
+      (mason) and ore (smelter); conveyors between output and input crates; building costs + construction
+      jobs; job priorities; per-room worker assignment; stockpile filters when needed.
 - [ ] Next for flora: growth and spreading/regrowth (staggered, deterministic), farming plots as a
       factory-style input.
 - [ ] Geology: rock strata by depth (several stone types, layered/warped), so deep digging varies;

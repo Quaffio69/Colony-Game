@@ -20,9 +20,12 @@ public sealed class Stockpiles
     public IReadOnlyCollection<TilePos> Cells => _cells;
     public bool Contains(TilePos p) => _cells.Contains(p);
 
+    /// <summary>Cells stockpiles may not claim (e.g. factory rooms). Set by <see cref="ColonySim"/>.</summary>
+    public Func<TilePos, bool>? IsBlocked { get; set; }
+
     public bool Add(TilePos cell)
     {
-        if (!Movement.IsStandable(_world, cell) || !_cells.Add(cell)) return false;
+        if (!Movement.IsStandable(_world, cell) || IsBlocked?.Invoke(cell) == true || !_cells.Add(cell)) return false;
         Version++;
         return true;
     }

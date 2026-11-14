@@ -1,4 +1,5 @@
-using Colony.Core.Agents;
+﻿using Colony.Core.Agents;
+using Colony.Core.Industry;
 using Colony.Core.Items;
 using Colony.Core.Nature;
 using Colony.Core.Navigation;
@@ -62,6 +63,11 @@ public sealed class ColonySim
     /// <summary>Item piles lying in the world (stored or loose).</summary>
     public ItemPiles Items { get; }
     public Stockpiles Stockpiles { get; }
+    /// <summary>Products made by factories so far (stats).</summary>
+    public long ItemsProduced { get; internal set; }
+
+    /// <summary>Factory rooms and their parts.</summary>
+    public Rooms Rooms { get; }
 
     /// <summary>Share of dug stone tiles that leave a usable stone (the rest is rubble).</summary>
     public const float StoneYield = 0.5f;
@@ -74,6 +80,10 @@ public sealed class ColonySim
         Flora = new Flora(world);
         Items = new ItemPiles(world);
         Stockpiles = new Stockpiles(world);
+        Rooms = new Rooms(world);
+        // A floor cell is either storage or factory, never both.
+        Stockpiles.IsBlocked = c => Rooms.RoomAt(c) is not null;
+        Rooms.IsBlocked = Stockpiles.Contains;
         _caveIns = new CaveIns(world);
     }
 
@@ -100,6 +110,8 @@ public sealed class ColonySim
         var above = p.Offset(0, 0, 1);
         if (Flora.Validate(above)) CancelChop(above);
         Items.Resettle(above);
+        Rooms.ValidateCell(above); // a room floor dug out (or carved into stairs)
+        Rooms.ValidateCell(p);
 
         if (kind == DesignationKind.Dig) CheckSupport(p);
         return true;
@@ -156,6 +168,8 @@ public sealed class ColonySim
         {
             Items.Resettle(q);
             Items.Resettle(q.Offset(0, 0, caveIn.Drop + 1));
+            Rooms.ValidateCell(q); // buried under the fallen rock
+            Rooms.ValidateCell(q.Offset(0, 0, caveIn.Drop + 1)); // its floor fell away
         }
 
         CaveInCount++;

@@ -452,8 +452,8 @@ public partial class WorldView : Node3D
         {
             var visible = new List<TilePos>();
             foreach (var (p, k) in _sim.Designations.All)
-                // Chop marks a tree's (open) cell, which stands on the cut surface like a colonist.
-                if (k == kind && p.Z <= _viewLevel + (k == DesignationKind.Chop ? 1 : 0)) visible.Add(p);
+                // Chop marks always show: felling happens on the surface whatever level is in view.
+                if (k == kind && (k == DesignationKind.Chop || p.Z <= _viewLevel)) visible.Add(p);
 
             var mm = marks.Multimesh;
             mm.InstanceCount = visible.Count;

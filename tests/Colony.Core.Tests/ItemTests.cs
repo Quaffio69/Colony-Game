@@ -47,6 +47,29 @@ public class ItemTests
     }
 
     [Fact]
+    public void ChopArea_MarksTreesInItsColumns_AtAnyLevel()
+    {
+        var sim = Meadow();
+        // Raise a hill so trees stand at different levels.
+        for (int y = 0; y < 6; y++)
+        for (int x = 0; x < 6; x++)
+        {
+            sim.World.Set(x, y, 4, TileType.Soil);
+            sim.World.Set(x, y, 5, TileType.Grass);
+        }
+        Assert.True(sim.Flora.Add(new Nature.Plant(new TilePos(2, 2, 6), Nature.PlantKind.Oak, 200, 0)));
+        Assert.True(sim.Flora.Add(new Nature.Plant(new TilePos(8, 8, 4), Nature.PlantKind.Pine, 200, 0)));
+        Assert.True(sim.Flora.Add(new Nature.Plant(new TilePos(9, 9, 4), Nature.PlantKind.Fern, 200, 0)));
+        Assert.True(sim.Flora.Add(new Nature.Plant(new TilePos(20, 20, 4), Nature.PlantKind.Birch, 200, 0)));
+
+        Assert.Equal(2, sim.Designations.DesignateChopArea(10, 10, 0, 0)); // corners in any order; the fern isn't a tree
+        Assert.True(sim.Designations.Contains(new TilePos(2, 2, 6)));
+        Assert.True(sim.Designations.Contains(new TilePos(8, 8, 4)));
+        Assert.Equal(1, sim.Designations.CancelChopArea(0, 0, 3, 3));
+        Assert.False(sim.Designations.Contains(new TilePos(2, 2, 6)));
+    }
+
+    [Fact]
     public void ChopBox_OnlyDesignatesTrees_AndFellingLeavesLogs()
     {
         var sim = Meadow();
