@@ -72,12 +72,13 @@ public class WorldGeneratorTests
             for (int y = 0; y < Chunk.Size; y++)
             for (int x = 0; x < Chunk.Size; x++)
             {
-                if (c.Get(x, y, z) != TileType.Ore) continue;
+                var m = c.Get(x, y, z);
+                if (!TileInfo.IsMineral(m)) continue;
                 ore++;
                 int wx = o.X + x, wy = o.Y + y, wz = o.Z + z;
-                if (w.Get(wx + 1, wy, wz) == TileType.Ore || w.Get(wx - 1, wy, wz) == TileType.Ore ||
-                    w.Get(wx, wy + 1, wz) == TileType.Ore || w.Get(wx, wy - 1, wz) == TileType.Ore ||
-                    w.Get(wx, wy, wz + 1) == TileType.Ore || w.Get(wx, wy, wz - 1) == TileType.Ore) clustered++;
+                if (w.Get(wx + 1, wy, wz) == m || w.Get(wx - 1, wy, wz) == m ||
+                    w.Get(wx, wy + 1, wz) == m || w.Get(wx, wy - 1, wz) == m ||
+                    w.Get(wx, wy, wz + 1) == m || w.Get(wx, wy, wz - 1) == m) clustered++;
             }
         }
         Assert.True(ore > 1000, $"only {ore} ore tiles");

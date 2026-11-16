@@ -173,6 +173,8 @@ public partial class FloraView : Node3D
 
     private static Color Tint(Plant p)
     {
+        if (p.Kind == PlantKind.Wheat) // green shoots ripening to gold
+            return new Color(0.45f, 0.75f, 0.3f).Lerp(new Color(1f, 0.85f, 0.45f), p.Growth / 255f).SrgbToLinear();
         if (p.Kind == PlantKind.Flowers)
         {
             Color[] petals = [new(1f, 0.82f, 0.2f), new(0.62f, 0.38f, 0.92f), new(1f, 1f, 1f), new(0.95f, 0.3f, 0.3f)];
@@ -201,14 +203,18 @@ public partial class FloraView : Node3D
         PlantKind.Fern => new Color(0.36f, 0.62f, 0.24f),
         PlantKind.Flowers => new Color(1f, 1f, 1f),
         PlantKind.Reeds => new Color(0.62f, 0.64f, 0.38f),
+        PlantKind.Wheat => new Color(0.86f, 0.72f, 0.3f),
+        PlantKind.Herbs => new Color(0.35f, 0.6f, 0.3f),
+        PlantKind.Glowcap => new Color(0.36f, 0.86f, 0.8f),
         _ => Colors.Magenta,
     };
 
-    private ShaderMaterial Material(Color albedo, float tintMix = 0.35f)
+    private ShaderMaterial Material(Color albedo, float tintMix = 0.35f, float emission = 0f)
     {
         var m = new ShaderMaterial { Shader = _shader };
         m.SetShaderParameter("albedo", albedo);
         m.SetShaderParameter("tint_mix", tintMix);
+        m.SetShaderParameter("emission", emission);
         _materials.Add(m);
         return m;
     }
@@ -300,6 +306,37 @@ public partial class FloraView : Node3D
             (Rod(0.03f, 0.02f, 1.0f, 4), At(0.15f, 0.5f, 0.1f, -0.12f, 0.1f), reed),
             (Rod(0.03f, 0.02f, 0.9f, 4), At(-0.12f, 0.45f, -0.08f, 0.15f, -0.1f), reed),
             (Rod(0.03f, 0.02f, 1.2f, 4), At(0.05f, 0.6f, -0.18f, -0.05f, 0.12f), reed));
+
+        // Crops. Wheat: a clump of stalks with ears, coloured per instance (green, ripening to gold).
+        var stalk = Material(new Color(1f, 1f, 1f), 1f);
+        var wheat = new List<(PrimitiveMesh, Transform3D, Material)>();
+        for (int i = 0; i < 7; i++)
+        {
+            float a = i * 2.4f, r = 0.08f + 0.22f * (i % 3) / 2f, tz = Mathf.Cos(a) * 0.12f, tx = Mathf.Sin(a) * 0.12f;
+            wheat.Add((Rod(0.015f, 0.012f, 0.8f, 4), At(Mathf.Cos(a) * r, 0.4f, Mathf.Sin(a) * r, tz, tx), stalk));
+            wheat.Add((Rod(0.035f, 0.01f, 0.2f, 5), At(Mathf.Cos(a) * r + tz * 0.4f, 0.88f, Mathf.Sin(a) * r - tx * 0.4f, tz, tx), stalk));
+        }
+        _meshes[(int)PlantKind.Wheat] = Compose(wheat.ToArray());
+        // Herb garden: a leafy mound with sprigs and small violet flowers.
+        var herb = Leaves(PlantKind.Herbs);
+        var bloom = Material(new Color(0.62f, 0.45f, 0.9f), 0.1f);
+        _meshes[(int)PlantKind.Herbs] = Compose(
+            (Ball(0.35f, 0.3f), At(0, 0.13f, 0), herb),
+            (Rod(0.02f, 0.01f, 0.4f, 4), At(0.1f, 0.35f, 0.05f, 0.2f), herb),
+            (Rod(0.02f, 0.01f, 0.35f, 4), At(-0.12f, 0.32f, -0.06f, -0.25f, 0.1f), herb),
+            (Ball(0.05f, 0.06f), At(0.14f, 0.55f, 0.05f), bloom),
+            (Ball(0.05f, 0.06f), At(-0.16f, 0.5f, -0.06f), bloom),
+            (Ball(0.05f, 0.06f), At(0.02f, 0.3f, 0.25f), bloom));
+        // Glowcaps: a cluster of pale stems under softly glowing caps.
+        var stem2 = Material(new Color(0.85f, 0.85f, 0.78f), 0.1f);
+        var cap = Material(CanopyColor(PlantKind.Glowcap), 0.2f, emission: 0.9f);
+        var caps = new List<(PrimitiveMesh, Transform3D, Material)>();
+        foreach (var (x, z, h) in new[] { (0f, 0f, 0.4f), (0.18f, 0.1f, 0.28f), (-0.15f, 0.12f, 0.24f), (0.05f, -0.18f, 0.32f), (-0.12f, -0.12f, 0.18f) })
+        {
+            caps.Add((Rod(0.035f, 0.03f, h, 5), At(x, h / 2, z), stem2));
+            caps.Add((Ball(0.1f + h * 0.2f, 0.09f), At(x, h, z), cap));
+        }
+        _meshes[(int)PlantKind.Glowcap] = Compose(caps.ToArray());
 
         // Far LOD: a two-cone spindle on a short stalk, coloured per instance.
         var marker = Material(new Color(1f, 1f, 1f), 1f);

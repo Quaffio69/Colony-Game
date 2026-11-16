@@ -12,6 +12,8 @@ uniform float roughness = 0.9;
 uniform float cut_height = 100000.0;
 // False for plain (non-MultiMesh) meshes, which have no per-instance data: no tint.
 uniform bool instanced = true;
+// Self-lit share of the albedo (glowcaps, furnace mouths, aether parts).
+uniform float emission = 0.0;
 
 varying vec3 v_world;
 varying vec3 v_tint;
@@ -28,4 +30,5 @@ void fragment() {
 	float luma = dot(v_tint, vec3(0.333));
 	ALBEDO = albedo * mix(vec3(luma), v_tint, tint_mix);
 	ROUGHNESS = roughness;
+	EMISSION = ALBEDO * emission;
 }

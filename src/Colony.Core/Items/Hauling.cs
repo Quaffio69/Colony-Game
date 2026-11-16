@@ -41,7 +41,7 @@ public static class Hauling
     {
         var part = rooms.PartAt(p);
         if (part is { Built: false }) return part.Cost.Material == type ? StorageRole.Construction : StorageRole.Loose;
-        if (part?.Role == PartRole.Input) return part.Room.Recipe.Input == type ? StorageRole.Input : StorageRole.Loose;
+        if (part?.Role == PartRole.Input) return part.Room.Needs(type) ? StorageRole.Input : StorageRole.Loose;
         if (part?.Role == PartRole.Output) return StorageRole.Output;
         return stockpiles.Contains(p) ? StorageRole.Stockpile : StorageRole.Loose;
     }
@@ -52,17 +52,12 @@ public static class Hauling
         var plans = new List<HaulPlan>();
         bool Usable(TilePos p) => (exclude is null || !exclude.Contains(p)) && connectivity.ComponentOf(p) == component;
 
-        // 1. Demand: input crates that want their room's input.
+        // 1. Demand: input crates that want their machines' inputs.
         var demands = new Nearest<(TilePos Cell, ItemType Type, int Room)>(Considered);
         foreach (var room in rooms.All)
         {
-            var type = room.Recipe.Input;
-            foreach (var crate in room.PartsWithRole(PartRole.Input))
-            {
-                var cell = crate.Cells[0];
-                int space = items.RoomAt(cell, type);
-                if (space > 0 && Usable(cell)) demands.Offer(Dist(cell, from), (cell, type, space));
-            }
+            foreach (var (cell, type, space) in InputDemands(room, items))
+                if (Usable(cell)) demands.Offer(Dist(cell, from), (cell, type, space));
             // Blueprints want their materials, spread over their footprint (one pile per cell).
             foreach (var bp in room.Blueprints)
             {
@@ -114,6 +109,42 @@ public static class Hauling
                 plans.Add(new HaulPlan(src, cell, pile.Type, Math.Min(Math.Min(pile.Available, space), ItemInfo.CarryLimit(pile.Type))));
         }
         return plans;
+    }
+
+    /// <summary>
+    /// Deliveries a room's input crates want: for each input its machines need (see <see cref="Room.InputNeeds"/>)
+    /// still short of its target, a crate already holding it with room, or else an empty crate. Each needed input
+    /// that has no crate yet keeps one empty crate set aside, so one input can't fill every crate and starve the
+    /// others.
+    /// </summary>
+    public static IEnumerable<(TilePos Cell, ItemType Type, int Space)> InputDemands(Room room, ItemPiles items)
+    {
+        var needs = room.InputNeeds();
+        if (needs.Count == 0) yield break;
+        var crates = room.PartsWithRole(PartRole.Input).Select(c => c.Cells[0]).ToList();
+        var empty = crates.Where(c => !items.TryGet(c, out _)).ToList();
+        bool HasCrate(ItemType t) => crates.Any(c => items.TryGet(c, out var p) && p.Type == t);
+        int crateless = needs.Count(n => !HasCrate(n.Item));
+        foreach (var (type, wanted) in needs)
+        {
+            int have = 0;
+            TilePos? withRoom = null;
+            foreach (var c in crates)
+            {
+                if (!items.TryGet(c, out var p) || p.Type != type) continue;
+                have += p.Count + p.Incoming;
+                if (withRoom is null && items.RoomAt(c, type) > 0) withRoom = c;
+            }
+            if (have >= wanted) continue;
+            bool has = HasCrate(type);
+            if (withRoom is null && empty.Count > 0 && (!has || empty.Count > crateless))
+            {
+                withRoom = empty[0];
+                empty.RemoveAt(0);
+                if (!has) crateless--;
+            }
+            if (withRoom is { } cell) yield return (cell, type, Math.Min(items.RoomAt(cell, type), wanted - have));
+        }
     }
 
     private static long Dist(TilePos a, TilePos b)

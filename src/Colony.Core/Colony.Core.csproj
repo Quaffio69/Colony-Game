@@ -13,4 +13,9 @@
     <InternalsVisibleTo Include="Colony.Core.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The production tree (items, workshops, stations, recipes) is data: see Industry/Catalog.cs. -->
+    <EmbeddedResource Include="..\..\data\tech-tree.json" LogicalName="tech-tree.json" />
+  </ItemGroup>
+
 </Project>

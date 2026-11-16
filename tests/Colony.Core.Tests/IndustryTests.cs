@@ -30,19 +30,19 @@ public class IndustryTests
     {
         var sim = Meadow();
         var rooms = sim.Rooms;
-        Assert.Equal(25, rooms.Paint(RoomType.Sawmill, G(2, 2), G(6, 6)));
-        Assert.Equal(9, rooms.Paint(RoomType.Sawmill, G(10, 2), G(12, 4)));
+        Assert.Equal(25, rooms.Paint(RoomType.Carpentry, G(2, 2), G(6, 6)));
+        Assert.Equal(9, rooms.Paint(RoomType.Carpentry, G(10, 2), G(12, 4)));
         Assert.Equal(2, rooms.All.Count);
         Assert.All(rooms.All.SelectMany(r => r.Cells), c => Assert.Equal(4, c.Z));
 
         // A strip joining them merges everything into one room.
-        rooms.Paint(RoomType.Sawmill, G(7, 2), G(9, 2));
+        rooms.Paint(RoomType.Carpentry, G(7, 2), G(9, 2));
         Assert.Single(rooms.All);
         Assert.Equal(37, rooms.All[0].Cells.Count);
 
         // Stockpile cells are never taken, and stockpiles can't be zoned on a room.
         sim.Stockpiles.AddFloorBox(G(20, 20), G(21, 21));
-        Assert.Equal(0, rooms.Paint(RoomType.Sawmill, G(20, 20), G(21, 21)));
+        Assert.Equal(0, rooms.Paint(RoomType.Carpentry, G(20, 20), G(21, 21)));
         Assert.Equal(0, sim.Stockpiles.AddFloorBox(G(2, 2), G(3, 3)));
     }
 
@@ -59,12 +59,12 @@ public class IndustryTests
         for (int z = 4; z <= 6; z++)
             sim.World.Set(x, y, z, TileType.Stone);
 
-        sim.Rooms.Paint(RoomType.Sawmill, G(10, 10, 3), G(19, 14, 4));
+        sim.Rooms.Paint(RoomType.Carpentry, G(10, 10, 3), G(19, 14, 4));
         Assert.Single(sim.Rooms.All);
         Assert.Contains(sim.Rooms.All[0].Cells, c => c.Z == 5);
         Assert.Contains(sim.Rooms.All[0].Cells, c => c.Z == 4);
 
-        sim.Rooms.Paint(RoomType.Sawmill, G(20, 10, 3), G(29, 14, 6));
+        sim.Rooms.Paint(RoomType.Carpentry, G(20, 10, 3), G(29, 14, 6));
         // The low strip x=20..24 joins the first room; the tall block can't be walked onto: its own room.
         Assert.Equal(2, sim.Rooms.All.Count);
         var tall = sim.Rooms.All.Single(r => r.Cells.Any(c => c.Z == 7));
@@ -76,7 +76,7 @@ public class IndustryTests
     {
         var sim = Meadow();
         var rooms = sim.Rooms;
-        rooms.Paint(RoomType.Sawmill, G(2, 2), G(12, 6));
+        rooms.Paint(RoomType.Carpentry, G(2, 2), G(12, 6));
         var left = rooms.Place(PartType.InputCrate, new TilePos(3, 3, 4), false)!;
         var right = rooms.Place(PartType.OutputCrate, new TilePos(11, 3, 4), false)!;
         var cut = rooms.Place(PartType.Sawbench, new TilePos(6, 5, 4), false)!; // covers x=6..7
@@ -94,7 +94,7 @@ public class IndustryTests
     {
         var sim = Meadow();
         var rooms = sim.Rooms;
-        rooms.Paint(RoomType.Sawmill, G(2, 2), G(4, 4));
+        rooms.Paint(RoomType.Carpentry, G(2, 2), G(4, 4));
         Assert.NotNull(rooms.CanPlace(PartType.Lantern, new TilePos(10, 10, 4), false));          // outside
         Assert.NotNull(rooms.CanPlace(PartType.Sawbench, new TilePos(4, 2, 4), false));           // sticks out
         Assert.Null(rooms.CanPlace(PartType.Sawbench, new TilePos(4, 2, 4), rotated: true));      // fits as 1x2
@@ -108,7 +108,7 @@ public class IndustryTests
     {
         var sim = Meadow();
         var rooms = sim.Rooms;
-        rooms.Paint(RoomType.Sawmill, G(2, 2), G(14, 8));
+        rooms.Paint(RoomType.Carpentry, G(2, 2), G(14, 8));
         var room = rooms.All[0];
         Assert.Equal(1f, room.Efficiency);
         for (int i = 0; i < 4; i++) rooms.Place(PartType.Sawbench, new TilePos(2 + i * 3, 2, 4), false); // 8 machine tiles
@@ -126,16 +126,16 @@ public class IndustryTests
     public void Sizes_TradeCostForLabourAndSpace()
     {
         double prevCostPerTile = 0, prevLabour = double.MaxValue, prevToolCost = 0, prevEffectPerTile = 0;
-        var unit = RoomInfo.Recipe(RoomType.Sawmill);
+        var unit = Catalog.RecipeFor(ItemType.Plank)!;
         for (int s = 1; s <= PartInfo.MaxSize; s++)
         {
             // Machines: dearer per tile, less labour per unit.
             double costPerTile = PartInfo.Cost(PartType.Sawbench, s).Count / (double)PartInfo.Tiles(PartType.Sawbench, s);
-            var batch = PartInfo.MachineRecipe(PartType.Sawbench, s, unit);
-            double labour = batch.WorkTicks / (double)batch.InCount;
+            var batch = PartInfo.MachineBatchOf(PartType.Sawbench, s, unit);
+            double labour = batch.WorkTicks / (double)batch.InCount(0);
             Assert.True(costPerTile > prevCostPerTile && labour < prevLabour, $"saw size {s}");
-            Assert.True(batch.OutCount <= Items.ItemInfo.StackLimit(batch.Output), "a batch must fit one output crate");
-            Assert.True(batch.InCount <= Items.ItemInfo.StackLimit(batch.Input), "a batch must fit one input crate");
+            Assert.True(batch.OutCount <= Items.ItemInfo.StackLimit(unit.Output), "a batch must fit one output crate");
+            Assert.True(batch.InCount(0) <= Items.ItemInfo.StackLimit(unit.Inputs[0].Item), "a batch must fit one input crate");
 
             // Tools: cost grows exponentially (at least x2.5 per size), effect per tile grows.
             double toolCost = PartInfo.Cost(PartType.ToolRack, s).Count;
@@ -155,19 +155,19 @@ public class IndustryTests
         for (int i = 0; i < logs; i += 10) sim.Items.Drop(new TilePos(3, 3, 4), ItemType.Log, Math.Min(10, logs - i));
         sim.Stockpiles.AddFloorBox(G(2, 30), G(6, 34));
         var rooms = sim.Rooms;
-        rooms.Paint(RoomType.Sawmill, G(20, 20), G(27, 26));
+        rooms.Paint(RoomType.Carpentry, G(20, 20), G(27, 26));
         var mill = rooms.Place(PartType.Sawbench, new TilePos(21, 21, 4), false, size: 5)!;
         Assert.Equal(12, mill.Cells.Length);
-        Assert.Equal(8, mill.Batch.InCount);
+        Assert.Equal(8, mill.Batch.InCount(0));
         rooms.Place(PartType.InputCrate, new TilePos(20, 20, 4), false);
         rooms.Place(PartType.OutputCrate, new TilePos(27, 26, 4), false);
         rooms.Place(PartType.ToolRack, new TilePos(21, 25, 4), false, size: 5);
         for (int i = 0; i < 4; i++) sim.AddColonist($"C{i}", new TilePos(10 + i, 12, 4));
 
         int t = 0;
-        for (; t < 60_000 && sim.Items.Totals(sim.Stockpiles.Contains)[(int)ItemType.Plank] < logs * 4; t++) sim.Step();
-        Assert.Equal(logs * 4, sim.Items.Totals(sim.Stockpiles.Contains)[(int)ItemType.Plank]);
-        Assert.Equal(0, sim.Items.Totals()[(int)ItemType.Log]);
+        for (; t < 60_000 && sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Plank.Index] < logs * 4; t++) sim.Step();
+        Assert.Equal(logs * 4, sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Plank.Index]);
+        Assert.Equal(0, sim.Items.Totals()[ItemType.Log.Index]);
     }
 
     /// <summary>A sawmill fed from a log stockpile, with a separate stockpile for the planks.</summary>
@@ -179,7 +179,7 @@ public class IndustryTests
         sim.Stockpiles.AddFloorBox(G(2, 30), G(6, 34));
 
         var rooms = sim.Rooms;
-        rooms.Paint(RoomType.Sawmill, G(20, 20), G(27, 24));
+        rooms.Paint(RoomType.Carpentry, G(20, 20), G(27, 24));
         rooms.Place(PartType.Sawbench, new TilePos(21, 21, 4), false);
         rooms.Place(PartType.Sawbench, new TilePos(25, 21, 4), rotated: true);
         rooms.Place(PartType.InputCrate, new TilePos(20, 20, 4), false);
@@ -194,16 +194,16 @@ public class IndustryTests
     {
         const int logs = 24;
         var sim = SawmillScene(logs, colonists: 6);
-        var recipe = RoomInfo.Recipe(RoomType.Sawmill);
+        var recipe = Catalog.RecipeFor(ItemType.Plank)!;
 
-        bool Done() => sim.Items.Totals()[(int)ItemType.Log] == 0 &&
-                       sim.Items.Totals(p => !sim.Stockpiles.Contains(p))[(int)ItemType.Plank] == 0 &&
+        bool Done() => sim.Items.Totals()[ItemType.Log.Index] == 0 &&
+                       sim.Items.Totals(p => !sim.Stockpiles.Contains(p))[ItemType.Plank.Index] == 0 &&
                        sim.Colonists.All(c => c.Task == ColonistTask.None);
         int t = 0;
         for (; t < 60_000 && !Done(); t++) sim.Step();
         Assert.True(Done(), $"after {t} ticks: {string.Join(", ", sim.Items.All.Select(kv => $"{kv.Key}={kv.Value}"))}");
 
-        Assert.Equal(logs * recipe.OutCount / recipe.InCount, sim.Items.Totals(sim.Stockpiles.Contains)[(int)ItemType.Plank]);
+        Assert.Equal(logs * recipe.OutCount / recipe.Inputs[0].Count, sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Plank.Index]);
         Assert.Equal(logs * recipe.OutCount, sim.ItemsProduced);
         Assert.All(sim.Items.All, kv => Assert.True(kv.Value is { Reserved: 0, Incoming: 0 }, $"{kv.Key}: {kv.Value}"));
         Assert.All(sim.Rooms.All[0].PartsWithRole(PartRole.Machine), m => Assert.Equal(-1, m.ClaimedBy));
@@ -224,7 +224,7 @@ public class IndustryTests
         // The planks fell into the hole as a loose pile; a hauler takes them to the stockpile.
         sim.AddColonist("Hauler", new TilePos(15, 15, 4));
         for (int i = 0; i < 6000; i++) sim.Step();
-        Assert.Equal(8, sim.Items.Totals(sim.Stockpiles.Contains)[(int)ItemType.Plank]);
+        Assert.Equal(8, sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Plank.Index]);
     }
 
     [Fact]
@@ -238,7 +238,7 @@ public class IndustryTests
         for (int i = 0; i < 6000; i++) sim.Step();
 
         Assert.All(sim.Colonists, c => Assert.Equal(0, c.CarryingCount));
-        Assert.Equal(10, sim.Items.Totals()[(int)ItemType.Log] + (int)sim.ItemsProduced / 4); // nothing lost
+        Assert.Equal(10, sim.Items.Totals()[ItemType.Log.Index] + (int)sim.ItemsProduced / 4); // nothing lost
         Assert.All(sim.Items.All, kv => Assert.True(kv.Value is { Reserved: 0, Incoming: 0 }, $"{kv.Key}: {kv.Value}"));
     }
 
@@ -250,13 +250,13 @@ public class IndustryTests
         sim.Stockpiles.AddFloorBox(G(2, 2), G(6, 6));
         for (int i = 0; i < 4; i++) sim.Items.Drop(new TilePos(3 + i, 3, 4), ItemType.Log, 10);
         var rooms = sim.Rooms;
-        rooms.Paint(RoomType.Sawmill, G(20, 20), G(28, 26));
+        rooms.Paint(RoomType.Carpentry, G(20, 20), G(28, 26));
         var horse = rooms.Place(PartType.Sawbench, new TilePos(21, 21, 4), false)!;
         var input = rooms.Place(PartType.InputCrate, new TilePos(20, 20, 4), false)!;
         var output = rooms.Place(PartType.OutputCrate, new TilePos(28, 26, 4), false)!;
         Assert.False(horse.Built);
         Assert.Equal(new BuildCost(ItemType.Log, 2), horse.Cost);
-        Assert.Equal("machine under construction", Rooms.Status(rooms.All[0], sim.Items));
+        Assert.Equal("machine under construction", Rooms.Status(rooms.All[0], sim));
         for (int i = 0; i < 4; i++) sim.AddColonist($"C{i}", new TilePos(10 + i, 12, 4));
 
         int t = 0;
@@ -280,14 +280,14 @@ public class IndustryTests
         var sim = Meadow();
         sim.Rooms.InstantBuild = false;
         sim.Stockpiles.AddFloorBox(G(2, 2), G(4, 4));
-        sim.Rooms.Paint(RoomType.Sawmill, G(20, 20), G(24, 24));
+        sim.Rooms.Paint(RoomType.Carpentry, G(20, 20), G(24, 24));
         var crate = sim.Rooms.Place(PartType.InputCrate, new TilePos(22, 22, 4), false)!;
         sim.Items.Drop(new TilePos(22, 22, 4), ItemType.Log, 1); // half delivered
         sim.Rooms.RemovePart(crate);
 
         sim.AddColonist("Hauler", new TilePos(10, 10, 4));
         for (int i = 0; i < 4000; i++) sim.Step();
-        Assert.Equal(1, sim.Items.Totals(sim.Stockpiles.Contains)[(int)ItemType.Log]);
+        Assert.Equal(1, sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Log.Index]);
         Assert.All(sim.Items.All, kv => Assert.True(kv.Value is { Reserved: 0, Incoming: 0 }, $"{kv.Key}: {kv.Value}"));
     }
 

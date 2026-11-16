@@ -62,7 +62,7 @@ public class VoxelWorldTests
         var c = w.GetChunk(0, 0, 0)!;
         w.Set(1, 1, 1, TileType.Stone);
         w.Set(2, 1, 1, TileType.Soil);
-        w.Set(2, 1, 1, TileType.Ore); // solid -> solid: no change in count
+        w.Set(2, 1, 1, TileType.CopperOre); // solid -> solid: no change in count
         Assert.Equal(2, c.SolidCount);
         w.Set(1, 1, 1, TileType.Air);
         Assert.Equal(1, c.SolidCount);

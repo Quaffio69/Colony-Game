@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using Colony.Core;
 using Colony.Core.Industry;
+using Colony.Core.Nature;
 using Colony.Core.Orders;
 using Colony.Core.World;
 using Godot;
@@ -9,18 +11,20 @@ using Godot;
 namespace ColonyGame;
 
 /// <summary>
-/// Mouse picking, DF-style box orders, and the factory builder.
+/// Mouse picking, DF-style box orders, zones, and the factory builder.
 /// <para>
 /// Box tools: click once to anchor a corner, move the mouse (Z/X extend the box across levels; the view
 /// follows), click again to apply. Right-click starts a removal box (or aborts a pending one); Esc aborts.
 /// </para>
 /// <list type="bullet">
-/// <item>Orders (Tab / Shift+Tab): dig, stairs (auto / up / down / up-down), chop trees, stockpile zones.
-/// Removal boxes cancel designations and stockpile cells.</item>
-/// <item>Build (B / Shift+B): paint a room (box over the floor, any number of levels; it must stay one
-/// walkable piece, which the core enforces), then place parts: machines, auxiliaries, input and output
-/// crates. Parts are placed with a single click on the floor; R rotates; a ghost shows the footprint in green
-/// or red with the reason. Removal boxes erase room cells (room tool) or remove parts (part tools).</item>
+/// <item>Orders (Tab / Shift+Tab): dig, stairs (auto / up / down / up-down), chop trees and gather plants
+/// (2D areas draped on the surface), stockpile zones, and farm plots (grain, herbs, glowcaps). Removal boxes
+/// cancel designations and remove zone cells.</item>
+/// <item>Build (B opens the build menu): pick a workshop to paint its room (a box over the floor, any number
+/// of levels; it must stay one walkable piece, which the core enforces), then pick one of its stations, tools,
+/// lanterns or crates and click to place. R rotates, [ ] change size, F (Shift+F) changes what the machine
+/// under the cursor makes. A ghost shows the footprint in green or red with the reason. Removal boxes erase
+/// room cells (room tool) or remove parts (part tools).</item>
 /// </list>
 /// </summary>
 public partial class DesignationTool : Node3D
@@ -28,12 +32,12 @@ public partial class DesignationTool : Node3D
     public enum ToolMode
     {
         // Orders
-        Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile,
-        // Build
-        SawmillRoom, Sawbench, ToolRack, Lantern, InputCrate, OutputCrate,
+        Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps,
+        // Build (which workshop / part: see Workshop and Part)
+        Room, Part,
     }
 
-    private const ToolMode LastOrder = ToolMode.Stockpile;
+    private const ToolMode LastOrder = ToolMode.FarmGlowcaps;
     private enum Selection { None, Designate, Cancel }
 
     private ColonySim _sim = null!;
@@ -62,29 +66,34 @@ public partial class DesignationTool : Node3D
     /// <summary>Selected size (1..<see cref="PartInfo.Sizes"/>) for a part family; [ and ] change it.</summary>
     public int SizeFor(PartType part) => PartInfo.ClampSize(part, _sizes.GetValueOrDefault(part, 1));
     private static bool IsAreaTool(ToolMode m) => m is ToolMode.Chop or ToolMode.Gather;
+    private static PlantKind? CropFor(ToolMode m) => m switch
+    {
+        ToolMode.FarmGrain => PlantKind.Wheat,
+        ToolMode.FarmHerbs => PlantKind.Herbs,
+        ToolMode.FarmGlowcaps => PlantKind.Glowcap,
+        _ => null,
+    };
 
     public ToolMode Mode { get; private set; } = ToolMode.Dig;
+    /// <summary>The workshop the build menu is on (its room is painted by <see cref="ToolMode.Room"/>).</summary>
+    public RoomType Workshop { get; private set; } = RoomType.Carpentry;
+    /// <summary>The part placed by <see cref="ToolMode.Part"/>.</summary>
+    public PartType Part { get; private set; } = PartType.Sawbench;
     public TilePos? Hovered { get; private set; }
     public string? LastAction { get; private set; }
     /// <summary>Why the part under the cursor can't be placed (null if it can, or not placing).</summary>
     public string? PlacementProblem { get; private set; }
 
     public static bool IsBuild(ToolMode m) => m > LastOrder;
-    public static PartType? PartFor(ToolMode m) => m switch
-    {
-        ToolMode.Sawbench => PartType.Sawbench,
-        ToolMode.ToolRack => PartType.ToolRack,
-        ToolMode.Lantern => PartType.Lantern,
-        ToolMode.InputCrate => PartType.InputCrate,
-        ToolMode.OutputCrate => PartType.OutputCrate,
-        _ => null,
-    };
+    public PartType? PartFor(ToolMode m) => m == ToolMode.Part ? Part : null;
 
     public string ModeName(ToolMode m)
     {
-        if (PartFor(m) is { } part && PartInfo.Sizes(part) > 1)
-            return $"Build: {PartInfo.Name(part, SizeFor(part))} (size {SizeFor(part)}/{PartInfo.Sizes(part)}, [ ] to change)";
-        return BaseModeName(m);
+        if (PartFor(m) is { } part)
+            return PartInfo.Sizes(part) > 1
+                ? $"Build: {PartInfo.Name(part, SizeFor(part))} (size {SizeFor(part)}/{PartInfo.Sizes(part)}, [ ] to change)"
+                : $"Build: {PartInfo.Name(part)}";
+        return m == ToolMode.Room ? $"Build: {Workshop.Name} room" : BaseModeName(m);
     }
 
     private static string BaseModeName(ToolMode m) => m switch
@@ -97,8 +106,10 @@ public partial class DesignationTool : Node3D
         ToolMode.Chop => "Chop trees",
         ToolMode.Gather => "Gather plants",
         ToolMode.Stockpile => "Stockpile",
-        ToolMode.SawmillRoom => "Build: Sawmill room",
-        _ => $"Build: {PartInfo.Name(PartFor(m)!.Value)}",
+        ToolMode.FarmGrain => "Farm plot: grain",
+        ToolMode.FarmHerbs => "Farm plot: herbs",
+        ToolMode.FarmGlowcaps => "Fungus farm: glowcaps (under a roof)",
+        _ => m.ToString(),
     };
 
     /// <summary>One HUD line about the current tool (selection in progress, or placement preview).</summary>
@@ -123,35 +134,33 @@ public partial class DesignationTool : Node3D
                 if (_rotated) (fw, fd) = (fd, fw);
                 int tiles = fw * fd;
                 var (material, cost) = PartInfo.Cost(part, size);
-                string mat = Colony.Core.Items.ItemInfo.Name(material).ToLowerInvariant();
                 string role = PartInfo.Role(part) switch
                 {
                     PartRole.Machine => MachineInfo(part, size),
                     PartRole.Auxiliary =>
                         $"+{PartInfo.Bonus(part, size):P0} for up to {PartInfo.Coverage(part, size)} machine tiles " +
                         $"({PartInfo.Coverage(part, size) / (float)tiles:0.#} per own tile)",
-                    PartRole.Input => "holds the room's input",
+                    PartRole.Input => "holds one of the room's inputs",
                     _ => "holds the room's products",
                 };
-                return $"{PartInfo.Name(part, size)} {fw}x{fd}: {role}   cost {cost} {mat} ({cost / (float)tiles:0.#}/tile)   " +
+                return $"{PartInfo.Name(part, size)} {fw}x{fd}: {role}   cost {cost} {material.Name.ToLowerInvariant()} ({cost / (float)tiles:0.#}/tile)   " +
                        "R: rotate   " + (PlacementProblem is { } p ? $"can't place: {p}" : "click to place");
             }
             return null;
         }
     }
 
-    /// <summary>"4 logs -> 16 planks per batch, 0.6 s labour per log" for the sawmill recipe.</summary>
+    /// <summary>"batch of 4: 4 logs -> 16 planks, 0.6 s labour per unit; also makes: ..." for a station.</summary>
     private static string MachineInfo(PartType part, int size)
     {
-        var unit = RoomInfo.Recipe(RoomType.Sawmill);
-        var batch = PartInfo.MachineRecipe(part, size, unit);
-        string In(Colony.Core.Items.ItemType t) => Colony.Core.Items.ItemInfo.Name(t).ToLowerInvariant();
-        double labour = batch.WorkTicks / (double)batch.InCount / ColonySim.TicksPerSecond;
-        return $"{batch.InCount} {In(batch.Input)} -> {batch.OutCount} {In(batch.Output)} per batch, " +
-               $"{labour:0.00} s labour per {In(batch.Input).TrimEnd('s')}";
+        var first = part.Recipes[0];
+        var batch = PartInfo.MachineBatchOf(part, size, first);
+        double labour = batch.WorkTicks / (double)batch.Units / ColonySim.TicksPerSecond;
+        string others = part.Recipes.Count > 1 ? $"; also: {string.Join(", ", part.Recipes.Skip(1).Select(r => r.Name.ToLowerInvariant()))}" : "";
+        return $"batch of {batch.Units}: {first.Describe(batch.Units)}, {labour:0.0} s labour per unit{others}";
     }
 
-    private string RemovalName() => Mode == ToolMode.SawmillRoom ? "Erase room" : PartFor(Mode) is not null ? "Remove parts" : "Cancel";
+    private string RemovalName() => Mode == ToolMode.Room ? "Erase room" : Mode == ToolMode.Part ? "Remove parts" : "Cancel";
 
     public void Initialize(ColonySim sim, WorldView view)
     {
@@ -169,7 +178,8 @@ public partial class DesignationTool : Node3D
         foreach (var mode in Enum.GetValues<ToolMode>())
             _modeMats[mode] = Overlay.Material(
                 mode == ToolMode.Stockpile ? ItemView.StockpileColor with { A = 0.3f }
-                : IsBuild(mode) ? RoomView.RoomColor(RoomType.Sawmill) with { A = 0.3f }
+                : CropFor(mode) is not null ? ItemView.FarmColor with { A = 0.3f }
+                : IsBuild(mode) ? new Color(1f, 0.68f, 0.3f, 0.3f)
                 : WorldView.DesignationColor(KindFor(mode, 0, 0, 0)) with { A = 0.3f });
         _cancelMat = Overlay.Material(new Color(1f, 0.25f, 0.2f, 0.3f));
         _ghostOk = Overlay.Material(new Color(0.3f, 1f, 0.4f, 0.4f));
@@ -203,7 +213,90 @@ public partial class DesignationTool : Node3D
             Visible = false,
         };
         AddChild(_drape);
+        BuildMenu();
     }
+
+    // ---- Build menu -------------------------------------------------------------------------------------
+
+    private PanelContainer _menu = null!;
+    private VBoxContainer _partList = null!;
+    private Label _partsTitle = null!;
+    private readonly Dictionary<RoomType, Button> _workshopButtons = new();
+
+    /// <summary>The build menu: every workshop (paints its room), then the selected workshop's parts.</summary>
+    private void BuildMenu()
+    {
+        var layer = new CanvasLayer { Layer = 2 };
+        AddChild(layer);
+        _menu = new PanelContainer { Visible = false };
+        _menu.SetAnchorsPreset(Control.LayoutPreset.TopRight);
+        _menu.OffsetLeft = -380;
+        _menu.OffsetTop = 10;
+        _menu.OffsetRight = -10;
+        layer.AddChild(_menu);
+        var box = new VBoxContainer();
+        box.AddThemeConstantOverride("separation", 4);
+        _menu.AddChild(box);
+        box.AddChild(new Label { Text = "Workshops (click to paint a room; B closes)" });
+        var grid = new GridContainer { Columns = 2 };
+        box.AddChild(grid);
+        foreach (var w in Catalog.Workshops)
+        {
+            var b = new Button { Text = w.Name, ToggleMode = true, TooltipText = $"{w.About}\nMakes: {string.Join(", ", w.Recipes.Select(r => r.Name))}" };
+            b.AddThemeColorOverride("font_color", RoomView.RoomColor(w) with { A = 1f });
+            b.CustomMinimumSize = new Vector2(176, 0);
+            var ws = w;
+            b.Pressed += () => SelectWorkshop(ws);
+            grid.AddChild(b);
+            _workshopButtons[w] = b;
+        }
+        _partsTitle = new Label();
+        box.AddChild(_partsTitle);
+        _partList = new VBoxContainer();
+        box.AddChild(_partList);
+        SelectWorkshop(Workshop, enterMode: false);
+    }
+
+    private void SelectWorkshop(RoomType w, bool enterMode = true)
+    {
+        Workshop = w;
+        foreach (var (ws, b) in _workshopButtons) b.ButtonPressed = ws == w;
+        _partsTitle.Text = $"{w.Name}: parts\n[ ] size   R rotate   F: recipe of the machine under the cursor";
+        foreach (var child in _partList.GetChildren()) child.QueueFree();
+        foreach (var part in w.Stations.Concat(Catalog.GenericParts))
+        {
+            string makes = part.Recipes.Count > 0 ? "  -  " + string.Join(", ", part.Recipes.Select(r => r.Name.ToLowerInvariant())) : "";
+            var b = new Button { Text = part.Name + makes, Alignment = HorizontalAlignment.Left, ClipText = true, CustomMinimumSize = new Vector2(356, 0) };
+            b.TooltipText = string.Join("\n", part.Recipes.Select(r => $"{r.Describe()}   ({Catalog.EducationName(r.Education)})"));
+            var pt = part;
+            b.Pressed += () => SelectPart(pt);
+            _partList.AddChild(b);
+        }
+        if (enterMode)
+        {
+            Mode = ToolMode.Room;
+            EndSelection();
+        }
+    }
+
+    private void SelectPart(PartType part)
+    {
+        Part = part;
+        Mode = ToolMode.Part;
+        EndSelection();
+    }
+
+    /// <summary>Opens the build menu on a workshop (dev aid; players press B).</summary>
+    public void OpenBuildMenu(string workshopId)
+    {
+        _menu.Visible = true;
+        SelectWorkshop(Catalog.Workshops.FirstOrDefault(w => w.Id == workshopId) ?? Workshop);
+    }
+
+    /// <summary>True while the mouse is over the build menu (so clicks there don't reach the world).</summary>
+    private bool OverMenu => _menu.Visible && _menu.GetGlobalRect().HasPoint(GetViewport().GetMousePosition());
+
+    // ---- Picking ----------------------------------------------------------------------------------------
 
     /// <summary>Top of the ground in a column (the highest solid tile), cached for the current selection.</summary>
     private int SurfaceAt(int x, int y)
@@ -248,7 +341,7 @@ public partial class DesignationTool : Node3D
         var origin = SimSpace.ToSim(camera.ProjectRayOrigin(mouse));
         var dir = SimSpace.ToSim(camera.ProjectRayNormal(mouse));
 
-        var hit = VoxelRaycast.Cast(_sim.World, origin, dir, 5000f, _view.ViewLevel);
+        var hit = OverMenu ? null : VoxelRaycast.Cast(_sim.World, origin, dir, 5000f, _view.ViewLevel);
         Hovered = hit?.Tile;
         bool placing = PartFor(Mode) is not null && _selection == Selection.None;
         _cursor.Visible = Hovered.HasValue && _selection == Selection.None && !placing;
@@ -274,6 +367,7 @@ public partial class DesignationTool : Node3D
     public override void _UnhandledInput(InputEvent e)
     {
         if (_sim == null) return;
+        if (e is InputEventMouseButton && OverMenu) return;
 
         switch (e)
         {
@@ -321,12 +415,15 @@ public partial class DesignationTool : Node3D
 
             case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Tab } tab:
                 Mode = Cycle(Mode, ToolMode.Dig, LastOrder, tab.ShiftPressed);
+                _menu.Visible = false;
                 EndSelection();
                 Handled();
                 break;
 
-            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.B } b:
-                Mode = Cycle(Mode, ToolMode.SawmillRoom, ToolMode.OutputCrate, b.ShiftPressed);
+            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.B }:
+                _menu.Visible = !_menu.Visible;
+                if (_menu.Visible && !IsBuild(Mode)) Mode = ToolMode.Room;
+                else if (!_menu.Visible && IsBuild(Mode)) Mode = ToolMode.Dig;
                 EndSelection();
                 Handled();
                 break;
@@ -342,10 +439,27 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
+            // F: change what the machine under the cursor makes.
+            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.F } fk when HoveredMachine() is { } machine:
+                if (_sim.Rooms.CycleRecipe(machine, fk.ShiftPressed))
+                    LastAction = $"{machine.Name} in {machine.Room.Name} now makes {machine.Recipe!.Name.ToLowerInvariant()}: {machine.Recipe.Describe()}";
+                else
+                    LastAction = $"{machine.Name} only makes {machine.Recipe!.Name.ToLowerInvariant()}";
+                Handled();
+                break;
+
             case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Enter or Key.KpEnter }:
                 DebugCompleteAll();
                 break;
         }
+    }
+
+    /// <summary>The machine standing on (or in) the hovered tile, if any.</summary>
+    public Part? HoveredMachine()
+    {
+        if (Hovered is not { } h) return null;
+        var part = _sim.Rooms.PartAt(h.Offset(0, 0, 1)) ?? _sim.Rooms.PartAt(h);
+        return part is { Role: PartRole.Machine } ? part : null;
     }
 
     /// <summary>Next mode within [first, last]; entering the group from outside starts at its first mode.</summary>
@@ -366,7 +480,7 @@ public partial class DesignationTool : Node3D
         string name = PartInfo.Name(part, size).ToLowerInvariant();
         var placed = _sim.Rooms.Place(part, cell, _rotated, size);
         LastAction = placed is not null
-            ? (placed.Built ? $"Placed a {name} in {placed.Room.Name}" : $"Placed a {name} blueprint in {placed.Room.Name}: needs {placed.Cost.Count} {Colony.Core.Items.ItemInfo.Name(placed.Cost.Material).ToLowerInvariant()} and a builder")
+            ? (placed.Built ? $"Placed a {name} in {placed.Room.Name}" : $"Placed a {name} blueprint in {placed.Room.Name}: needs {placed.Cost.Count} {placed.Cost.Material.Name.ToLowerInvariant()} and a builder")
             : $"Can't place {name}: {_sim.Rooms.CanPlace(part, cell, _rotated, size)}";
     }
 
@@ -376,7 +490,7 @@ public partial class DesignationTool : Node3D
         var (a, b) = Corners();
         if (_selection == Selection.Cancel)
         {
-            if (Mode == ToolMode.SawmillRoom)
+            if (Mode == ToolMode.Room)
                 LastAction = $"Erased {_sim.Rooms.Erase(a, b)} room cells";
             else if (PartFor(Mode) is not null)
                 LastAction = $"Removed {_sim.Rooms.RemovePartsIn(a, b)} parts";
@@ -387,13 +501,20 @@ public partial class DesignationTool : Node3D
                 // Box corners are ground tiles: also clear tree/stockpile cells standing on them.
                 int orders = d.CancelBox(a with { Z = Math.Min(a.Z, b.Z) }, b with { Z = Math.Max(a.Z, b.Z) + 1 });
                 int zones = _sim.Stockpiles.RemoveBox(a, b);
-                LastAction = $"Cancelled {orders} designations, removed {zones} stockpile cells";
+                int plots = _sim.Farms.RemoveBox(a, b);
+                LastAction = $"Cancelled {orders} designations, removed {zones} stockpile and {plots} farm cells";
             }
         }
-        else if (Mode == ToolMode.SawmillRoom)
+        else if (Mode == ToolMode.Room)
         {
-            int n = _sim.Rooms.Paint(RoomType.Sawmill, a, b);
-            LastAction = n > 0 ? $"Sawmill: painted {n} floor cells" : "Sawmill: no free floor in that box";
+            int n = _sim.Rooms.Paint(Workshop, a, b);
+            LastAction = n > 0 ? $"{Workshop.Name}: painted {n} floor cells" : $"{Workshop.Name}: no free floor in that box";
+        }
+        else if (CropFor(Mode) is { } crop)
+        {
+            int n = _sim.Farms.AddFloorBox(crop, a, b);
+            LastAction = n > 0 ? $"{BaseModeName(Mode)}: zoned {n} plots" :
+                crop == PlantKind.Glowcap ? "No plots: glowcaps need a solid floor under a roof" : "No plots: crops need free grass or soil";
         }
         else
         {

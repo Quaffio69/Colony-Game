@@ -43,7 +43,7 @@ public sealed class ItemPiles
     {
         var totals = new int[ItemInfo.TypeCount];
         foreach (var (p, pile) in _piles)
-            if (where is null || where(p)) totals[(int)pile.Type] += pile.Count;
+            if (where is null || where(p)) totals[pile.Type.Index] += pile.Count;
         return totals;
     }
 

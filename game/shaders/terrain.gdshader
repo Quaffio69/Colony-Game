@@ -26,5 +26,6 @@ void fragment() {
 	vec3 cell = floor(v_world - v_normal * 0.5);
 	bool on_cut_level = abs(cell.y - (cut_height - 1.0)) < 0.5;
 	ALBEDO = tile_albedo(COLOR.rgb, cell, v_world, v_normal, on_cut_level);
+	EMISSION = tile_glow(COLOR);
 	ROUGHNESS = 0.9;
 }

@@ -30,7 +30,7 @@ public class VoxelRaycastTests
     public void Diagonal_FromInsideAir_HitsSideFace()
     {
         var w = new VoxelWorld(20, 20, 10);
-        w.Set(10, 5, 2, TileType.Ore);
+        w.Set(10, 5, 2, TileType.CopperOre);
         var hit = VoxelRaycast.Cast(w, new Vector3(2.5f, 5.5f, 2.5f), Vector3.UnitX, 100f);
         Assert.NotNull(hit);
         Assert.Equal(new TilePos(10, 5, 2), hit.Value.Tile);

@@ -61,7 +61,7 @@ public sealed class Flora
     public bool Add(Plant plant)
     {
         var p = plant.Position;
-        if (!PlantInfo.CanGrowAt(_world, p)) return false;
+        if (!PlantInfo.CanGrowAt(_world, p, plant.Kind)) return false;
         long key = Key(p);
         if (_index.ContainsKey(key)) return false;
         int r = RegionOf(p);
@@ -101,7 +101,7 @@ public sealed class Flora
     }
 
     /// <summary>Removes the plant at <paramref name="p"/> if the ground changed so it can no longer grow there.</summary>
-    public bool Validate(TilePos p) => _index.ContainsKey(Key(p)) && !PlantInfo.CanGrowAt(_world, p) && Remove(p, out _);
+    public bool Validate(TilePos p) => TryGet(p, out var plant) && !PlantInfo.CanGrowAt(_world, p, plant.Kind) && Remove(p, out _);
 
     /// <summary>Bulk load for world generation: skips per-plant checks (the generator guarantees them).</summary>
     internal void AddGenerated(List<Plant> plants)

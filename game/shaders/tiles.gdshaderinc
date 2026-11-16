@@ -29,3 +29,8 @@ vec3 tile_albedo(vec3 base, vec3 cell, vec3 world, vec3 normal, bool on_cut_leve
 	c *= mix(1.0, mix(0.86, 1.0, edge), fade);
 	return srgb_to_linear(clamp(c, 0.0, 1.0));
 }
+
+// Glowing minerals (aetherite) carry alpha < 1 in their colour: the lower, the brighter.
+vec3 tile_glow(vec4 base) {
+	return srgb_to_linear(base.rgb) * (1.0 - base.a) * 1.4;
+}

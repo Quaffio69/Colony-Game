@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Colony.Core;
@@ -151,8 +152,12 @@ public partial class Main : Node3D
     {
         var sb = new StringBuilder();
         string hover = _tool.Hovered is { } h
-            ? $"{_sim.World.Get(h)} at {h}" + (_sim.Flora.TryGet(h.Offset(0, 0, 1), out var plant) ? $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" + (Colony.Core.Nature.PlantInfo.IsGatherable(plant) ? " (ripe)" : "") : "")
+            ? $"{TileInfo.Name(_sim.World.Get(h))} at {h}" + (_sim.Flora.TryGet(h.Offset(0, 0, 1), out var plant) ? $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" + (Colony.Core.Nature.PlantInfo.IsGatherable(plant) ? " (ripe)" : "") : "")
             : "-";
+        if (_tool.Hovered is { } fh && _sim.Farms.TryGet(fh.Offset(0, 0, 1), out var crop))
+            hover += $", farm plot ({Colony.Core.Nature.PlantInfo.Name(crop).ToLowerInvariant()})";
+        if (_tool.HoveredMachine() is { Recipe: { } making } hm)
+            hover += $", {hm.Name.ToLowerInvariant()} making {making.Name.ToLowerInvariant()} ({making.Describe(hm.Batch.Units)}, {Colony.Core.Industry.Catalog.EducationName(making.Education)}; F to change)";
         string time = _paused ? "PAUSED" : $"{Speeds[_speedIndex]}x";
         string tool = _tool.ModeName(_tool.Mode);
         double seconds = _sim.Tick / (double)ColonySim.TicksPerSecond;
@@ -172,10 +177,15 @@ public partial class Main : Node3D
                 sb.AppendLine($"CAVE-IN! {last.Tiles} tiles fell {last.Drop} levels near {last.Origin} ({ago:0}s ago)");
         }
         sb.AppendLine();
-        foreach (var c in _sim.Colonists)
-            sb.AppendLine($"  {c.Name,-8} {c.Describe()}");
+        foreach (var e in _sim.Events)
+            if (_sim.Tick - e.Tick < 60 * ColonySim.TicksPerSecond) sb.AppendLine($"  * {e.Text}");
+        const int listed = 14;
+        foreach (var c in _sim.Colonists.Take(listed))
+            sb.AppendLine($"  {c.Name,-12} {c.EducationName,-9} {c.Describe()}");
+        if (_sim.Colonists.Count > listed) sb.AppendLine($"  ... and {_sim.Colonists.Count - listed} more");
         sb.AppendLine();
-        sb.AppendLine("Tab/Shift+Tab: orders   B/Shift+B: build (room, then parts; R rotates, [ ] size)   LMB: start/confirm box or place   RMB: remove box");
+        sb.AppendLine("Tab/Shift+Tab: orders and zones (dig, stairs, chop, gather, stockpile, farms)   B: build menu (workshop rooms and parts; R rotate, [ ] size)");
+        sb.AppendLine("F/Shift+F over a machine: change its recipe   LMB: start/confirm box or place   RMB: remove box");
         sb.AppendLine("Z/X while selecting: span levels");
         sb.AppendLine("Z/X: level down/up   Space: pause   1/2/3: speed   Enter: (debug) complete all");
         sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists");
@@ -203,14 +213,24 @@ public partial class Main : Node3D
     /// <summary>Builder info panel for the room under the cursor.</summary>
     private void AppendRoomPanel(StringBuilder sb, Colony.Core.Industry.Room room)
     {
-        var recipe = room.Recipe;
         int levels = room.Cells.Select(c => c.Z).Distinct().Count();
-        string In(Colony.Core.Items.ItemType t) => Colony.Core.Items.ItemInfo.Name(t).ToLowerInvariant();
+        static string In(Colony.Core.Items.ItemType t) => t.Name.ToLowerInvariant();
         sb.AppendLine($"[{room.Name}]  {room.Cells.Count} cells on {levels} level{(levels == 1 ? "" : "s")}    " +
-                      $"Status: {Colony.Core.Industry.Rooms.Status(room, _sim.Items)}");
-        var parts = room.Parts.Where(p => p.Built).OrderBy(p => p.Type).ThenByDescending(p => p.Size).GroupBy(p => p.Name)
+                      $"Status: {Colony.Core.Industry.Rooms.Status(room, _sim)}    Efficiency {room.Efficiency:P0}");
+        var parts = room.Parts.Where(p => p.Built && p.Role != Colony.Core.Industry.PartRole.Machine)
+            .OrderBy(p => p.Type.Index).ThenByDescending(p => p.Size).GroupBy(p => p.Name)
             .Select(g => $"{g.Count()} {g.Key.ToLowerInvariant()}");
-        sb.AppendLine($"   Parts: {(!parts.Any() ? "none" : string.Join(", ", parts))}    Efficiency {room.Efficiency:P0}");
+        if (parts.Any()) sb.AppendLine($"   Parts: {string.Join(", ", parts)}");
+        // Machines and what each makes, with the room's capacity per minute when every machine is manned
+        // (ignores fetching and storing walks).
+        foreach (var g in room.PartsWithRole(Colony.Core.Industry.PartRole.Machine).GroupBy(m => (m.Name, m.Recipe)).Take(6))
+        {
+            var (name, recipe) = g.Key;
+            var b = g.First().Batch;
+            double perMinute = g.Count() * b.OutCount * 60.0 * ColonySim.TicksPerSecond * room.Efficiency / b.WorkTicks;
+            sb.AppendLine($"   {g.Count()} {name.ToLowerInvariant()}: {recipe!.Describe()}  ({Colony.Core.Industry.Catalog.EducationName(recipe.Education)}), " +
+                          $"up to {perMinute:0.#}/min");
+        }
         // Blueprints: what each still needs, so it's clear whether hauling or building is the bottleneck.
         var blueprints = room.Blueprints.Select(p =>
         {
@@ -219,20 +239,14 @@ public partial class Main : Node3D
             return $"{p.Name.ToLowerInvariant()} ({state})";
         }).ToList();
         if (blueprints.Count > 0) sb.AppendLine($"   Under construction: {string.Join(", ", blueprints)}");
-        int input = Colony.Core.Industry.Rooms.Stock(room, Colony.Core.Industry.PartRole.Input, recipe.Input, _sim.Items);
-        int output = Colony.Core.Industry.Rooms.Stock(room, Colony.Core.Industry.PartRole.Output, recipe.Output, _sim.Items);
-        // Capacity with every machine manned (ignores fetching and storing walks).
-        double perMinute = 0;
-        int machines = 0;
-        foreach (var m in room.PartsWithRole(Colony.Core.Industry.PartRole.Machine))
+        string Crates(Colony.Core.Industry.PartRole role)
         {
-            var b = m.Batch;
-            perMinute += b.InCount * 60.0 * ColonySim.TicksPerSecond * room.Efficiency / b.WorkTicks;
-            machines++;
+            var held = new List<string>();
+            foreach (var crate in room.PartsWithRole(role))
+                if (_sim.Items.TryGet(crate.Cells[0], out var pile) && pile.Count > 0) held.Add($"{pile.Count} {In(pile.Type)}");
+            return held.Count == 0 ? "empty" : string.Join(", ", held);
         }
-        sb.AppendLine($"   Recipe: {recipe.InCount} {In(recipe.Input)} -> {recipe.OutCount} {In(recipe.Output)}" +
-                      (machines > 0 ? $", up to {perMinute:0} {In(recipe.Input)}/min with {machines} worker{(machines == 1 ? "" : "s")}" : "") +
-                      $"    Input: {input} {In(recipe.Input)}    Output: {output} {In(recipe.Output)}");
+        sb.AppendLine($"   Input crates: {Crates(Colony.Core.Industry.PartRole.Input)}    Output crates: {Crates(Colony.Core.Industry.PartRole.Output)}");
     }
 
     /// <summary>"Stock: Logs 40, Stone 12 (loose: Stone 30)": stored totals, then what still lies around.</summary>
@@ -244,12 +258,14 @@ public partial class Main : Node3D
         {
             var parts = new List<string>();
             for (int t = 0; t < totals.Length; t++)
-                if (totals[t] > 0) parts.Add($"{Colony.Core.Items.ItemInfo.Name((Colony.Core.Items.ItemType)t)} {totals[t]}");
-            return parts.Count == 0 ? "nothing" : string.Join(", ", parts);
+                if (totals[t] > 0) parts.Add($"{new Colony.Core.Items.ItemType((ushort)t).Name} {totals[t]}");
+            if (parts.Count == 0) return "nothing";
+            // Many kinds of goods: wrap every dozen so the HUD stays on screen.
+            return string.Join(",\n         ", parts.Chunk(12).Select(c => string.Join(", ", c)));
         }
         string looseText = List(loose);
         return $"Stock: {List(stored)}" + (looseText == "nothing" ? "" : $"    (loose: {looseText})") +
-               $"    Stockpile cells: {_sim.Stockpiles.Count}";
+               $"    Stockpile cells: {_sim.Stockpiles.Count}, farm plots: {_sim.Farms.Count}";
     }
 
     // ---- Dev aids -------------------------------------------------------------------------------
@@ -304,6 +320,8 @@ public partial class Main : Node3D
             if (Arg("--haul-demo") != null) HaulDemo();
             if (Arg("--factory-demo") != null) FactoryDemo();
             if (Arg("--parts-demo") != null) PartsDemo();
+            if (Arg("--showroom") is { } showroom) ShowroomDemo(showroom);
+            if (Arg("--build-menu") is { } menu) _tool.OpenBuildMenu(menu);
             if (int.TryParse(Arg("--ticks"), out int ticks))
                 for (int i = 0; i < ticks; i++) _sim.Step();
             if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
@@ -362,7 +380,7 @@ public partial class Main : Node3D
         var c = _sim.Colonists[0].Position;
         int g = c.Z - 1; // ground under the colonists
         var rooms = _sim.Rooms;
-        int cells = rooms.Paint(Colony.Core.Industry.RoomType.Sawmill, new TilePos(c.X + 2, c.Y - 3, g - 4), new TilePos(c.X + 8, c.Y + 2, g));
+        int cells = rooms.Paint(Colony.Core.Industry.RoomType.Carpentry, new TilePos(c.X + 2, c.Y - 3, g - 4), new TilePos(c.X + 8, c.Y + 2, g));
         // The ground here is uneven, so put each part on the first floor cell (in a fixed order) where it fits,
         // spreading them out by trying cells from different ends of the room.
         var room = rooms.All.OrderByDescending(r => r.Cells.Count).First();
@@ -408,7 +426,7 @@ public partial class Main : Node3D
         }
         var rooms = _sim.Rooms;
         rooms.InstantBuild = true; // a showroom, not a construction site
-        rooms.Paint(Colony.Core.Industry.RoomType.Sawmill, new TilePos(x0, y0, g), new TilePos(x1, y1, g));
+        rooms.Paint(Colony.Core.Industry.RoomType.Carpentry, new TilePos(x0, y0, g), new TilePos(x1, y1, g));
         int f = g + 1, x = x0 + 1;
         for (int s = 1; s <= 5; s++)
         {
@@ -427,6 +445,90 @@ public partial class Main : Node3D
         rooms.InstantBuild = false;
         _rig.Focus(SimSpace.TileCenter(new TilePos((x0 + x1) / 2, (y0 + y1) / 2, f)), 17f, yaw: 200f, pitch: -58f);
         GD.Print($"Parts demo: {rooms.All.Sum(r => r.Parts.Count)} parts, efficiency {rooms.All[0].Efficiency:P0}");
+    }
+
+    /// <summary>Dev only: flattens a pad of grass over soil at ground level g (edits tiles directly).</summary>
+    private void LevelPad(int x0, int y0, int x1, int y1, int g, int clear = 16)
+    {
+        for (int y = y0; y <= y1; y++)
+        for (int px = x0; px <= x1; px++)
+        {
+            if (!_sim.World.InBounds(px, y, g)) continue;
+            for (int z = g - 3; z <= g; z++) _sim.World.Set(px, y, z, z == g ? TileType.Grass : TileType.Soil);
+            // Everything above goes, up to the old surface (hills included), and so do plants that stood on the old
+            // ground, higher or lower, which would be left floating or buried.
+            int top = Math.Max(g + clear, _sim.World.SurfaceLevel(px, y) + 1);
+            for (int z = g + 1; z <= top && z < _sim.World.Height; z++) _sim.World.Set(px, y, z, TileType.Air);
+            for (int z = Math.Max(1, g - 48); z <= top + 1 && z < _sim.World.Height; z++) _sim.Flora.Remove(new TilePos(px, y, z), out _);
+        }
+    }
+
+    /// <summary>
+    /// Every workshop in a grid on a levelled pad, each holding every one of its stations in sizes 1-5 (one row
+    /// per station), crates, tools and a lantern; a stockpile of raw resources so the first recipes run; and
+    /// farm plots for each crop (glowcaps under a stone roof). <c>--showroom=ID</c> focuses one workshop.
+    /// </summary>
+    private void ShowroomDemo(string focus)
+    {
+        var c = _sim.Colonists[0].Position;
+        int g = c.Z - 1, cols = 4;
+        const int cellW = 24, cellD = 22;
+        var workshops = Colony.Core.Industry.Catalog.Workshops;
+        int rows = (workshops.Count + cols - 1) / cols;
+        int ox = c.X + 6, oy = c.Y - rows * cellD / 2;
+        LevelPad(ox - 40, oy - 40, ox + cols * cellW + 30, oy + rows * cellD + 30, g); // wide margins: room for the camera
+        var rooms = _sim.Rooms;
+        rooms.InstantBuild = true; // a showroom, not a construction site
+        int f = g + 1;
+        TilePos? focusAt = null;
+        for (int i = 0; i < workshops.Count; i++)
+        {
+            var w = workshops[i];
+            int x0 = ox + i % cols * cellW, y0 = oy + i / cols * cellD;
+            int stations = w.Stations.Count;
+            int y1 = y0 + 4 * stations + 2;
+            rooms.Paint(w, new TilePos(x0, y0, g), new TilePos(x0 + cellW - 3, y1, g));
+            for (int s = 0; s < stations; s++)
+            {
+                int x = x0 + 1;
+                for (int size = 1; size <= Colony.Core.Industry.PartInfo.MaxSize; size++)
+                {
+                    rooms.Place(w.Stations[s], new TilePos(x, y0 + 1 + s * 4, f), false, size);
+                    x += Colony.Core.Industry.PartInfo.Footprint(w.Stations[s], size).W + 1;
+                }
+            }
+            for (int k = 0; k < 4; k++) rooms.Place(Colony.Core.Industry.PartType.InputCrate, new TilePos(x0 + k, y1, f), false);
+            for (int k = 0; k < 2; k++) rooms.Place(Colony.Core.Industry.PartType.OutputCrate, new TilePos(x0 + cellW - 3 - k, y1, f), false);
+            rooms.Place(Colony.Core.Industry.PartType.ToolRack, new TilePos(x0 + 6, y1, f), false, 3);
+            rooms.Place(Colony.Core.Industry.PartType.Lantern, new TilePos(x0 + 10, y1, f), false);
+            if (w.Id == focus) focusAt = new TilePos(x0 + 10, y0 + 2 * stations, f);
+        }
+        rooms.InstantBuild = false;
+
+        // Raw goods next to the colony, so the unskilled first recipes start running.
+        int sx = ox - 11, sy = oy;
+        _sim.Stockpiles.AddFloorBox(new TilePos(sx, sy, g), new TilePos(sx + 7, sy + 11, g));
+        int slot = 0;
+        foreach (var item in Colony.Core.Industry.Catalog.Items)
+        {
+            if (!item.IsRaw) continue;
+            _sim.Items.Drop(new TilePos(sx + slot % 8, sy + slot / 8, f), item.Type, item.StackLimit);
+            slot++;
+        }
+        // Farms: grain and herbs in the open, glowcaps under a stone roof.
+        _sim.Farms.AddFloorBox(Colony.Core.Nature.PlantKind.Wheat, new TilePos(sx, sy + 13, g), new TilePos(sx + 7, sy + 16, g));
+        _sim.Farms.AddFloorBox(Colony.Core.Nature.PlantKind.Herbs, new TilePos(sx, sy + 18, g), new TilePos(sx + 7, sy + 20, g));
+        for (int y = sy + 22; y <= sy + 26; y++)
+        for (int x = sx; x <= sx + 7; x++) _sim.World.Set(x, y, g + 4, TileType.Stone);
+        _sim.Farms.AddFloorBox(Colony.Core.Nature.PlantKind.Glowcap, new TilePos(sx + 1, sy + 23, g), new TilePos(sx + 6, sy + 25, g));
+        // Grown crops straight away, so the models show (they are harvested and resown as usual).
+        foreach (var cell in _sim.Farms.Cells)
+            if (_sim.Farms.TryGet(cell, out var crop))
+                _sim.Flora.Add(new Colony.Core.Nature.Plant(cell, crop, (byte)(80 + (cell.X * 37 + cell.Y * 11) % 176), (byte)(cell.X * 7 + cell.Y)));
+
+        var at = focusAt ?? new TilePos(ox + cols * cellW / 2, oy + rows * cellD / 2, f);
+        _rig.Focus(SimSpace.TileCenter(at), focusAt is null ? 70f : 20f, yaw: 200f, pitch: -58f);
+        GD.Print($"Showroom: {workshops.Count} workshops, {rooms.All.Sum(r => r.Parts.Count)} parts, {_sim.Farms.Count} farm plots");
     }
 
     /// <summary>Fells the woods around the colony and zones a stockpile next to it.</summary>

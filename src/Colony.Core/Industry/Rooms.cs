@@ -16,8 +16,10 @@ public sealed class Part
     public Room Room { get; internal set; } = null!;
     public PartRole Role => PartInfo.Role(Type);
     public string Name => PartInfo.Name(Type, Size);
-    /// <summary>One batch at this machine: the room's recipe scaled by the machine's size.</summary>
-    public Recipe Batch => PartInfo.MachineRecipe(Type, Size, Room.Recipe);
+    /// <summary>What this machine makes (one of its station's recipes; null for other parts).</summary>
+    public Recipe? Recipe { get; internal set; }
+    /// <summary>One full batch at this machine: its recipe scaled by the machine's size.</summary>
+    public Batch Batch => PartInfo.MachineBatchOf(Type, Size, Recipe ?? throw new InvalidOperationException($"{Name} is not a machine"));
 
     /// <summary>Colonist operating this machine (-1 = free).</summary>
     public int ClaimedBy { get; internal set; } = -1;
@@ -46,8 +48,39 @@ public sealed class Room
     public required RoomType Type { get; init; }
     public IReadOnlyCollection<TilePos> Cells => CellSet;
     public IReadOnlyList<Part> Parts => PartList;
-    public Recipe Recipe => RoomInfo.Recipe(Type);
     public string Name => $"{RoomInfo.Name(Type)} #{Id}";
+
+    /// <summary>
+    /// What the room's input crates should hold: for each input of its built machines' recipes (in machine
+    /// then ingredient order), two full batches' worth, so the next batch is ready while one is worked.
+    /// </summary>
+    public List<(Items.ItemType Item, int Wanted)> InputNeeds()
+    {
+        var needs = new List<(Items.ItemType, int)>();
+        foreach (var m in PartList)
+        {
+            if (!m.Built || m.Role != PartRole.Machine || m.Recipe is null) continue;
+            var batch = m.Batch;
+            for (int i = 0; i < m.Recipe.Inputs.Count; i++)
+            {
+                var item = m.Recipe.Inputs[i].Item;
+                int want = 2 * batch.InCount(i), at = needs.FindIndex(n => n.Item1 == item);
+                if (at < 0) needs.Add((item, want));
+                else needs[at] = (item, needs[at].Item2 + want);
+            }
+        }
+        return needs;
+    }
+
+    /// <summary>True if some built machine's recipe takes <paramref name="item"/>.</summary>
+    public bool Needs(Items.ItemType item)
+    {
+        foreach (var m in PartList)
+            if (m.Built && m.Recipe is { } r)
+                foreach (var i in r.Inputs)
+                    if (i.Item == item) return true;
+        return false;
+    }
 
     /// <summary>Built parts with a role (blueprints don't work yet).</summary>
     public IEnumerable<Part> PartsWithRole(PartRole role) => PartList.Where(p => p.Built && p.Role == role);
@@ -300,6 +333,7 @@ public sealed class Rooms
         {
             Id = _nextPartId++, Type = type, Size = size, Origin = origin, Rotated = rotated, Cells = cells, Room = room,
             Built = InstantBuild,
+            Recipe = type.Role == PartRole.Machine ? type.Recipes[0] : null,
         };
         room.PartList.Add(part);
         foreach (var c in cells) _cellPart[c] = part;
@@ -316,6 +350,24 @@ public sealed class Rooms
         part.ClaimedBy = -1;
         part.Working = false;
         Version++;
+    }
+
+    /// <summary>Sets what a machine makes (one of its station's recipes). Work in progress finishes as planned.</summary>
+    public bool SetRecipe(Part machine, Recipe recipe)
+    {
+        if (machine.Removed || machine.Role != PartRole.Machine || recipe.Station != machine.Type || machine.Recipe == recipe) return false;
+        machine.Recipe = recipe;
+        Version++;
+        return true;
+    }
+
+    /// <summary>Steps a machine to its station's next (or previous) recipe.</summary>
+    public bool CycleRecipe(Part machine, bool back = false)
+    {
+        if (machine.Recipe is not { } r) return false;
+        var list = machine.Type.Recipes;
+        int i = list.IndexOf(r);
+        return SetRecipe(machine, list[(i + (back ? list.Count - 1 : 1)) % list.Count]);
     }
 
     /// <summary>A builder finished the blueprint (its materials are used up by the caller).</summary>
@@ -352,20 +404,40 @@ public sealed class Rooms
     // ---- Status ----------------------------------------------------------------------------------------
 
     /// <summary>What a room is doing or missing, most important first (for the builder's info panel).</summary>
-    public static string Status(Room room, Items.ItemPiles items)
+    public static string Status(Room room, ColonySim sim)
     {
-        var recipe = room.Recipe;
-        int machines = room.Count(PartRole.Machine);
-        if (machines == 0) return Pending(room, PartRole.Machine) ? "machine under construction" : "needs a machine";
-        if (room.Count(PartRole.Input) == 0) return Pending(room, PartRole.Input) ? "input crate under construction" : "needs an input crate";
-        if (room.Count(PartRole.Output) == 0) return Pending(room, PartRole.Output) ? "output crate under construction" : "needs an output crate";
-        int manned = room.PartsWithRole(PartRole.Machine).Count(m => m.ClaimedBy >= 0);
-        if (manned > 0) return $"working ({manned}/{machines} machines manned)";
+        var items = sim.Items;
+        var machines = room.PartsWithRole(PartRole.Machine).ToList();
+        if (machines.Count == 0) return Pending(room, PartRole.Machine) ? "machine under construction" : "needs a machine";
+        int crates = room.Count(PartRole.Input);
+        if (crates == 0) return Pending(room, PartRole.Input) ? "input crate under construction" : "needs an input crate";
+        bool makesGoods = machines.Any(m => m.Recipe!.Kind == Items.ItemKind.Good);
+        if (makesGoods && room.Count(PartRole.Output) == 0)
+            return Pending(room, PartRole.Output) ? "output crate under construction" : "needs an output crate";
+        int distinct = room.InputNeeds().Count;
+        if (crates < distinct) return $"needs {distinct} input crates (one per input), has {crates}";
+        int manned = machines.Count(m => m.ClaimedBy >= 0);
+        if (manned > 0) return $"working ({manned}/{machines.Count} machines manned)";
+
+        // Why nobody is working: the first idle machine's first problem.
+        foreach (var m in machines)
+        {
+            var r = m.Recipe!;
+            if (!sim.Colonists.Any(c => c.Education >= r.Education))
+                return $"{r.Name.ToLowerInvariant()} needs a {Catalog.EducationName(r.Education)} worker";
+            if (r.Kind == Items.ItemKind.Education && sim.StudentsAvailable(r) == 0)
+                return $"no colonists ready to become {r.Name}";
+        }
         // Machines take partial batches when nothing more is coming, so one unit is the least they can start on.
-        if (room.PartsWithRole(PartRole.Input).All(c => !items.TryGet(c.Cells[0], out var p) || p.Type != recipe.Input || p.Available < recipe.InCount))
-            return $"waiting for {Items.ItemInfo.Name(recipe.Input).ToLowerInvariant()}";
-        int smallestOut = room.PartsWithRole(PartRole.Machine).Min(m => m.Batch.OutCount);
-        if (room.PartsWithRole(PartRole.Output).All(c => items.RoomAt(c.Cells[0], recipe.Output) < smallestOut))
+        var missing = new List<string>();
+        foreach (var m in machines)
+            foreach (var ing in m.Recipe!.Inputs)
+                if (Stock(room, PartRole.Input, ing.Item, items, available: true) < ing.Count && !missing.Contains(ing.Item.Name.ToLowerInvariant()))
+                    missing.Add(ing.Item.Name.ToLowerInvariant());
+        if (missing.Count > 0 && machines.All(m => m.Recipe!.Inputs.Any(i => Stock(room, PartRole.Input, i.Item, items, available: true) < i.Count)))
+            return $"waiting for {string.Join(", ", missing)}";
+        var goods = machines.Where(m => m.Recipe!.Kind == Items.ItemKind.Good).ToList();
+        if (goods.Count > 0 && goods.All(m => room.PartsWithRole(PartRole.Output).All(c => items.RoomAt(c.Cells[0], m.Recipe!.Output) < m.Recipe!.OutCount)))
             return "output crates full";
         return "waiting for workers";
     }
@@ -373,11 +445,11 @@ public sealed class Rooms
     private static bool Pending(Room room, PartRole role) => room.Blueprints.Any(p => p.Role == role);
 
     /// <summary>Units of <paramref name="type"/> in the room's crates with the given role.</summary>
-    public static int Stock(Room room, PartRole role, Items.ItemType type, Items.ItemPiles items)
+    public static int Stock(Room room, PartRole role, Items.ItemType type, Items.ItemPiles items, bool available = false)
     {
         int n = 0;
         foreach (var crate in room.PartsWithRole(role))
-            if (items.TryGet(crate.Cells[0], out var pile) && pile.Type == type) n += pile.Count;
+            if (items.TryGet(crate.Cells[0], out var pile) && pile.Type == type) n += available ? pile.Available : pile.Count;
         return n;
     }
 
@@ -399,7 +471,7 @@ public sealed class Rooms
         var aux = new List<(PartType Type, float Bonus, int Coverage)>();
         foreach (var p in room.PartList)
             if (p.Built && p.Role == PartRole.Auxiliary) aux.Add((p.Type, PartInfo.Bonus(p.Type, p.Size), PartInfo.Coverage(p.Type, p.Size)));
-        aux.Sort((a, b) => a.Type != b.Type ? a.Type.CompareTo(b.Type) : b.Bonus.CompareTo(a.Bonus));
+        aux.Sort((a, b) => a.Type != b.Type ? a.Type.Index.CompareTo(b.Type.Index) : b.Bonus.CompareTo(a.Bonus));
 
         float e = 1f, sum = 0f;
         int remaining = 0;

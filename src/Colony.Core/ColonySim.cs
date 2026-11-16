@@ -69,6 +69,9 @@ public sealed class ColonySim
     /// <summary>Factory rooms and their parts.</summary>
     public Rooms Rooms { get; }
 
+    /// <summary>Farm plots (grain, herbs, glowcaps).</summary>
+    public Farms Farms { get; }
+
     /// <summary>Share of dug stone tiles that leave a usable stone (the rest is rubble).</summary>
     public const float StoneYield = 0.5f;
 
@@ -81,9 +84,12 @@ public sealed class ColonySim
         Items = new ItemPiles(world);
         Stockpiles = new Stockpiles(world);
         Rooms = new Rooms(world);
-        // A floor cell is either storage or factory, never both.
-        Stockpiles.IsBlocked = c => Rooms.RoomAt(c) is not null;
-        Rooms.IsBlocked = Stockpiles.Contains;
+        Farms = new Farms(world);
+        // A floor cell is storage, factory or farm: never two of them.
+        Stockpiles.IsBlocked = c => Rooms.RoomAt(c) is not null || Farms.Contains(c);
+        Rooms.IsBlocked = c => Stockpiles.Contains(c) || Farms.Contains(c);
+        Farms.IsBlocked = c => Stockpiles.Contains(c) || Rooms.RoomAt(c) is not null;
+        Designations.CanSow = c => Farms.TryGet(c, out var crop) && !Flora.TryGet(c, out _) && PlantInfo.CanGrowAt(World, c, crop);
         _caveIns = new CaveIns(world);
     }
 
@@ -107,8 +113,16 @@ public sealed class ColonySim
             if (Flora.TryGet(p, out var plant) && PlantInfo.IsGatherable(plant) && PlantInfo.Harvest(plant.Kind) is { } crop)
             {
                 Items.Drop(p, crop, PlantInfo.HarvestYield(plant));
-                Flora.Update(plant with { Growth = PlantInfo.GatheredGrowth });
+                // Crops are harvested whole (the plot is sown again); wild plants are cut back and regrow.
+                if (PlantInfo.IsCrop(plant.Kind)) Flora.Remove(p, out _);
+                else Flora.Update(plant with { Growth = PlantInfo.GatheredGrowth });
             }
+            return true;
+        }
+        if (kind == DesignationKind.Sow)
+        {
+            Designations.Complete(p);
+            Farms.Sow(p, Flora);
             return true;
         }
 
@@ -131,6 +145,7 @@ public sealed class ColonySim
     public int WorkTicks(TilePos target, DesignationKind kind)
     {
         if (kind == DesignationKind.Gather) return 30;
+        if (kind == DesignationKind.Sow) return 20;
         if (kind != DesignationKind.Chop) return Designations.WorkTicks(kind, World.Get(target));
         if (!Flora.TryGet(target, out var tree)) return 1;
         return 40 + (int)(PlantInfo.MatureHeight(tree.Kind) * tree.Growth / 255f * 14f);
@@ -143,8 +158,17 @@ public sealed class ColonySim
     /// <summary>Item left by removing the rock at <paramref name="p"/> (digging it out or carving it into stairs).</summary>
     public static ItemType? MiningYield(TilePos p, TileType removed) => removed switch
     {
-        TileType.Ore => ItemType.Ore,
         TileType.Stone when Procedural.Noise.Hash(p.X, p.Y, p.Z, 0x5703E) < StoneYield => ItemType.Stone,
+        TileType.Clay => ItemType.Clay,
+        TileType.Sand => ItemType.Sand,
+        TileType.CopperOre => ItemType.CopperOre,
+        TileType.TinOre => ItemType.TinOre,
+        TileType.IronOre => ItemType.IronOre,
+        TileType.SilverOre => ItemType.SilverOre,
+        TileType.GoldOre => ItemType.GoldOre,
+        TileType.Quartz => ItemType.Quartz,
+        TileType.Sulfur => ItemType.Sulfur,
+        TileType.Aetherite => ItemType.Aetherite,
         _ => null,
     };
 
@@ -208,8 +232,12 @@ public sealed class ColonySim
         long floraMs = clock.ElapsedMilliseconds;
         int trees = sim.Flora.All.Count(p => PlantInfo.IsTree(p.Kind));
 
+        // Founders: one Scholar and a couple of Literates lead the party (schools need teachers; see Graduate).
         foreach (var p in sim.FindSpawnPoints(generated.Terrain.SpawnX, generated.Terrain.SpawnY, colonists))
-            sim.AddColonist(NameGenerator.Generate(settings.Seed, sim._colonists.Count), p);
+        {
+            int n = sim._colonists.Count;
+            sim.AddColonist(NameGenerator.Generate(settings.Seed, n), p, education: n == 0 ? 2 : n <= 2 ? 1 : 0);
+        }
 
         clock.Restart();
         sim.Connectivity.Update();
@@ -224,17 +252,123 @@ public sealed class ColonySim
     /// <summary>Human-readable timings from <see cref="Generate"/>.</summary>
     public string StartupReport { get; private set; } = "";
 
-    public Colonist AddColonist(string name, TilePos position)
+    public Colonist AddColonist(string name, TilePos position, int education = 0, bool automaton = false)
     {
-        var c = new Colonist(_colonists.Count, name, position);
-        _colonists.Add(c);
+        var c = new Colonist(_colonists.Count + _arriving.Count, name, position, education) { IsAutomaton = automaton };
+        if (_stepping) _arriving.Add(c); // joining mid-tick (e.g. an automaton finished): starts next tick
+        else _colonists.Add(c);
         return c;
+    }
+
+    private readonly List<Colonist> _arriving = new();
+    private bool _stepping;
+
+    // ---- Events -----------------------------------------------------------------------------------------
+
+    private readonly List<(long Tick, string Text)> _events = new();
+    private const int EventsKept = 12;
+
+    /// <summary>Recent colony events (graduations, arrivals), oldest first.</summary>
+    public IReadOnlyList<(long Tick, string Text)> Events => _events;
+
+    internal void Announce(string text)
+    {
+        _events.Add((Tick, text));
+        if (_events.Count > EventsKept) _events.RemoveAt(0);
+    }
+
+    // ---- Education --------------------------------------------------------------------------------------
+
+    private readonly int[] _reservedStudents = new int[8];
+
+    /// <summary>The education level an Academy recipe teaches (its output item names a level).</summary>
+    public static int Teaches(Recipe recipe) => Catalog.Education(recipe.Output.Name);
+
+    /// <summary>Colonists one level below what <paramref name="recipe"/> teaches, not already booked for a class.</summary>
+    public int StudentsAvailable(Recipe recipe)
+    {
+        int level = Teaches(recipe);
+        int n = 0;
+        foreach (var c in _colonists)
+            if (!c.IsAutomaton && c.Education == level - 1) n++;
+        return Math.Max(0, n - _reservedStudents[level]);
+    }
+
+    internal void ReserveStudents(Recipe recipe, int units) => _reservedStudents[Teaches(recipe)] += units;
+
+    internal void ReleaseStudents(Recipe recipe, int units)
+    {
+        int level = Teaches(recipe);
+        _reservedStudents[level] = Math.Max(0, _reservedStudents[level] - units);
+    }
+
+    /// <summary>A class finished: up to <paramref name="units"/> students (lowest id first) rise to the level taught.</summary>
+    internal void Graduate(Recipe recipe, int units)
+    {
+        ReleaseStudents(recipe, units);
+        int level = Teaches(recipe);
+        foreach (var c in _colonists)
+        {
+            if (units == 0) break;
+            if (c.IsAutomaton || c.Education != level - 1) continue;
+            c.Education = level;
+            units--;
+            Announce($"{c.Name} graduated from the Academy: now a {Catalog.EducationName(level)}");
+        }
+    }
+
+    /// <summary>Worker items (automatons) step off the assembly frame and join the colony as unskilled workers.</summary>
+    internal void AddWorkers(Recipe recipe, int units, TilePos at)
+    {
+        for (int i = 0; i < units; i++)
+        {
+            int n = _colonists.Count(c => c.IsAutomaton) + _arriving.Count(c => c.IsAutomaton) + 1;
+            AddColonist($"{recipe.Output.Name} {n}", at, automaton: true);
+            Announce($"{recipe.Output.Name} {n} awakens and joins the colony");
+        }
+    }
+
+    private int _eventRoomsVersion = -1;
+    private bool _magisterArrived;
+
+    /// <summary>
+    /// Story events driven by what the colony has built. The first Magister can't be taught (only Magisters
+    /// teach Magisters), so one arrives once the Academy has an attunement circle to work at.
+    /// </summary>
+    private void CheckEvents()
+    {
+        if (_magisterArrived || Rooms.Version == _eventRoomsVersion) return;
+        _eventRoomsVersion = Rooms.Version;
+        int magister = Catalog.EducationLevels.Count - 1;
+        if (_colonists.Any(c => c.Education >= magister))
+        {
+            _magisterArrived = true;
+            return;
+        }
+        foreach (var room in Rooms.All)
+            foreach (var part in room.Parts)
+            {
+                if (!part.Built || part.Recipe is null || part.Type.Recipes.All(r => r.Kind != ItemKind.Education || Teaches(r) < magister)) continue;
+                var at = Movement.IsStandable(World, part.Origin) ? part.Origin : room.Cells.First();
+                var name = NameGenerator.Generate(unchecked((int)Tick * 31 + 7), _colonists.Count);
+                AddColonist(name, at, education: magister);
+                Announce($"A wandering Magister, {name}, is drawn to the {part.Name.ToLowerInvariant()} and joins the colony");
+                _magisterArrived = true;
+                return;
+            }
     }
 
     public void Step()
     {
         Tick++;
         _tickNodeStart = Pathfinder.NodesExpanded;
+        Farms.Tick(Tick, Flora, Designations);
+        CheckEvents();
+        if (_arriving.Count > 0)
+        {
+            _colonists.AddRange(_arriving);
+            _arriving.Clear();
+        }
 
         // Reachability data is only needed by colonists looking for work, so refresh it lazily.
         bool anyIdle = false;
@@ -245,7 +379,15 @@ public sealed class ColonySim
             JobBoard.Update(World, Designations, Connectivity); // no-op unless something changed
         }
 
-        foreach (var c in _colonists) c.Tick(this);
+        _stepping = true;
+        try
+        {
+            foreach (var c in _colonists) c.Tick(this);
+        }
+        finally
+        {
+            _stepping = false;
+        }
     }
 
     /// <summary>Standable surface tiles nearest to (x, y), spiralling outwards, one per column.</summary>

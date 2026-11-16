@@ -16,6 +16,8 @@ public enum DesignationKind : byte
     Chop,
     /// <summary>Harvest the ripe plant in this (open) cell (berries, fiber); the plant is cut back, not removed.</summary>
     Gather,
+    /// <summary>Plant a farm plot's crop in this (open) cell. Placed by <see cref="Nature.Farms"/>, not the player.</summary>
+    Sow,
 }
 
 /// <summary>
@@ -45,7 +47,11 @@ public sealed class Designations
     public bool Designate(TilePos p, DesignationKind kind = DesignationKind.Dig)
     {
         if (!_world.InBounds(p)) return false;
-        if (IsPlantOrder(kind))
+        if (kind == DesignationKind.Sow)
+        {
+            if (CanSow?.Invoke(p) != true) return false;
+        }
+        else if (IsPlantOrder(kind))
         {
             if (Flora is null || !Flora.TryGet(p, out var plant) || !Accepts(kind, plant)) return false;
         }
@@ -79,7 +85,10 @@ public sealed class Designations
     public int CancelBox(TilePos a, TilePos b) => ForBox(a, b, Cancel);
 
     /// <summary>Orders that target a plant (standing in an open cell) rather than a tile.</summary>
-    public static bool IsPlantOrder(DesignationKind kind) => kind is DesignationKind.Chop or DesignationKind.Gather;
+    public static bool IsPlantOrder(DesignationKind kind) => kind is DesignationKind.Chop or DesignationKind.Gather or DesignationKind.Sow;
+
+    /// <summary>Says whether a cell is an empty farm plot (validates <see cref="DesignationKind.Sow"/>; set by <see cref="ColonySim"/>).</summary>
+    public Func<TilePos, bool>? CanSow { get; set; }
 
     private static bool Accepts(DesignationKind kind, Nature.Plant plant) => kind == DesignationKind.Chop
         ? Nature.PlantInfo.IsTree(plant.Kind)
@@ -189,9 +198,11 @@ public sealed class Designations
     {
         int dig = tile switch
         {
-            TileType.Grass or TileType.Soil => 25,
+            TileType.Grass or TileType.Soil or TileType.Sand => 25,
+            TileType.Clay => 35,
             TileType.Stone => 60,
-            TileType.Ore => 80,
+            TileType.Aetherite => 120,
+            _ when TileInfo.IsMineral(tile) => 80,
             _ when TileInfo.IsStair(tile) => 20, // already carved: only reshaping or clearing it
             _ => 40,
         };

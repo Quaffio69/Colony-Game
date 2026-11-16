@@ -43,7 +43,7 @@ public static class WorldGenerator
         int x1 = Math.Min(x0 + Chunk.Size, s.Width), y1 = Math.Min(y0 + Chunk.Size, s.Depth);
         int n = Chunk.Size * Chunk.Size;
         Span<int> surface = stackalloc int[n], stoneTop = stackalloc int[n];
-        Span<byte> top = stackalloc byte[n];
+        Span<byte> top = stackalloc byte[n], sub = stackalloc byte[n];
         int minStone = int.MaxValue, maxSurface = -1;
 
         for (int y = y0; y < y1; y++)
@@ -51,7 +51,8 @@ public static class WorldGenerator
         {
             int i = (y - y0) * Chunk.Size + (x - x0);
             int sz = t.SurfaceAt(x, y);
-            var (topType, soil) = SurfaceMaterial(s, t, x, y, sz);
+            var (topType, soil, subType) = SurfaceMaterial(s, t, x, y, sz);
+            sub[i] = (byte)subType;
             surface[i] = sz;
             top[i] = (byte)topType;
             stoneTop[i] = sz - soil;
@@ -78,7 +79,7 @@ public static class WorldGenerator
                 int zEnd = Math.Min(zHi, surface[i]);
                 for (int z = zLo; z <= zEnd; z++)
                 {
-                    var type = z == surface[i] ? (TileType)top[i] : z > stoneTop[i] ? TileType.Soil : TileType.Stone;
+                    var type = z == surface[i] ? (TileType)top[i] : z > stoneTop[i] ? (TileType)sub[i] : TileType.Stone;
                     tiles[Chunk.Index(x - x0, y - y0, z - zLo)] = type;
                 }
             }
@@ -86,11 +87,17 @@ public static class WorldGenerator
         }
     }
 
-    /// <summary>Top tile and how many levels of soil (top tile included) sit on the stone.</summary>
-    private static (TileType Top, int Soil) SurfaceMaterial(WorldGenSettings s, Terrain t, int x, int y, int surface)
+    /// <summary>
+    /// Top tile, how many levels of loose ground (top tile included) sit on the stone, and what fills those
+    /// levels under the top. River channels are sand over clay, lake basins clay; flat ground right by the
+    /// water is beach sand; elsewhere soil, with clay beds in patches of it.
+    /// </summary>
+    private static (TileType Top, int Soil, TileType Sub) SurfaceMaterial(WorldGenSettings s, Terrain t, int x, int y, int surface)
     {
-        var kind = t.Kind[y * s.Width + x];
-        if (kind != SurfaceKind.Land) return (TileType.Soil, 2); // mud under (future) water
+        int i = y * s.Width + x;
+        var kind = t.Kind[i];
+        if (kind == SurfaceKind.RiverBed) return (TileType.Sand, 3, TileType.Clay);
+        if (kind == SurfaceKind.LakeBed) return (TileType.Clay, 3, TileType.Clay);
 
         int slope = 0;
         if (x > 0) slope = Math.Max(slope, Math.Abs(t.SurfaceAt(x - 1, y) - surface));
@@ -98,9 +105,13 @@ public static class WorldGenerator
         if (y > 0) slope = Math.Max(slope, Math.Abs(t.SurfaceAt(x, y - 1) - surface));
         if (y < s.Depth - 1) slope = Math.Max(slope, Math.Abs(t.SurfaceAt(x, y + 1) - surface));
 
-        if (slope >= 3 || surface >= RockLine(s)) return (TileType.Stone, 0); // cliffs and peaks: bare rock
+        if (slope >= 3 || surface >= RockLine(s)) return (TileType.Stone, 0, TileType.Stone); // cliffs and peaks: bare rock
         int soil = 1 + (slope <= 1 ? 2 : 0) + (int)(Noise.Hash(x, y, 7, s.Seed) * 2); // 1..4
-        return (TileType.Grass, soil);
+        if (t.WaterDistance[i] <= 1 && slope <= 1) return (TileType.Sand, soil, TileType.Sand); // beach
+        // Clay beds: patches of the soil layer, commoner in damp ground near water.
+        float damp = 1f - Math.Min(1f, t.WaterDistance[i] / 40f);
+        bool clay = Noise.Value2D(x / 23f, y / 23f, s.Seed + 811) > 0.74f - 0.14f * damp;
+        return (TileType.Grass, Math.Max(soil, clay ? 3 : 1), clay ? TileType.Clay : TileType.Soil);
     }
 
     /// <summary>
@@ -122,7 +133,8 @@ public static class WorldGenerator
         for (int gx = gx0; gx <= gx1; gx++)
         {
             float depth01 = 1f - Math.Clamp((gz + 0.5f) * DepositCell / s.Height, 0f, 1f);
-            if (Noise.Hash(gx, gy, gz, s.Seed + 501) > 0.02f + 0.12f * depth01) continue;
+            if (Noise.Hash(gx, gy, gz, s.Seed + 501) > 0.07f + 0.16f * depth01) continue;
+            var mineral = DepositMineral(1f - depth01, Noise.Hash(gx, gy, gz, s.Seed + 509));
 
             float px = (gx + Noise.Hash(gx, gy, gz, s.Seed + 502)) * DepositCell;
             float py = (gy + Noise.Hash(gx, gy, gz, s.Seed + 503)) * DepositCell;
@@ -141,9 +153,38 @@ public static class WorldGenerator
                 float dx = (x + 0.5f - px) / rx, dy = (y + 0.5f - py) / ry, dz = (z + 0.5f - pz) / rz;
                 float lumpy = 0.75f + 0.5f * Noise.Hash(x, y, z, s.Seed + 508);
                 if (dx * dx + dy * dy + dz * dz > lumpy) continue;
-                if (world.Get(x, y, z) == TileType.Stone) world.SetForGeneration(x, y, z, TileType.Ore);
+                if (world.Get(x, y, z) == TileType.Stone) world.SetForGeneration(x, y, z, mineral);
             }
         }
+    }
+
+    /// <summary>
+    /// Which mineral a deposit is, by height in the world (0 = bottom, 1 = top) and a random pick weighted by
+    /// stratum: copper and tin near the surface, iron in the middle, silver, gold and sulfur deep, aetherite
+    /// only at the very bottom; quartz geodes anywhere.
+    /// </summary>
+    public static TileType DepositMineral(float height01, float pick)
+    {
+        Span<(TileType Type, float Weight)> table =
+        [
+            (TileType.Quartz, 1f),
+            (TileType.CopperOre, height01 > 0.45f ? 3f : 0.3f),
+            (TileType.TinOre, height01 > 0.45f ? 2f : 0.2f),
+            (TileType.IronOre, height01 is > 0.25f and < 0.8f ? 3f : 0.4f),
+            (TileType.SilverOre, height01 < 0.5f ? 1.5f : 0f),
+            (TileType.GoldOre, height01 < 0.4f ? 1f : 0f),
+            (TileType.Sulfur, height01 < 0.35f ? 1.5f : 0f),
+            (TileType.Aetherite, height01 < 0.18f ? 2f : 0f),
+        ];
+        float total = 0;
+        foreach (var (_, w) in table) total += w;
+        float at = pick * total;
+        foreach (var (type, w) in table)
+        {
+            if (at < w) return type;
+            at -= w;
+        }
+        return TileType.Quartz;
     }
 
     private static int FloorDiv(int a, int b) => a >= 0 ? a / b : (a - b + 1) / b;

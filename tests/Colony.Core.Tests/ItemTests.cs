@@ -36,13 +36,13 @@ public class ItemTests
     public void Digging_LeavesStoneSometimes_AndOreAlways()
     {
         var sim = Meadow();
-        for (int x = 2; x < 22; x++) sim.World.Set(x, 5, 2, TileType.Ore);
+        for (int x = 2; x < 22; x++) sim.World.Set(x, 5, 2, TileType.CopperOre);
         sim.Designations.DesignateBox(new TilePos(2, 4, 2), new TilePos(21, 5, 3)); // 2 rows, grass + rock
         foreach (var p in sim.Designations.All.Keys.OrderByDescending(p => p.Z).ToList()) sim.CompleteDesignation(p);
 
         var totals = sim.Items.Totals();
-        Assert.Equal(20, totals[(int)ItemType.Ore]);
-        Assert.InRange(totals[(int)ItemType.Stone], 4, 16); // ~half of the 20 stone tiles
+        Assert.Equal(20, totals[ItemType.CopperOre.Index]);
+        Assert.InRange(totals[ItemType.Stone.Index], 4, 16); // ~half of the 20 stone tiles
         AssertNoDanglingReservations(sim);
     }
 
@@ -78,17 +78,19 @@ public class ItemTests
         sim.Flora.Add(ripeBerries);
         sim.Flora.Add(reeds);
         sim.Flora.Add(new Plant(new TilePos(6, 4, 4), PlantKind.BerryBush, 100, 0)); // unripe
-        sim.Flora.Add(new Plant(new TilePos(7, 4, 4), PlantKind.Fern, 255, 0));      // nothing to gather
+        var ferns = new Plant(new TilePos(7, 4, 4), PlantKind.Fern, 255, 0);         // wild herbs
+        sim.Flora.Add(ferns);
         sim.Flora.Add(new Plant(new TilePos(8, 4, 4), PlantKind.Oak, 255, 0));       // a tree: chop, not gather
 
-        Assert.Equal(2, sim.Designations.DesignatePlantArea(DesignationKind.Gather, 0, 0, 20, 20));
+        Assert.Equal(3, sim.Designations.DesignatePlantArea(DesignationKind.Gather, 0, 0, 20, 20));
         sim.AddColonist("Gatherer", new TilePos(10, 10, 4));
         for (int i = 0; i < 3000 && sim.Designations.Count > 0; i++) sim.Step();
         Assert.Equal(0, sim.Designations.Count);
 
         var totals = sim.Items.Totals();
-        Assert.Equal(PlantInfo.HarvestYield(ripeBerries), totals[(int)ItemType.Berries]);
-        Assert.Equal(PlantInfo.HarvestYield(reeds), totals[(int)ItemType.Fiber]);
+        Assert.Equal(PlantInfo.HarvestYield(ripeBerries), totals[ItemType.Berries.Index]);
+        Assert.Equal(PlantInfo.HarvestYield(reeds), totals[ItemType.Fiber.Index]);
+        Assert.Equal(PlantInfo.HarvestYield(ferns), totals[ItemType.Herbs.Index]);
         Assert.True(sim.Flora.TryGet(ripeBerries.Position, out var bush));
         Assert.Equal(PlantInfo.GatheredGrowth, bush.Growth);
         Assert.False(PlantInfo.IsGatherable(bush));
@@ -120,12 +122,12 @@ public class ItemTests
         sim.Items.Drop(new TilePos(10, 10, 9), ItemType.Stone, 60); // dropped from mid-air, more than one stack
         Assert.True(sim.Items.TryGet(new TilePos(10, 10, 4), out var first));
         Assert.Equal(ItemInfo.StackLimit(ItemType.Stone), first.Count);
-        Assert.Equal(60, sim.Items.Totals()[(int)ItemType.Stone]);
+        Assert.Equal(60, sim.Items.Totals()[ItemType.Stone.Index]);
         Assert.Equal(3, sim.Items.Count);
 
         // Logs never merge into a stone pile.
         sim.Items.Drop(new TilePos(10, 10, 4), ItemType.Log, 2);
-        Assert.Equal(2, sim.Items.Totals()[(int)ItemType.Log]);
+        Assert.Equal(2, sim.Items.Totals()[ItemType.Log.Index]);
         Assert.True(sim.Items.TryGet(new TilePos(10, 10, 4), out var still) && still.Type == ItemType.Stone);
         AssertNoDanglingReservations(sim);
     }
@@ -156,7 +158,7 @@ public class ItemTests
         for (int t = 0; t < 30_000 && !Done(); t++) sim.Step();
         Assert.True(Done(), $"designations left {sim.Designations.Count}, loose logs {Loose()}");
 
-        var stored = sim.Items.Totals(sim.Stockpiles.Contains)[(int)ItemType.Log];
+        var stored = sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Log.Index];
         Assert.Equal(expected, stored);
         Assert.All(sim.Colonists, c => Assert.Equal(0, c.CarryingCount));
         AssertNoDanglingReservations(sim);
@@ -178,7 +180,7 @@ public class ItemTests
 
         Assert.True(sim.Items.TryGet(new TilePos(4, 4, 4), out var stored));
         Assert.Equal(25, stored.Count);
-        Assert.Equal(40, sim.Items.Totals()[(int)ItemType.Stone]); // nothing lost
+        Assert.Equal(40, sim.Items.Totals()[ItemType.Stone.Index]); // nothing lost
         Assert.All(sim.Colonists, c => Assert.Equal(ColonistTask.None, c.Task));
         AssertNoDanglingReservations(sim);
     }

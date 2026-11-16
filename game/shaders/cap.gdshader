@@ -7,7 +7,7 @@ render_mode cull_back;
 #include "res://shaders/tiles.gdshaderinc"
 
 uniform sampler2D tiles : filter_nearest;
-uniform vec3 palette[8];
+uniform vec4 palette[32]; // rgb: sRGB tile colour; a < 1 glows (aetherite)
 uniform float level;
 
 varying vec3 v_world;
@@ -22,6 +22,7 @@ void fragment() {
 	if (t == 0) {
 		discard;
 	}
-	ALBEDO = tile_albedo(palette[t], vec3(float(cell.x), level, float(cell.y)), v_world, vec3(0.0, 1.0, 0.0), true);
+	ALBEDO = tile_albedo(palette[t].rgb, vec3(float(cell.x), level, float(cell.y)), v_world, vec3(0.0, 1.0, 0.0), true);
+	EMISSION = tile_glow(palette[t]);
 	ROUGHNESS = 0.9;
 }

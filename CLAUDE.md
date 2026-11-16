@@ -87,30 +87,43 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   walkable cell, resting on a floor. Drops settle downward and spill to nearby cells when a stack is full.
   `Reserved` (promised to a hauler picking up) and `Incoming` (space promised to a delivery) keep haulers
   from colliding; every reservation must be released on completion or `Colonist.Abandon`, and carried loads
-  are dropped, never lost. Digging stone leaves stone 50% of the time, ore always; felling leaves logs scaled
-  by tree size (`ColonySim.MiningYield`/`LogYield`). Piles re-settle when their ground changes (digs,
+  are dropped, never lost. Item kinds are data: `ItemType` is an index into `Industry.Catalog` (well-known
+  ones as `ItemType.Log` etc.). Digging stone leaves stone 50% of the time, clay/sand/minerals always; felling
+  leaves logs scaled by tree size (`ColonySim.MiningYield`/`LogYield`). Piles re-settle when their ground changes (digs,
   cave-ins). `Stockpiles` are zoned floor cells (all types for now); `Hauling.Plans` pairs the nearest loose
   piles with the nearest stockpile cell with room (linear scans; spatial index is the scale-up path).
   Colonists with `Id % 3 == 2` prefer hauling until job priorities exist.
+- **Production tree is data (`data/tech-tree.json`, embedded in Core, loaded by `Industry.Catalog`):** items
+  (stack/carry sizes, pile model, colour), 12 broad DF-style workshops (`RoomType`), their 32 stations
+  (`PartType`s with role Machine; build material by size) and 60 recipes (multi-input `Ingredient`s, output
+  count, labour ticks, education). Adding a product is one item + one recipe line; tiers are computed. Load
+  errors throw naming the entry. Tests check the tree bootstraps from raw resources and batches fit crates.
 - **Factory builder (`Industry`):** a `Room` is a typed set of walkable floor cells that is always
   contiguous under the movement rules (so it may span levels joined by stairs/steps). `Rooms.Paint` takes
   every walkable cell in a click-click box (all its levels), merges into touching same-type rooms and splits
   disconnected pieces; `Erase`/lost floor (`ValidateCell`, wired into digs and cave-ins) re-split, and parts
   follow their piece or are removed if cut. Rooms and stockpiles never overlap. Parts (`PartInfo`) have
-  footprints + rotation and a role: Machine (worker processes the room's `Recipe` in batches), Auxiliary
+  footprints + rotation and a role: Machine (a station of the room's workshop; each placed machine is set to one
+  of its station's recipes, `Rooms.SetRecipe`/`CycleRecipe`, F in game; it runs it in batches), Auxiliary
   (covers N machine tiles with a bonus; per family the best are assigned first, so efficiency scales with the
-  room, not raw count, and lesser extras never hurt), Input crate (haulers fill it with
-  the recipe input from loose piles, stockpiles or other factories' output crates; this is the factory
+  room, not raw count, and lesser extras never hurt), Input crate (one input each: `Hauling.InputDemands` fills crates
+  towards two batches of every input the machines need, keeping an empty crate per input that has none, so
+  a recipe needs at least one crate per input; inputs no machine needs are hauled out; sources are loose piles, stockpiles or other factories' output crates; this is the factory
   link point, conveyors plug in here later), Output crate (haulers empty it). Workers loop: reserve batch at
-  input crate + space at output crate + claim machine (biggest free machine first), fetch, work
+  every input (one pickup per crate) + space at output crate + claim machine (biggest free machine first),
+  fetch each, work
   `WorkTicks / Efficiency`, store; a partial batch is allowed when the crate isn't being refilled, so
-  remainders never strand. **Part sizes (1-5)** are the core trade-off: bigger machines cost more per tile
+  remainders never strand. **Education** (`Colonist.Education`, levels from the catalog) gates recipes, not
+  rooms. Academy recipes promote colonists one level (students = colonists one level below, reserved per
+  class); founders are 1 Scholar + 2 Literates; the first Magister arrives (`ColonySim.CheckEvents`) once an
+  Academy attunement circle is built. Worker items (automatons) join as unskilled colonists that can't be
+  taught. `ColonySim.Events` feeds the HUD. **Part sizes (1-5)** (same table for every station) are the core trade-off: bigger machines cost more per tile
   but need less labour per unit (batch x time); bigger tools cost exponentially more but give more bonus and
   coverage per tile. **Construction:** placed parts are blueprints (`Part.Built` false; they do nothing).
   Haulers deliver `PartInfo.Cost` onto the footprint as ordinary piles (`StorageRole.Construction`, one pile
   per cell, so costs never exceed tiles x stack limit); a builder (Designations labor) reserves them, works
-  `BuildTicks`, consumes them. Smallest parts cost logs so the first sawmill bootstraps from felling;
-  bigger ones cost planks. Cancelled blueprints leave their materials as loose piles. `Rooms.InstantBuild`
+  `BuildTicks`, consumes them. Station costs come from the catalog by size (size 1 is always buildable
+  before that station exists: logs or stone for the first ones); tools/lanterns/crates cost logs then planks. Cancelled blueprints leave their materials as loose piles. `Rooms.InstantBuild`
   is the sandbox/test switch. Internals are deliberately not an optimisation puzzle. Parts don't block movement.
   Labor preference rotates by colonist id (designations / industry / hauling first) until job priorities.
 - **Movement:** agents are 1 tile tall and occupy an open cell; standable = solid floor below, or the cell is
@@ -128,7 +141,15 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   Exception: plant orders (Chop, Gather; `Designations.IsPlantOrder`) are 2D areas draped on the surface
   (`DesignatePlantArea`, any level, ignores the view level), since that work always happens on the surface;
   their marks are drawn whatever level is viewed. Dig/stairs/stockpiles/rooms stay level-based boxes.
-- **Gathering:** berry bushes -> Berries, reeds/shrubs -> Fiber, only when ripe (`PlantInfo.RipeGrowth`); the
+- **Raw resources:** clay (lake beds, under river sand, patches of the soil layer), sand (riverbeds, beaches)
+  and 8 minerals (`TileInfo.IsMineral`; copper/tin high, iron middle, silver/gold/sulfur deep, aetherite
+  deepest and glowing, quartz anywhere; `WorldGenerator.DepositMineral`). Terrain colours and glow (alpha < 1)
+  are in `WorldView.TileColor`; the cap palette holds 32 entries. Wild ferns/wildflowers give herbs.
+- **Farms (`Nature.Farms`):** zoned plots grow one crop each (wheat -> grain and herbs on grass/soil, glowcaps
+  on any floor under a roof). Every `GrowInterval` ticks all plots grow at once (one flora rebuild per
+  region); empty plots get a `Sow` order and grown crops a `Gather` order (Designations labor). Crops are
+  harvested whole and resown. Plots, stockpiles and rooms never overlap.
+- **Gathering:** berry bushes -> Berries, reeds/shrubs -> Fiber, herbs from ferns/flowers, only when ripe (`PlantInfo.RipeGrowth`); the
   plant is cut back to `GatheredGrowth`, not removed, so regrowth can drive future yields.
 - **Camera:** the rig's pivot follows the visible ground (highest solid tile at or below the view level), so
   zoom stays relative to what's on screen when levels are peeled away.
@@ -144,7 +165,9 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - Test: `dotnet test ColonyGame.sln`
 - Headless smoke run: `<godot_console.exe> --headless --path game --quit-after 60`
 - Visual check / render benchmark: `<godot_console.exe> --path game -- --screenshot=out.png` (or `--bench`)
-  plus optional `--size=WxDxH --seed=N --level=N --zoom=DIST --dig-demo --stairs-demo --ticks=N`.
+  plus optional `--size=WxDxH --seed=N --level=N --zoom=DIST --dig-demo --stairs-demo --ticks=N`, and
+  `--showroom[=WORKSHOP_ID]` (every workshop with every station in sizes 1-5, stocked raw goods, farms;
+  the id focuses one) with `--build-menu=WORKSHOP_ID` to open the build menu.
   Waits until the world is fully meshed, measures 120 frames, prints `[bench]` lines (startup phases,
   frame ms, draw calls, memory), saves the PNG and quits.
 - Sim benchmark: `dotnet run -c Release --project tools/Colony.Bench -- [size] [colonists] [ticks]`
@@ -189,13 +212,14 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       Dev flags `--factory-demo` (fell woods, log stockpile, equipped sawmill, plank stockpile) and
       `--parts-demo` (levelled showroom with every saw and tool size). Parts come in 5 sizes ([ ] in the builder).
 - [x] Construction: blueprints, material delivery, builders (log-cost starter parts, plank-cost big ones).
-- [ ] Next for industry: more room types/recipes chained off planks (carpenter -> furniture) and stone
-      (mason) and ore (smelter); conveyors between output and input crates; rooms themselves costing
-      (walls/floors); job priorities; per-room worker assignment; stockpile filters when needed.
-- [ ] Next for flora: growth and spreading/regrowth (staggered, deterministic), farming plots as a
-      factory-style input.
-- [ ] Geology: rock strata by depth (several stone types, layered/warped), so deep digging varies;
-      needs more `TileType`s (cap shader palette is 8 entries today).
-- [ ] M4: Items, stockpiles, first production chains (e.g. ore â†’ smelter â†’ bars â†’ forge).
-- [ ] M5: Needs (food, rest), farming, population growth.
-- Later: education/skills, advanced product trees, factions, procedural narrative/history.
+- [x] Production tree: data-driven catalog, 12 workshops / 32 stations / 60 recipes with models for every
+      station size, multi-input crates, recipe per machine, education and the Academy, automatons, build
+      menu (B). Raw sources: clay, sand, 8 minerals by depth, wild herbs, grain/herb/glowcap farms.
+- [ ] Next for industry: conveyors between output and input crates; rooms themselves costing
+      (walls/floors); stockpile filters; standing orders ("keep 50 planks") instead of fixed recipes;
+      wonders as aux parts (philosopher's stone, farseer orb, orrery); real ratios.
+- [ ] Next for flora: wild growth and spreading/regrowth (staggered, deterministic).
+- [ ] Geology: several stone types in layered/warped strata (palette now has room).
+- [ ] M5: Needs (food, rest) consuming bread, clothing, furniture, tinctures; population growth.
+- Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
+      procedural narrative/history.

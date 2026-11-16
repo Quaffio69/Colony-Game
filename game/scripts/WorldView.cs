@@ -106,7 +106,16 @@ public partial class WorldView : Node3D
         TileType.Grass => new Color(0.36f, 0.62f, 0.28f),
         TileType.Soil => new Color(0.48f, 0.34f, 0.22f),
         TileType.Stone => new Color(0.52f, 0.52f, 0.55f),
-        TileType.Ore => new Color(0.80f, 0.55f, 0.25f),
+        TileType.CopperOre => new Color(0.76f, 0.47f, 0.27f),
+        TileType.Clay => new Color(0.69f, 0.45f, 0.32f),
+        TileType.Sand => new Color(0.86f, 0.79f, 0.55f),
+        TileType.TinOre => new Color(0.66f, 0.70f, 0.71f),
+        TileType.IronOre => new Color(0.55f, 0.33f, 0.27f),
+        TileType.SilverOre => new Color(0.80f, 0.82f, 0.88f),
+        TileType.GoldOre => new Color(0.90f, 0.75f, 0.25f),
+        TileType.Quartz => new Color(0.93f, 0.92f, 0.97f),
+        TileType.Sulfur => new Color(0.88f, 0.85f, 0.25f),
+        TileType.Aetherite => new Color(0.36f, 0.88f, 0.93f, 0.2f), // alpha < 1: glows (see tiles.gdshaderinc)
         TileType.UpStair => new Color(0.74f, 0.64f, 0.46f),
         TileType.DownStair => new Color(0.62f, 0.54f, 0.42f),
         TileType.UpDownStair => new Color(0.80f, 0.72f, 0.56f),
@@ -120,6 +129,7 @@ public partial class WorldView : Node3D
         DesignationKind.UpDownStair => new Color(0.3f, 0.85f, 1f, 0.45f),
         DesignationKind.Chop => new Color(0.45f, 1f, 0.25f, 0.4f),
         DesignationKind.Gather => new Color(1f, 0.4f, 0.75f, 0.4f),
+        DesignationKind.Sow => new Color(0.7f, 0.55f, 0.3f, 0.35f),
         _ => new Color(1f, 0.85f, 0.2f, 0.45f),
     };
 
@@ -375,11 +385,11 @@ public partial class WorldView : Node3D
         _capImage = Image.CreateFromData(World.Width, World.Depth, false, Image.Format.R8, _capData);
         _capTexture = ImageTexture.CreateFromImage(_capImage);
 
-        var palette = new Vector3[8];
+        var palette = new Vector4[32];
         for (int i = 0; i < TileInfo.Count; i++)
         {
             var c = TileColor((TileType)i);
-            palette[i] = new Vector3(c.R, c.G, c.B);
+            palette[i] = new Vector4(c.R, c.G, c.B, c.A);
         }
 
         _capMaterial = new ShaderMaterial { Shader = GD.Load<Shader>("res://shaders/cap.gdshader") };
