@@ -49,6 +49,18 @@ public static class Pathfinder
     }
 
     /// <summary>
+    /// Weighted A* towards <paramref name="toward"/> that stops at the first tile satisfying
+    /// <paramref name="isGoal"/> (one leg of a long trip: reach the next stretch of a region chain).
+    /// </summary>
+    public static List<TilePos>? FindPathToward<T>(T tiles, int worldWidth, int worldDepth, TilePos start,
+        Func<TilePos, bool> isGoal, TilePos toward, int maxNodes = DefaultMaxNodes, Func<TilePos, bool>? allowed = null)
+        where T : ITileReader
+    {
+        if (!Movement.IsStandable(tiles, start)) return null;
+        return Search(tiles, worldWidth, worldDepth, start, isGoal, p => HeuristicWeight * Heuristic(p, toward), maxNodes, out _, allowed);
+    }
+
+    /// <summary>
     /// Dijkstra flood from <paramref name="start"/>; returns the path to the cheapest node satisfying
     /// <paramref name="isGoal"/>, or null if none is found within the node budget.
     /// </summary>

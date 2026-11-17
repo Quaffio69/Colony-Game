@@ -72,6 +72,18 @@ public sealed class ColonySim
     /// <summary>Farm plots (grain, herbs, glowcaps).</summary>
     public Farms Farms { get; }
 
+    /// <summary>Water in the world (rivers, lakes, floods): a compressible cellular fluid.</summary>
+    public Fluids.Water Water { get; }
+    /// <summary>Water wheels, pumps and power.</summary>
+    public Fluids.Waterworks Waterworks { get; } = new();
+    /// <summary>Walls, wheels and pumps waiting to be built.</summary>
+    public Constructions Constructions { get; }
+
+    /// <summary>Water steps every this many ticks.</summary>
+    public const int WaterInterval = 4;
+    /// <summary>Whole-world water steps run while the world loads, so rivers and lakes start at their flowing rest.</summary>
+    public const int WaterSettleSteps = 400;
+
     /// <summary>Share of dug stone tiles that leave a usable stone (the rest is rubble).</summary>
     public const float StoneYield = 0.5f;
 
@@ -85,6 +97,8 @@ public sealed class ColonySim
         Stockpiles = new Stockpiles(world);
         Rooms = new Rooms(world);
         Farms = new Farms(world);
+        Water = new Fluids.Water(world);
+        Constructions = new Constructions(world) { IsOccupied = c => Waterworks.Occupied(c) };
         // A floor cell is storage, factory or farm: never two of them.
         Stockpiles.IsBlocked = c => Rooms.RoomAt(c) is not null || Farms.Contains(c);
         Rooms.IsBlocked = c => Stockpiles.Contains(c) || Farms.Contains(c);
@@ -141,6 +155,43 @@ public sealed class ColonySim
         return true;
     }
 
+    /// <summary>
+    /// A builder finished a structure (its materials are already used up): a wall becomes a solid tile (water in
+    /// the cell is pushed out by the next water step, a pile in it moves on top); a wheel or pump starts working.
+    /// </summary>
+    internal void CompleteConstruction(Blueprint bp)
+    {
+        if (bp.Removed) return;
+        Constructions.Remove(bp);
+        var cell = bp.Cell;
+        switch (bp.Kind)
+        {
+            case StructureKind.Wall:
+                World.Set(cell, TileType.Wall);
+                Flora.Remove(cell, out _);
+                Items.Resettle(cell);
+                Stockpiles.Remove(cell);
+                Rooms.ValidateCell(cell);
+                break;
+            case StructureKind.WaterWheel:
+                Waterworks.AddWheel(Water, cell, bp.Facing);
+                break;
+            default:
+                Waterworks.AddPump(cell, bp.Facing);
+                break;
+        }
+    }
+
+    /// <summary>Takes down the wheel or pump in a cell, leaving its materials behind. False if there is none.</summary>
+    public bool RemoveStructure(TilePos cell)
+    {
+        var thing = Waterworks.Remove(cell);
+        if (thing is null) return false;
+        var cost = Constructions.Cost(thing is Fluids.Pump ? StructureKind.Pump : StructureKind.WaterWheel);
+        Items.Drop(cell, cost.Material, cost.Count);
+        return true;
+    }
+
     /// <summary>Simulation ticks of work a designation takes.</summary>
     public int WorkTicks(TilePos target, DesignationKind kind)
     {
@@ -169,6 +220,7 @@ public sealed class ColonySim
         TileType.Quartz => ItemType.Quartz,
         TileType.Sulfur => ItemType.Sulfur,
         TileType.Aetherite => ItemType.Aetherite,
+        TileType.Wall => ItemType.Stone,
         _ => null,
     };
 
@@ -220,12 +272,23 @@ public sealed class ColonySim
     public Terrain? Terrain { get; private set; }
 
     /// <summary>Generates a world and drops a starting party at the terrain's suggested spawn.</summary>
-    public static ColonySim Generate(WorldGenSettings settings, int colonists = 7)
+    public static ColonySim Generate(WorldGenSettings settings, int colonists = 7, bool settleWaterInBackground = false)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var generated = WorldGenerator.GenerateWithTerrain(settings);
         var sim = new ColonySim(generated.World) { Terrain = generated.Terrain };
         long genMs = clock.ElapsedMilliseconds;
+
+        clock.Restart();
+        sim.Water.FillFromTerrain(generated.Terrain);
+        // Settling the water only reads the terrain, as do flora placement and connectivity: run it alongside them.
+        long waterMs = 0;
+        var settle = Task.Run(() =>
+        {
+            var waterClock = System.Diagnostics.Stopwatch.StartNew();
+            sim.Water.Settle(WaterSettleSteps);
+            waterMs = waterClock.ElapsedMilliseconds;
+        });
 
         clock.Restart();
         sim.Flora = FloraGenerator.Generate(settings, generated.Terrain, generated.World);
@@ -241,12 +304,28 @@ public sealed class ColonySim
 
         clock.Restart();
         sim.Connectivity.Update();
+        long connMs = clock.ElapsedMilliseconds;
+        if (settleWaterInBackground) sim._waterSettling = settle; // the game draws its first frames meanwhile
+        else settle.Wait();
         var t = generated.Terrain;
         sim.StartupReport = $"terrain {genMs} ms ({t.RiverCells} river cells, {t.LakeCells} lake cells), " +
+                            $"water settling {(settleWaterInBackground ? "in the background" : $"{waterMs} ms in parallel")} ({sim.Water.WetChunks} wet chunks, {sim.Water.Springs.Count} springs), " +
                             $"flora {floraMs} ms ({trees} trees, {sim.Flora.Count - trees} plants), " +
-                            $"connectivity {clock.ElapsedMilliseconds} ms " +
+                            $"connectivity {connMs} ms " +
                             $"({sim.Connectivity.RegionCount} regions, {sim.Connectivity.ComponentCount} components)";
         return sim;
+    }
+
+    private Task? _waterSettling;
+
+    /// <summary>False while generated water is still settling in the background (see <see cref="Generate"/>).</summary>
+    public bool WaterReady => _waterSettling is null || _waterSettling.IsCompleted;
+
+    /// <summary>Blocks until the water has settled. Call before changing the world after a background settle.</summary>
+    public void WaitForWater()
+    {
+        _waterSettling?.Wait();
+        _waterSettling = null;
     }
 
     /// <summary>Human-readable timings from <see cref="Generate"/>.</summary>
@@ -360,9 +439,15 @@ public sealed class ColonySim
 
     public void Step()
     {
+        WaitForWater();
         Tick++;
         _tickNodeStart = Pathfinder.NodesExpanded;
-        Farms.Tick(Tick, Flora, Designations);
+        Farms.Tick(Tick, Flora, Designations, Water);
+        if (Tick % WaterInterval == 0)
+        {
+            Water.Step();
+            Waterworks.Tick(Water, World);
+        }
         CheckEvents();
         if (_arriving.Count > 0)
         {

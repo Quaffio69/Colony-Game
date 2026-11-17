@@ -32,12 +32,12 @@ public partial class DesignationTool : Node3D
     public enum ToolMode
     {
         // Orders
-        Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps,
-        // Build (which workshop / part: see Workshop and Part)
-        Room, Part,
+        Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, Wall,
+        // Build (which workshop / part / structure: see Workshop, Part and Structure)
+        Room, Part, Structure,
     }
 
-    private const ToolMode LastOrder = ToolMode.FarmGlowcaps;
+    private const ToolMode LastOrder = ToolMode.Wall;
     private enum Selection { None, Designate, Cancel }
 
     private ColonySim _sim = null!;
@@ -79,6 +79,9 @@ public partial class DesignationTool : Node3D
     public RoomType Workshop { get; private set; } = RoomType.Carpentry;
     /// <summary>The part placed by <see cref="ToolMode.Part"/>.</summary>
     public PartType Part { get; private set; } = PartType.Sawbench;
+    /// <summary>The structure placed by <see cref="ToolMode.Structure"/> (water wheel or pump).</summary>
+    public StructureKind Structure { get; private set; } = StructureKind.WaterWheel;
+    private int _facing;
     public TilePos? Hovered { get; private set; }
     public string? LastAction { get; private set; }
     /// <summary>Why the part under the cursor can't be placed (null if it can, or not placing).</summary>
@@ -93,8 +96,11 @@ public partial class DesignationTool : Node3D
             return PartInfo.Sizes(part) > 1
                 ? $"Build: {PartInfo.Name(part, SizeFor(part))} (size {SizeFor(part)}/{PartInfo.Sizes(part)}, [ ] to change)"
                 : $"Build: {PartInfo.Name(part)}";
+        if (m == ToolMode.Structure) return $"Build: {Constructions.Name(Structure)} (facing {FacingName(_facing)}, R turns)";
         return m == ToolMode.Room ? $"Build: {Workshop.Name} room" : BaseModeName(m);
     }
+
+    private static string FacingName(int f) => f switch { 0 => "east", 1 => "south", 2 => "west", _ => "north" };
 
     private static string BaseModeName(ToolMode m) => m switch
     {
@@ -109,6 +115,7 @@ public partial class DesignationTool : Node3D
         ToolMode.FarmGrain => "Farm plot: grain",
         ToolMode.FarmHerbs => "Farm plot: herbs",
         ToolMode.FarmGlowcaps => "Fungus farm: glowcaps (under a roof)",
+        ToolMode.Wall => "Build wall (dams, canals; Z/X raise it)",
         _ => m.ToString(),
     };
 
@@ -126,6 +133,15 @@ public partial class DesignationTool : Node3D
                     return $"{what}: {w}x{d} area on the surface   click to confirm, Esc/RMB: abort";
                 string levels = h > 1 ? $"levels {Math.Min(a.Z, b.Z)}..{Math.Max(a.Z, b.Z)}" : $"level {a.Z}";
                 return $"{what}: {w}x{d}x{h} ({levels})   click to confirm, Z/X: change level, Esc/RMB: abort";
+            }
+            if (Mode == ToolMode.Structure)
+            {
+                var (mat, n) = Constructions.Cost(Structure);
+                string what = Structure == StructureKind.WaterWheel
+                    ? "makes power from water flowing through its cell (best under a fall or in a fast current)"
+                    : $"lifts water from its cell to the cell {FacingName(_facing)} and one level up, using power";
+                return $"{Constructions.Name(Structure)}: {what}   cost {n} {mat.Name.ToLowerInvariant()}   R: turn   " +
+                       (PlacementProblem is { } sp ? $"can't place: {sp}" : "click to place");
             }
             if (PartFor(Mode) is { } part)
             {
@@ -160,7 +176,14 @@ public partial class DesignationTool : Node3D
         return $"batch of {batch.Units}: {first.Describe(batch.Units)}, {labour:0.0} s labour per unit{others}";
     }
 
-    private string RemovalName() => Mode == ToolMode.Room ? "Erase room" : Mode == ToolMode.Part ? "Remove parts" : "Cancel";
+    private string RemovalName() => Mode switch
+    {
+        ToolMode.Room => "Erase room",
+        ToolMode.Part => "Remove parts",
+        ToolMode.Structure => "Remove waterworks",
+        ToolMode.Wall => "Cancel walls",
+        _ => "Cancel",
+    };
 
     public void Initialize(ColonySim sim, WorldView view)
     {
@@ -179,6 +202,7 @@ public partial class DesignationTool : Node3D
             _modeMats[mode] = Overlay.Material(
                 mode == ToolMode.Stockpile ? ItemView.StockpileColor with { A = 0.3f }
                 : CropFor(mode) is not null ? ItemView.FarmColor with { A = 0.3f }
+                : mode == ToolMode.Wall ? new Color(0.75f, 0.72f, 0.68f, 0.35f)
                 : IsBuild(mode) ? new Color(1f, 0.68f, 0.3f, 0.3f)
                 : WorldView.DesignationColor(KindFor(mode, 0, 0, 0)) with { A = 0.3f });
         _cancelMat = Overlay.Material(new Color(1f, 0.25f, 0.2f, 0.3f));
@@ -254,6 +278,17 @@ public partial class DesignationTool : Node3D
         box.AddChild(_partsTitle);
         _partList = new VBoxContainer();
         box.AddChild(_partList);
+        box.AddChild(new Label { Text = "Waterworks (anywhere; walls are a Tab order)" });
+        var works = new HBoxContainer();
+        box.AddChild(works);
+        foreach (var kind in new[] { StructureKind.WaterWheel, StructureKind.Pump })
+        {
+            var (mat, n) = Constructions.Cost(kind);
+            var b = new Button { Text = Constructions.Name(kind), CustomMinimumSize = new Vector2(176, 0), TooltipText = $"Costs {n} {mat.Name.ToLowerInvariant()}" };
+            var k = kind;
+            b.Pressed += () => SelectStructure(k);
+            works.AddChild(b);
+        }
         SelectWorkshop(Workshop, enterMode: false);
     }
 
@@ -343,7 +378,7 @@ public partial class DesignationTool : Node3D
 
         var hit = OverMenu ? null : VoxelRaycast.Cast(_sim.World, origin, dir, 5000f, _view.ViewLevel);
         Hovered = hit?.Tile;
-        bool placing = PartFor(Mode) is not null && _selection == Selection.None;
+        bool placing = (PartFor(Mode) is not null || Mode == ToolMode.Structure) && _selection == Selection.None;
         _cursor.Visible = Hovered.HasValue && _selection == Selection.None && !placing;
         if (Hovered is { } h)
             _cursor.Position = SimSpace.TileCenter(IsAreaTool(Mode) && SurfaceAt(h.X, h.Y) is >= 0 and var s ? h with { Z = s } : h);
@@ -366,7 +401,7 @@ public partial class DesignationTool : Node3D
 
     public override void _UnhandledInput(InputEvent e)
     {
-        if (_sim == null) return;
+        if (_sim == null || !_sim.WaterReady) return; // the world can't be edited while its water settles
         if (e is InputEventMouseButton && OverMenu) return;
 
         switch (e)
@@ -379,6 +414,12 @@ public partial class DesignationTool : Node3D
 
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right } when _selection == Selection.Designate:
                 EndSelection();
+                Handled();
+                break;
+
+            // Waterworks go down with a single click too.
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when Mode == ToolMode.Structure:
+                if (Hovered is { } st) PlaceStructure(st.Offset(0, 0, 1));
                 Handled();
                 break;
 
@@ -428,8 +469,9 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
-            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.R } when PartFor(Mode) is not null:
+            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.R } when PartFor(Mode) is not null || Mode == ToolMode.Structure:
                 _rotated = !_rotated;
+                _facing = (_facing + 1) % 4;
                 Handled();
                 break;
 
@@ -474,6 +516,22 @@ public partial class DesignationTool : Node3D
 
     private (TilePos A, TilePos B) Corners() => (_anchor, new TilePos(_cornerX, _cornerY, _cornerZ));
 
+    private void PlaceStructure(TilePos cell)
+    {
+        string name = Constructions.Name(Structure).ToLowerInvariant();
+        var bp = _sim.Constructions.Place(Structure, cell, _facing);
+        LastAction = bp is not null
+            ? $"Placed a {name} blueprint: needs {bp.Cost.Count} {bp.Cost.Material.Name.ToLowerInvariant()} and a builder"
+            : $"Can't place a {name}: {_sim.Constructions.CanPlace(Structure, cell)}";
+    }
+
+    private void SelectStructure(StructureKind kind)
+    {
+        Structure = kind;
+        Mode = ToolMode.Structure;
+        EndSelection();
+    }
+
     private void PlacePart(PartType part, TilePos cell)
     {
         int size = SizeFor(part);
@@ -492,6 +550,17 @@ public partial class DesignationTool : Node3D
         {
             if (Mode == ToolMode.Room)
                 LastAction = $"Erased {_sim.Rooms.Erase(a, b)} room cells";
+            else if (Mode == ToolMode.Wall)
+                LastAction = $"Cancelled {_sim.Constructions.CancelBox(a, b)} wall blueprints";
+            else if (Mode == ToolMode.Structure)
+            {
+                int built = 0;
+                for (int z = Math.Min(a.Z, b.Z); z <= Math.Max(a.Z, b.Z) + 1; z++)
+                for (int y = Math.Min(a.Y, b.Y); y <= Math.Max(a.Y, b.Y); y++)
+                for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
+                    if (_sim.RemoveStructure(new TilePos(x, y, z))) built++;
+                LastAction = $"Removed {built} waterworks, cancelled {_sim.Constructions.CancelBox(a, b)} blueprints";
+            }
             else if (PartFor(Mode) is not null)
                 LastAction = $"Removed {_sim.Rooms.RemovePartsIn(a, b)} parts";
             else if (IsAreaTool(Mode))
@@ -509,6 +578,11 @@ public partial class DesignationTool : Node3D
         {
             int n = _sim.Rooms.Paint(Workshop, a, b);
             LastAction = n > 0 ? $"{Workshop.Name}: painted {n} floor cells" : $"{Workshop.Name}: no free floor in that box";
+        }
+        else if (Mode == ToolMode.Wall)
+        {
+            int n = _sim.Constructions.PlaceWalls(a, b);
+            LastAction = n > 0 ? $"Walls: {n} blueprints (each needs 1 stone and a builder)" : "Walls: no open cell with ground or a wall below in that box";
         }
         else if (CropFor(Mode) is { } crop)
         {
@@ -557,6 +631,16 @@ public partial class DesignationTool : Node3D
     private void UpdateGhost(bool placing)
     {
         PlacementProblem = null;
+        if (placing && Mode == ToolMode.Structure && Hovered is { } sh)
+        {
+            var cell = sh.Offset(0, 0, 1);
+            PlacementProblem = _sim.Constructions.CanPlace(Structure, cell);
+            _ghost.Position = new Vector3(cell.X + 0.5f, cell.Z + 0.5f, cell.Y + 0.5f);
+            _ghost.Scale = new Vector3(1, 1, 1);
+            _ghost.MaterialOverride = PlacementProblem is null ? _ghostOk : _ghostBad;
+            _ghost.Visible = true;
+            return;
+        }
         if (!placing || Hovered is not { } h || PartFor(Mode) is not { } part)
         {
             _ghost.Visible = false;

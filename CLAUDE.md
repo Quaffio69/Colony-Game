@@ -46,9 +46,10 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   components; only changed chunks relabel. "Is this job reachable?" is a component compare.
 - **Jobs:** `Orders.JobBoard` caches each designation's work spots and their components; colonists only
   path to jobs in their own component, nearest first.
-- **Pathfinding:** hierarchical: BFS over the region graph gives a corridor, then A* restricted to it (on a
-  snapshot of its bounding box only for long corridors). Colonists share a per-tick node budget
-  (`PathNodeBudgetPerTick`).
+- **Pathfinding:** hierarchical: BFS over the region graph gives a chain of regions, then A* restricted to it
+  (widened by one ring; on a snapshot of its bounding box only for long corridors). Long trips go in legs
+  (`Colonist.LegRegions` regions each, next leg planned on arrival), so no single search is huge and a
+  cross-map trip never stalls a frame. Colonists share a per-tick node budget (`PathNodeBudgetPerTick`).
 - **Deep worlds are cheap:** a `Chunk` whose tiles are all one type stores no array (`IsUniform`), so deep
   rock and sky cost almost nothing; the generator writes them uniform directly. Render sections buried in
   solid rock are skipped without snapshots. `Connectivity` iterates only chunks that have regions.
@@ -63,6 +64,15 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   per frame and 8x the in-flight cap while >2000 sections are pending), ~650 MB managed. Use
   `--size=1024x1024x384` for faster iteration. Sim bench at 2048 (20 colonists, digging, felling, hauling):
   ~0.2-0.45 ms/tick avg; worst ticks ~5 ms per dig-driven connectivity rebuild.
+- **Water** (`Fluids.Water`): per 16x16-column block (a chunk column) of spans; only awake blocks step (a block
+  sleeps once its water is still; flowing rivers never are). Two passes per step (outflows, then volumes), each
+  writing only its own block, so blocks run in parallel deterministically; pipes are precomputed per span
+  (`BuildLinks`), rebuilt when a block or its neighbours change shape. Steps every `WaterInterval` (4) ticks. Cost
+  ~1 ms/step at 1024, ~6 ms/step at 2048 (every river flows): ~2.5 ms/tick average at 2048 with 20 colonists.
+  Next lever if needed: the water step off the main thread. Bench: `-- water [size] [steps]` (phase timings),
+  `-- flood [size] [ticks]` (water on land and the water books; run 100k ticks at 1024: ~17 flooded columns,
+  steady; the 512 test world never overfills a lake, so only this long run catches slow accumulation),
+  `-- terrain` (hydrology checks), `-- far`.
 - Known next optimizations: component rebuild is still O(regions + edges) per change (incremental or
   off-thread with deterministic apply tick); idle colonists re-search on any item/reservation change and
   hauling scans all piles and stockpile cells (spatial index); A* costs ~1-2 us/node; sim runs on the main
@@ -153,6 +163,52 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   plant is cut back to `GatheredGrowth`, not removed, so regrowth can drive future yields.
 - **Camera:** the rig's pivot follows the visible ground (highest solid tile at or below the view level), so
   zoom stays relative to what's on screen when levels are peeled away.
+- **Water (`Fluids.Water`): shallow-water flow over column spans** (city-builder style, generalised to caves). A
+  column is a list of spans: vertical runs of open cells resting on solid ground (the sky above the surface, a
+  tunnel). A span holds a continuous depth of water (fixed point, `U` = 1/65536 level per unit), so surfaces are
+  smooth heights. Water moves between overlapping spans of neighbouring columns through pipes driven by the
+  difference in surface height clipped to the shared window (water pours over a lip into a lower neighbour:
+  falls, pits, flooding a tunnel under an overhang); each pipe keeps 31/32 of last step's flow (momentum) plus
+  1/5 of the head difference times the depth at the window (up to a level), scaled down if a span would give more
+  than it holds. Accel must stay above 4 (sides) or alternate columns ping-pong. No pressure: no U-bends (pumps
+  lift water). Spans are rebuilt from the world on `ChunkChanged`, laying old water back in cell by cell (water
+  in now-solid cells goes to the space above). Map borders drain. Springs add up to a rate until their span's
+  surface reaches their limit. Public amounts are thousandths of a cell (`Full`); `MassAt` = how full a cell is.
+  **Seepage:** water above its column's natural level (generated: just under a lake's shore / a river's bank, or the
+  ground on land) loses `Seepage` a step (~a level per 6 game minutes). Without it, lakes whose inflow beats their
+  outlet rose forever and flooded the land over hours (the books balanced; it was real accumulation). Dug-out water
+  below the old ground is never touched; a fed reservoir still fills. `Total + Drained + Evaporated - Sourced` is
+  constant (exact conservation).
+  Generated rivers start `RiverFill` of their channel, lakes at their sill; springs at every `RiverSources` point
+  (rate by catchment gain, never filling past 0.9 of the channel); `ColonySim.WaterSettleSteps` (400) run in the
+  background while the first frames draw (`WaterReady` gates ticks and edits). Wheels read `ThroughFlow`.
+- **Terrain hydrology** (`Terrain.Generate`, fine grid, whole levels; `-- terrain` bench checks it): rivers are
+  1-2 deep with a level of bank above their water (room for their flow; flush banks flooded): each river tile's
+  level is the lowest land within 2 tiles minus one, min-smoothed over the river within 2 tiles.
+  `SetWaterLevels` priority-floods from the map edge (lowest first): levels never rise downstream (the river
+  below is lowered, unless it runs into a higher lake: then the valley here is below that lake and joins it);
+  lakes keep the level their basin fills to and spill into a lower outflow at the outlet; a river below the lake
+  it enters becomes lake (backwater); side-by-side river tiles share the lower level (not if that would sink a
+  river under the lake it feeds); where a river passes a lake lower down, that lake edge becomes shore unless it
+  would cut water off from the edge. `MarkSpringPools` gives each stream head a pool; `BuildLakeSills` raises the
+  bed at each lake outlet to a level below the lake (the lake drains only to its sill). `ShapeBanks` grades land
+  within `BankReach` tiles to rise a level per tile from the bank. River/lake neighbours don't count as cliffs
+  for surface materials (sand banks, not stone). The bench must show 0 water beside lower land, 0 systems not
+  reaching the edge, 0 water tiles with no downhill way out, and only lake-outlet side steps.
+- **Water rendering:** sections of 2x2 water blocks (32x32 columns, all levels). Each wet span gets a surface at
+  its height with corners averaged with neighbouring columns within half a level (smooth sloping rivers), and
+  side faces where the water beside is lower (falls; foamy). A block's version only bumps when a span's water
+  moves a sixteenth of a level from what was last drawn (hysteresis); unbuilt sections build first, changed ones
+  take turns within a 3 ms/frame budget. UV carries the flow (`Water.FlowAt`, exaggerated for the eye) so ripples
+  stream along it. No draw distance. (Remote Desktop caps rendering at ~30 fps: frame times of ~31 ms there
+  are not the game.)
+- **Waterworks:** `Orders.Constructions` holds single-cell blueprints (walls from 1 stone; water wheels and
+  pumps from planks) built like room parts (haulers deliver, Designations-labor builders build;
+  `ColonySim.CompleteConstruction`). Walls stack on wall blueprints, so dams rise level by level; a wall is
+  `TileType.Wall` (digs back out as stone). `Fluids.Waterworks`: a wheel's power = water flowing through its
+  cell per step / `FlowPerPower` (hang it in a waterfall: wheels may mount on a wall); pumps lift water from
+  their cell to the cell ahead and one level up; power is one colony-wide pool for now (pumps run at the
+  share the wheels cover). Farm plots within 2 tiles of water grow twice as fast (`Farms.Irrigated`).
 - **Cave-ins (DF-style):** a solid tile is supported if face-adjacent solid tiles connect it to z=0. After a
   dig (`ColonySim.CompleteDesignation` -> `World.CaveIns`), each unsupported neighbouring mass falls as one
   rigid piece until it lands; designations on it are cancelled; colonists ride it down or pop out on top.
@@ -166,11 +222,12 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - Headless smoke run: `<godot_console.exe> --headless --path game --quit-after 60`
 - Visual check / render benchmark: `<godot_console.exe> --path game -- --screenshot=out.png` (or `--bench`)
   plus optional `--size=WxDxH --seed=N --level=N --zoom=DIST --dig-demo --stairs-demo --ticks=N`, and
-  `--showroom[=WORKSHOP_ID]` (every workshop with every station in sizes 1-5, stocked raw goods, farms;
+  `--look=X,Y` (camera on a column), `--water-demo` (terrace spring, waterfall wheel, pond, pump, irrigated field), `--showroom[=WORKSHOP_ID]` (every workshop with every station in sizes 1-5, stocked raw goods, farms;
   the id focuses one) with `--build-menu=WORKSHOP_ID` to open the build menu.
   Waits until the world is fully meshed, measures 120 frames, prints `[bench]` lines (startup phases,
   frame ms, draw calls, memory), saves the PNG and quits.
 - Sim benchmark: `dotnet run -c Release --project tools/Colony.Bench -- [size] [colonists] [ticks]`
+  (or `-- water [size] [steps]` for the water simulation alone, whole map)
   (prints per-phase totals, slow-tick breakdowns and GC counts; the render bench prints a startup breakdown).
 - VS Code: F5 "Play Game" or "Open Godot Editor" (see `.vscode/launch.json`).
 
@@ -196,9 +253,13 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       a river nearby.
 - [ ] Ideas: job priorities; cave-in damage/injury once health exists; material-strength spans
       (overhang limits per material) as a later twist on pure connectivity support.
-- [ ] Water/fluids: cellular sim on active-chunk sets (DF-like 0-7 depth per tile, with pressure for
-      U-bends), possibly our own twist (e.g. flow fields, aquifers, temperature/freezing). Must stay
-      deterministic and only tick chunks with moving fluid. Seed it from `Terrain.Water`.
+- [x] Water: shallow-water flow over column spans (smooth surfaces, caves and tunnels too), parallel
+      deterministic two-pass steps on awake blocks, generated rivers/lakes settled at load, springs by catchment,
+      `WaterView` smooth sloping surfaces with flow-streamed ripples; walls (dams, canals), water wheels, pumps,
+      colony power pool, irrigation.
+- [ ] Next for water: the step off the main thread (2048 cost), pressure (U-bends) if wanted, wading/swimming
+      and drowning (water blocking deep cells), axles and separate power networks, powered workshops,
+      floodgates/sluices, aquifers, freezing, wells, meandering river courses (they follow the 4-tile drainage).
 - [x] Flora: ~130k trees (oak, birch, pine, spruce, willow) and ~100k surface plants (shrubs, berry bushes,
       ferns, wildflowers, reeds) on a 2048 map, placed by forest-patch noise, moisture (distance to water),
       altitude (broadleaf low, conifers high, treeline) and footing. `FloraView` draws per-region,

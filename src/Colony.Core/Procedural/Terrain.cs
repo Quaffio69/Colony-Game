@@ -47,6 +47,14 @@ public sealed class Terrain
     public int SpawnY { get; private set; }
     public int RiverCells { get; private set; }
     public int LakeCells { get; private set; }
+    /// <summary>
+    /// Where rivers gain water (fine columns, approximately on their channels) and how much, in units of the flow
+    /// that makes a river (<see cref="RiverThreshold"/>): a head gains at least 1, cells downstream what the land
+    /// beside them drains into them. Springs go here.
+    /// </summary>
+    public List<(int X, int Y, float Share)> RiverSources { get; } = new();
+    /// <summary>Downstream neighbour of each river tile (0..3: +x, +y, -x, -y) or <see cref="NoFlow"/>.</summary>
+    public byte[] FlowDirection { get; }
 
     private Terrain(int w, int d, int h)
     {
@@ -57,6 +65,7 @@ public sealed class Terrain
         Water = new byte[w * d];
         Kind = new SurfaceKind[w * d];
         WaterDistance = new byte[w * d];
+        FlowDirection = new byte[w * d];
     }
 
     public int SurfaceAt(int x, int y) => Surface[y * Width + x];
@@ -115,13 +124,29 @@ public sealed class Terrain
         var channelLevel = new float[w * d];
         Array.Fill(channelLevel, float.MaxValue);
 
+        // Where rivers get their water (springs go here): each river cell gains what drains into it from the land
+        // around it, i.e. its flow minus what arrives from rivers (and lakes) upstream. Heads gain their whole flow.
+        var arriving = new float[acc.Length];
+        for (int c = 0; c < acc.Length; c++)
+            if (acc[c] >= RiverThreshold && receiver[c] >= 0) arriving[receiver[c]] += acc[c];
         for (int c = 0; c < acc.Length; c++)
         {
             if (acc[c] < RiverThreshold || lake[c]) continue;
-            t.RiverCells++;
+            float gain = acc[c] - arriving[c];
+            if (gain > 0) t.RiverSources.Add(((int)CoarseCentreX(c % cw, w), (int)CoarseCentreY(c / cw, d), gain / RiverThreshold));
+        }
+
+        for (int c = 0; c < acc.Length; c++)
+        {
+            if (acc[c] < RiverThreshold) continue;
+            // Lakes aren't carved, except at their spill point: the outflow channel starts inside the lake, or a strip
+            // of uncut land between lake and river would dam it (the lake rises and floods its shores).
+            // (Cells of one basin share its filled level; a lower receiving lake cell is the next lake down a chain.)
+            if (lake[c] && (receiver[c] < 0 || lake[receiver[c]] && filled[receiver[c]] >= filled[c] - 0.01f)) continue;
+            if (!lake[c]) t.RiverCells++;
             float strength = Math.Clamp(MathF.Log2(acc[c] / RiverThreshold) / 6f, 0f, 1f);
             float radius = 0.7f + 3.3f * strength;
-            byte depth = (byte)(1 + (int)MathF.Round(2.5f * strength));
+            byte depth = (byte)(strength >= 0.5f ? 2 : 1); // shallow: water up to the bank, bigger rivers a level deeper
             float seed = 0.3f + 0.7f * strength;
 
             int cx = c % cw, cy = c / cw;
@@ -154,7 +179,9 @@ public sealed class Terrain
 
         Propagate(influence, level, dist, w, d, falloff: 1f / 150f);
 
-        // Final surface: pull the land towards the nearby river level (only ever lowering it), then cut channels.
+        // Final surface: pull the land towards the nearby river level (only ever lowering it). River tiles keep the
+        // valley floor for now; SetWaterLevels decides each one's water level and cuts its bed below it.
+        var riverDepth = new byte[w * d];
         Parallel.For(0, d, y =>
         {
             for (int x = 0; x < w; x++)
@@ -168,20 +195,13 @@ public sealed class Terrain
                     if (target < ground) ground += (target - ground) * k;
                 }
 
-                int surface;
                 if (channelDepth[i] > 0)
                 {
-                    int waterTop = (int)MathF.Floor(MathF.Min(channelLevel[i], ground));
-                    surface = waterTop - channelDepth[i];
+                    ground = MathF.Min(channelLevel[i], ground);
                     t.Kind[i] = SurfaceKind.RiverBed;
+                    riverDepth[i] = channelDepth[i];
                 }
-                else
-                {
-                    surface = (int)MathF.Floor(ground);
-                }
-                surface = Math.Clamp(surface, 1, s.Height - 2);
-                if (t.Kind[i] == SurfaceKind.RiverBed)
-                    t.Water[i] = (byte)Math.Clamp((int)MathF.Floor(MathF.Min(channelLevel[i], ground)) - surface, 1, 255);
+                int surface = Math.Clamp((int)MathF.Floor(ground), 1, s.Height - 2);
 
                 int cell = Math.Min(y / Coarse, cd - 1) * cw + Math.Min(x / Coarse, cw - 1);
                 if (lake[cell] && t.Kind[i] == SurfaceKind.Land)
@@ -197,6 +217,15 @@ public sealed class Terrain
             }
         });
 
+        // Fine-grid hydrology at whole levels, so the generated water is already at rest: see SetWaterLevels.
+        ExtendLakesToTheirShores(t);
+        JoinCornerContacts(t, riverDepth);
+        ConnectWaterToEdges(t, riverDepth, receiver, cw, cd);
+        SetWaterLevels(t, riverDepth);
+        MarkSpringPools(t);
+        BuildLakeSills(t);
+        ExtendLakesToTheirShores(t); // rivers turned into backwater may have land below their level beside them
+        ShapeBanks(t);
         ComputeWaterDistance(t);
         (t.SpawnX, t.SpawnY) = ChooseSpawn(t);
         return t;
@@ -482,7 +511,571 @@ public sealed class Terrain
 
     // ---- Spawn ---------------------------------------------------------------------------------------------
 
-    /// <summary>Distance (tiles, Manhattan, capped at 255) from each column to the nearest river or lake.</summary>
+    /// <summary>
+    /// Water flows between orthogonal neighbours only, so two water tiles touching just at a corner are dammed
+    /// apart; thin rivers drawn along diagonals are full of such joints. Wherever that happens, one of the two
+    /// tiles they both border becomes river too, so every channel is 4-connected (levels come later).
+    /// </summary>
+    private static void JoinCornerContacts(Terrain t, byte[] riverDepth)
+    {
+        int w = t.Width, d = t.Depth;
+        bool Wet(int x, int y) => t.Kind[y * w + x] != SurfaceKind.Land;
+        for (int y = 0; y < d - 1; y++)
+        for (int x = 0; x < w; x++)
+        {
+            if (!Wet(x, y)) continue;
+            foreach (int dx in new[] { -1, 1 })
+            {
+                int nx = x + dx, ny = y + 1;
+                if (nx < 0 || nx >= w || !Wet(nx, ny) || Wet(nx, y) || Wet(x, ny)) continue;
+                int a = y * w + x, b = ny * w + nx, bridge = y * w + nx;
+                t.Kind[bridge] = SurfaceKind.RiverBed;
+                riverDepth[bridge] = (byte)Math.Max(1, Math.Min((int)riverDepth[a], riverDepth[b]));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every river and lake must drain to the map edge, or the water arriving in it piles up and floods its
+    /// shores. Turning the coarse drainage into fine channels can leave a system sealed off (a strip of land
+    /// between a lake and its outflow, say). For each river/lake system that can't reach the edge through water
+    /// tiles, follow the coarse drainage from its lowest tile and mark a one-tile channel until it
+    /// meets water that does, or the edge. Deterministic (systems found in scan order).
+    /// </summary>
+    private static void ConnectWaterToEdges(Terrain t, byte[] riverDepth, int[] receiver, int cw, int cd)
+    {
+        int w = t.Width, d = t.Depth;
+        bool Wet(int i) => t.Kind[i] != SurfaceKind.Land;
+        var drains = new bool[w * d];
+        var stack = new Stack<int>();
+        void Spread(int from)
+        {
+            drains[from] = true;
+            stack.Push(from);
+            while (stack.TryPop(out int c))
+            {
+                int cx = c % w, cy = c / w;
+                for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if ((dx != 0) == (dy != 0)) continue; // orthogonal neighbours only: water can't pass corners
+                    int nx = cx + dx, ny = cy + dy;
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                    int n = ny * w + nx;
+                    if (drains[n] || !Wet(n)) continue;
+                    drains[n] = true;
+                    stack.Push(n);
+                }
+            }
+        }
+        for (int x = 0; x < w; x++)
+        {
+            if (Wet(x) && !drains[x]) Spread(x);
+            int b = (d - 1) * w + x;
+            if (Wet(b) && !drains[b]) Spread(b);
+        }
+        for (int y = 0; y < d; y++)
+        {
+            if (Wet(y * w) && !drains[y * w]) Spread(y * w);
+            int r = y * w + w - 1;
+            if (Wet(r) && !drains[r]) Spread(r);
+        }
+
+        var system = new List<int>();
+        var inSystem = new bool[w * d];
+        for (int start = 0; start < w * d; start++)
+        {
+            if (!Wet(start) || drains[start] || inSystem[start]) continue;
+            // Gather the sealed system and its lowest water surface.
+            system.Clear();
+            inSystem[start] = true;
+            stack.Push(start);
+            while (stack.TryPop(out int c))
+            {
+                system.Add(c);
+                int cx = c % w, cy = c / w;
+                for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    if ((dx != 0) == (dy != 0)) continue;
+                    int nx = cx + dx, ny = cy + dy;
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                    int n = ny * w + nx;
+                    if (inSystem[n] || !Wet(n)) continue;
+                    inSystem[n] = true;
+                    stack.Push(n);
+                }
+            }
+            int lowest = system[0];
+            foreach (int c in system)
+                if (t.Surface[c] + t.Water[c] < t.Surface[lowest] + t.Water[lowest] ||
+                    t.Surface[c] + t.Water[c] == t.Surface[lowest] + t.Water[lowest] && c < lowest) lowest = c;
+
+            // Walk the coarse drainage from there, marking a one-tile channel (SetWaterLevels makes it descend).
+            int px = lowest % w, py = lowest / w;
+            int cell = Math.Min(py / Coarse, cd - 1) * cw + Math.Min(px / Coarse, cw - 1);
+            for (int guard = 0; guard < cw * cd; guard++)
+            {
+                int next = receiver[cell];
+                int tx, ty;
+                if (next < 0) (tx, ty) = (px < w / 2 ? 0 : w - 1, py); // a coarse outlet: run off the nearest side
+                else (tx, ty) = (CoarseCentreX(next % cw, w), CoarseCentreY(next / cw, d));
+                bool joined = false;
+                // Step one axis at a time, so the channel is 4-connected (water can't flow through corners).
+                int x = px, y = py;
+                while ((x != tx || y != ty) && !joined)
+                {
+                    if (Math.Abs(tx - x) >= Math.Abs(ty - y)) x += Math.Sign(tx - x);
+                    else y += Math.Sign(ty - y);
+                    int i = y * w + x;
+                    if (drains[i]) { joined = true; break; }
+                    if (Wet(i)) continue;
+                    t.Kind[i] = SurfaceKind.RiverBed;
+                    riverDepth[i] = 1;
+                    if (x == 0 || y == 0 || x == w - 1 || y == d - 1) joined = true;
+                }
+                if (joined || next < 0) break;
+                (px, py, cell) = (tx, ty, next);
+            }
+            foreach (int c in system) drains[c] = true; // connected now (or as connected as the drainage allows)
+        }
+    }
+
+    /// <summary>
+    /// Lakes are found on the coarse grid, so fine land inside a basin can sit below the lake's surface without
+    /// being marked as lake; the water would spread over it later and look like a flood. Grow each lake over the
+    /// connected land below its surface (8-way, within <see cref="LakeShoreReach"/> tiles), so it starts at its
+    /// true shoreline. Deterministic (scan-order seeding, FIFO growth, lowest surface wins).
+    /// </summary>
+    private static void ExtendLakesToTheirShores(Terrain t)
+    {
+        int w = t.Width, d = t.Depth;
+        var level = new int[w * d];
+        var reach = new int[w * d];
+        var queue = new Queue<int>();
+        for (int i = 0; i < w * d; i++)
+        {
+            if (t.Kind[i] != SurfaceKind.LakeBed) continue;
+            level[i] = t.Surface[i] + t.Water[i];
+            queue.Enqueue(i);
+        }
+        while (queue.TryDequeue(out int c))
+        {
+            if (reach[c] >= LakeShoreReach) continue;
+            int cx = c % w, cy = c / w;
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                int nx = cx + dx, ny = cy + dy;
+                if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                int n = ny * w + nx;
+                if (t.Kind[n] != SurfaceKind.Land || t.Surface[n] >= level[c]) continue;
+                t.Kind[n] = SurfaceKind.LakeBed;
+                t.Water[n] = (byte)Math.Min(255, level[c] - t.Surface[n]);
+                level[n] = level[c];
+                reach[n] = reach[c] + 1;
+                queue.Enqueue(n);
+            }
+        }
+    }
+
+    /// <summary>How far (tiles) a lake may spread past its coarse cells to reach its shore.</summary>
+    public const int LakeShoreReach = 48;
+
+    /// <summary>
+    /// Gives every water tile a whole-level water surface (the level of its top water cell) so the generated water
+    /// is already at rest, then cuts river beds below it.
+    /// <list type="bullet">
+    /// <item>A river wants its surface level with its banks: the lowest land within two tiles, smoothed over the
+    /// river within two tiles so a reach is level across its width (no side-by-side steps).</item>
+    /// <item>Levels never rise downstream: a priority flood walks upstream from the outlets (water on the map
+    /// edge), lowest first, and where a tile wants to sit lower than the way out, the river downstream is lowered
+    /// to it. Rivers so become level reaches joined by drops across their whole width.</item>
+    /// <item>Lakes keep their level. A river whose banks sit below the lake it flows into becomes part of that lake
+    /// (backwater) instead of being flooded by it.</item>
+    /// </list>
+    /// Fills <see cref="FlowDirection"/> with each river tile's downstream neighbour. Deterministic.
+    /// </summary>
+    private static void SetWaterLevels(Terrain t, byte[] riverDepth)
+    {
+        int w = t.Width, d = t.Depth, n = w * d;
+        bool River(int i) => t.Kind[i] == SurfaceKind.RiverBed;
+        bool Lake(int i) => t.Kind[i] == SurfaceKind.LakeBed;
+
+        // What each water tile wants: lakes their level, rivers their banks' height.
+        var bank = new int[n];
+        Parallel.For(0, d, y =>
+        {
+            for (int x = 0; x < w; x++)
+            {
+                int i = y * w + x;
+                if (!River(i)) continue;
+                int b = t.Surface[i];
+                for (int dy = -2; dy <= 2; dy++)
+                for (int dx = -2; dx <= 2; dx++)
+                {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                    int j = ny * w + nx;
+                    if (t.Kind[j] == SurfaceKind.Land) b = Math.Min(b, t.Surface[j]);
+                }
+                bank[i] = b;
+            }
+        });
+        var want = new int[n];
+        Parallel.For(0, d, y =>
+        {
+            for (int x = 0; x < w; x++)
+            {
+                int i = y * w + x;
+                if (Lake(i)) want[i] = t.Surface[i] + t.Water[i];
+                if (!River(i)) continue;
+                int b = bank[i];
+                for (int dy = -2; dy <= 2; dy++)
+                for (int dx = -2; dx <= 2; dx++)
+                {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                    int j = ny * w + nx;
+                    if (River(j)) b = Math.Min(b, bank[j]);
+                }
+                want[i] = Math.Max(riverDepth[i] + 1, b - 1); // a level of bank above the water: room for its flow
+            }
+        });
+
+        var top = new int[n];
+        var parent = new int[n];
+        var seen = new bool[n];
+        var queue = new PriorityQueue<int, (int, int)>();
+        for (int y = 0; y < d; y++)
+        for (int x = 0; x < w; x++)
+        {
+            int i = y * w + x;
+            if (t.Kind[i] == SurfaceKind.Land || x != 0 && y != 0 && x != w - 1 && y != d - 1) continue;
+            seen[i] = true;
+            parent[i] = -1;
+            top[i] = want[i];
+            queue.Enqueue(i, (top[i], i));
+        }
+        Span<int> nbr = stackalloc int[4];
+        while (queue.TryDequeue(out int c, out _))
+        {
+            int cx = c % w, cy = c / w;
+            nbr[0] = cx + 1 < w ? c + 1 : -1;
+            nbr[1] = cx > 0 ? c - 1 : -1;
+            nbr[2] = cy + 1 < d ? c + w : -1;
+            nbr[3] = cy > 0 ? c - w : -1;
+            foreach (int m in nbr)
+            {
+                if (m < 0 || seen[m] || t.Kind[m] == SurfaceKind.Land) continue;
+                seen[m] = true;
+                parent[m] = c;
+                int v = want[m];
+                if (Lake(m))
+                {
+                    // A lake is flat and keeps the level its basin fills to. Reached from its outflow it spills into
+                    // it (a drop at the outlet); an outflow standing higher is cut down to the lake.
+                    top[m] = Lake(c) ? top[c] : v;
+                    if (!Lake(c) && v < top[c])
+                        for (int p = c; p >= 0 && River(p) && top[p] > v; p = parent[p]) top[p] = v;
+                }
+                else if (v >= top[c]) top[m] = v;
+                else if (River(m) && Lake(c))
+                {
+                    // Backwater: the river's banks are lower than the lake it runs into, so it is part of the lake.
+                    t.Kind[m] = SurfaceKind.LakeBed;
+                    top[m] = top[c];
+                }
+                else
+                {
+                    // m is lower than the way out: lower the river downstream to it. If that river runs into a lake
+                    // standing higher (lakes keep their level), the valley here is below the lake: it fills, so m
+                    // joins the lake's water instead (and the land around it below that level joins it later).
+                    int q = c;
+                    while (q >= 0 && River(q) && top[q] > v) q = parent[q];
+                    if (q >= 0 && Lake(q) && top[q] > v)
+                    {
+                        t.Kind[m] = SurfaceKind.LakeBed;
+                        top[m] = top[c];
+                    }
+                    else
+                    {
+                        for (int p = c; p >= 0 && River(p) && top[p] > v; p = parent[p]) top[p] = v;
+                        top[m] = v;
+                    }
+                }
+                queue.Enqueue(m, (top[m], m));
+            }
+        }
+
+        // Side by side, water is level: a river tile beside a lower river or lake tile that isn't up/downstream of
+        // it takes that lower level (and everything downstream of it follows), so a river only drops across its
+        // whole width and never stands a level above the water beside it. Levels only ever go down.
+        for (bool changed = true; changed;)
+        {
+            changed = false;
+            for (int i = 0; i < n; i++)
+            {
+                if (!River(i) || !seen[i]) continue;
+                int x = i % w, y = i / w;
+                for (int k = 0; k < 4; k++)
+                {
+                    int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                    int m = ny * w + nx;
+                    if (t.Kind[m] == SurfaceKind.Land || !seen[m] || top[m] >= top[i] || parent[i] == m || parent[m] == i && River(m)) continue;
+                    // Not if the river below runs into a lake standing higher: it would end up under that lake.
+                    int q = i;
+                    while (q >= 0 && River(q) && top[q] > top[m]) q = parent[q];
+                    if (q >= 0 && Lake(q) && top[q] > top[m]) continue;
+                    for (int p = i; p >= 0 && River(p) && top[p] > top[m]; p = parent[p]) top[p] = top[m];
+                    changed = true;
+                }
+            }
+        }
+        var converted = new List<(int Tile, int Bed)>();
+        // A lake keeps its level, so where a river runs past it lower down (not its outlet), the lake's edge
+        // there becomes shore at the lake's level: a bank between them instead of water beside lower water.
+        for (int i = 0; i < n; i++)
+        {
+            if (!Lake(i) || !seen[i]) continue;
+            int x = i % w, y = i / w;
+            for (int k = 0; k < 4; k++)
+            {
+                int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                int m = ny * w + nx;
+                if (!River(m) || !seen[m] || top[m] >= top[i] || parent[i] == m) continue;
+                converted.Add((i, t.Surface[i]));
+                t.Kind[i] = SurfaceKind.Land;
+                t.Surface[i] = top[i];
+                t.Water[i] = 0;
+                break;
+            }
+        }
+        // ...unless that shore cuts water off from the map edge (a narrow neck of lake): give back any shore tile
+        // between water that reaches the edge and water that doesn't, until everything reaches it again.
+        if (converted.Count > 0)
+        {
+            var reach = new bool[n];
+            var queue2 = new Queue<int>();
+            void Flood(int from)
+            {
+                reach[from] = true;
+                queue2.Enqueue(from);
+                while (queue2.TryDequeue(out int c))
+                {
+                    int x = c % w, y = c / w;
+                    for (int k = 0; k < 4; k++)
+                    {
+                        int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                        if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                        int m = ny * w + nx;
+                        if (reach[m] || t.Kind[m] == SurfaceKind.Land) continue;
+                        reach[m] = true;
+                        queue2.Enqueue(m);
+                    }
+                }
+            }
+            for (int i = 0; i < n; i++)
+            {
+                int x = i % w, y = i / w;
+                if ((x == 0 || y == 0 || x == w - 1 || y == d - 1) && t.Kind[i] != SurfaceKind.Land && !reach[i]) Flood(i);
+            }
+            for (bool restored = true; restored;)
+            {
+                restored = false;
+                foreach (var (i, bed) in converted)
+                {
+                    if (t.Kind[i] != SurfaceKind.Land) continue;
+                    int x = i % w, y = i / w;
+                    bool reached = false, cut = false;
+                    for (int k = 0; k < 4; k++)
+                    {
+                        int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                        if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                        int m = ny * w + nx;
+                        if (t.Kind[m] == SurfaceKind.Land) continue;
+                        if (reach[m]) reached = true; else cut = true;
+                    }
+                    if (!reached || !cut) continue;
+                    t.Kind[i] = SurfaceKind.LakeBed;
+                    t.Surface[i] = bed;
+                    Flood(i);
+                    restored = true;
+                }
+            }
+        }
+
+        for (int i = 0; i < n; i++)
+        {
+            t.FlowDirection[i] = NoFlow;
+            if (River(i))
+            {
+                int lvl = seen[i] ? top[i] : want[i];
+                t.Surface[i] = Math.Max(1, lvl - riverDepth[i]);
+                t.Water[i] = (byte)(lvl - t.Surface[i]);
+                if (seen[i] && parent[i] >= 0)
+                    t.FlowDirection[i] = (byte)(parent[i] == i + 1 ? 0 : parent[i] == i - 1 ? 2 : parent[i] == i + w ? 1 : 3);
+            }
+            else if (Lake(i) && seen[i])
+            {
+                // A lake that sank (to its outlet, or a lower river it touches) keeps its extent: where its bed
+                // would stand above the new level it is dug a level below it, so the rivers through it stay joined.
+                if (top[i] <= t.Surface[i]) t.Surface[i] = Math.Max(1, top[i] - 1);
+                t.Water[i] = (byte)Math.Min(255, top[i] - t.Surface[i]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A stream that just starts out of the grass reads as a river going nowhere. Where a narrow river begins
+    /// (nothing flows into it and it has at most four other water tiles around it), the land around its first tile
+    /// becomes a small spring pool at its level. <see cref="ShapeBanks"/> later keeps the land around it at least
+    /// that high, so it holds. Returns the number of springs marked. Deterministic.
+    /// </summary>
+    private static int MarkSpringPools(Terrain t)
+    {
+        int w = t.Width, d = t.Depth, count = 0;
+        var heads = new List<int>();
+        for (int y = 1; y < d - 1; y++)
+        for (int x = 1; x < w - 1; x++)
+        {
+            int i = y * w + x;
+            if (t.Kind[i] != SurfaceKind.RiverBed || t.FlowDirection[i] == NoFlow) continue;
+            int water = 0;
+            bool fed = false;
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dy == 0) continue;
+                int j = i + dy * w + dx;
+                if (t.Kind[j] == SurfaceKind.Land) continue;
+                water++;
+                if ((dx == 0) != (dy == 0) && t.Kind[j] == SurfaceKind.RiverBed &&
+                    t.FlowDirection[j] == (dx == 1 ? 2 : dx == -1 ? 0 : dy == 1 ? 3 : 1)) fed = true;
+            }
+            if (!fed && water <= 4) heads.Add(i); // the end of a stream up to two tiles wide (wide rivers' unfed edges have more water around)
+        }
+        foreach (int i in heads)
+        {
+            int x = i % w, y = i / w, level = t.Surface[i] + t.Water[i];
+            for (int pass = 0; pass < 2; pass++) // corners join once the edges beside them have
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                int j = i + dy * w + dx;
+                if (t.Kind[j] != SurfaceKind.Land || x + dx <= 0 || y + dy <= 0 || x + dx >= w - 1 || y + dy >= d - 1) continue;
+                // Only where it touches water at its own level (no ledge beside the stream's drop below).
+                bool level0 = true, touches = false;
+                foreach (int o in (ReadOnlySpan<int>)[j + 1, j - 1, j + w, j - w])
+                    if (t.Kind[o] != SurfaceKind.Land) { touches = true; if (t.Surface[o] + t.Water[o] != level) level0 = false; }
+                if (!level0 || !touches) continue;
+                t.Kind[j] = SurfaceKind.LakeBed;
+                t.Surface[j] = Math.Max(1, level - 1);
+                t.Water[j] = (byte)(level - t.Surface[j]);
+            }
+            count++;
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// A lake is held at its level by a sill where it spills out: lake tiles beside a lower river (its outlets) get
+    /// their bed raised to a level below the lake's surface, so the lake drains only down to the sill (a level below
+    /// its shore) instead of emptying into the river below.
+    /// </summary>
+    private static void BuildLakeSills(Terrain t)
+    {
+        int w = t.Width, d = t.Depth;
+        for (int y = 1; y < d - 1; y++)
+        for (int x = 1; x < w - 1; x++)
+        {
+            int i = y * w + x;
+            if (t.Kind[i] != SurfaceKind.LakeBed) continue;
+            int level = t.Surface[i] + t.Water[i];
+            bool outlet = false;
+            foreach (int j in (ReadOnlySpan<int>)[i + 1, i - 1, i + w, i - w])
+                if (t.Kind[j] == SurfaceKind.RiverBed && t.Surface[j] + t.Water[j] < level) outlet = true;
+            if (!outlet || t.Surface[i] >= level - 1) continue;
+            t.Surface[i] = level - 1;
+            t.Water[i] = 1;
+        }
+    }
+
+    /// <summary>No flow direction (land, lakes, or water that doesn't reach an outlet).</summary>
+    public const byte NoFlow = 255;
+
+    /// <summary>How far (tiles) river banks are graded down towards the water.</summary>
+    public const int BankReach = 5;
+
+    /// <summary>
+    /// Grades the land beside rivers: within <see cref="BankReach"/> tiles it rises at most one level per tile from
+    /// the water's level (the first tile a level above it: the bank), so rivers run in shallow valleys with a bank to
+    /// the bank instead of at the bottom of a cut. Land beside water is never left below that water's surface
+    /// (raised if need be), so nothing spills. Only reshapes land tiles. Deterministic.
+    /// </summary>
+    private static void ShapeBanks(Terrain t)
+    {
+        int w = t.Width, d = t.Depth, n = w * d;
+        var cap = new int[n];
+        var dist = new byte[n];
+        Array.Fill(cap, int.MaxValue);
+        var queue = new PriorityQueue<int, (int, int)>();
+        for (int i = 0; i < n; i++)
+        {
+            if (t.Kind[i] != SurfaceKind.RiverBed) continue;
+            int x = i % w, y = i / w, lvl = t.Surface[i] + t.Water[i];
+            for (int k = 0; k < 4; k++)
+            {
+                int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                int j = ny * w + nx;
+                if (t.Kind[j] != SurfaceKind.Land || cap[j] <= lvl + 1) continue;
+                cap[j] = lvl + 1; // the bank: a level above the river's water
+                dist[j] = 1;
+                queue.Enqueue(j, (lvl + 1, j));
+            }
+        }
+        while (queue.TryDequeue(out int c, out var pri))
+        {
+            if (pri.Item1 > cap[c] || dist[c] >= BankReach) continue;
+            int x = c % w, y = c / w;
+            for (int k = 0; k < 4; k++)
+            {
+                int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                int j = ny * w + nx;
+                if (t.Kind[j] != SurfaceKind.Land || cap[j] <= cap[c] + 1) continue;
+                cap[j] = cap[c] + 1;
+                dist[j] = (byte)(dist[c] + 1);
+                queue.Enqueue(j, (cap[j], j));
+            }
+        }
+        var lowered = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            if (t.Kind[i] != SurfaceKind.Land)
+            {
+                lowered[i] = t.Surface[i];
+                continue;
+            }
+            int s = Math.Min(t.Surface[i], cap[i]);
+            // Never below the water beside it.
+            int x = i % w, y = i / w;
+            for (int k = 0; k < 4; k++)
+            {
+                int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                if (nx < 0 || ny < 0 || nx >= w || ny >= d) continue;
+                int j = ny * w + nx;
+                if (t.Kind[j] != SurfaceKind.Land) s = Math.Max(s, t.Surface[j] + t.Water[j]);
+            }
+            lowered[i] = s;
+        }
+        Array.Copy(lowered, t.Surface, n);
+    }
+
+
     private static void ComputeWaterDistance(Terrain t)
     {
         int w = t.Width, d = t.Depth;

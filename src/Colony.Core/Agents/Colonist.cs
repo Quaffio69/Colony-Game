@@ -31,6 +31,8 @@ public sealed class Colonist
     public const int HandleTicks = 6;
 
     private readonly Queue<TilePos> _path = new();
+    // A long trip is walked in legs (see PlanPath): where the whole trip ends, set while the path is only a leg.
+    private (HashSet<TilePos> Goals, TilePos Near)? _trip, _plannedTrip;
     private float _stepTicksTotal, _stepTicksDone;
     // Versions seen by the last fruitless search; while none change, an idle colonist doesn't search again.
     private int _searchedDesignations = -1, _searchedConnectivity = -1, _searchedItems = -1, _searchedStockpiles = -1;
@@ -44,7 +46,20 @@ public sealed class Colonist
     private BuildPlan _build;
 
     /// <summary>Putting up a blueprint from the materials reserved on its footprint.</summary>
-    private readonly record struct BuildPlan(Part Part, List<(TilePos Cell, int Amount)> Materials);
+    private readonly record struct BuildPlan(Part? Part, Blueprint? Site, List<(TilePos Cell, int Amount)> Materials)
+    {
+        public string Name => Part?.Name ?? Constructions.Name(Site!.Kind);
+        public string Where => Part is { } p ? $" in {p.Room.Name}" : "";
+        public bool Removed => Part?.Removed ?? Site!.Removed;
+        public BuildCost Cost => Part?.Cost ?? Site!.Cost;
+        public int Ticks => Part is { } p ? PartInfo.BuildTicks(p.Type, p.Size) : Constructions.BuildTicks(Site!.Kind);
+        public bool InReach(TilePos at) => Part is { } p ? p.Cells.Any(c => Colonist.InReach(at, c)) : Colonist.InReach(at, Site!.Cell);
+        public void ReleaseBuilder(int id)
+        {
+            if (Part is { } p && p.BuilderId == id) p.BuilderId = -1;
+            if (Site is { } s && s.BuilderId == id) s.BuilderId = -1;
+        }
+    }
 
     /// <summary>One production cycle: input crates (one pickup per crate) -> machine -> output crate (none for education or workers).</summary>
     private readonly record struct CraftPlan(Part Machine, Batch Batch, List<(TilePos Cell, ItemType Item, int Count)> Pickups, TilePos? OutputCell);
@@ -112,8 +127,8 @@ public sealed class Colonist
         (ColonistTask.CraftWork, _) => $"carrying {string.Join(", ", _carried.Select(c => ItemInfo.Name(c.Item).ToLowerInvariant()))} to the {_craft.Machine.Name.ToLowerInvariant()}",
         (ColonistTask.CraftStore, _) => $"storing {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()}",
         (ColonistTask.Build, ColonistState.Working) =>
-            $"building a {_build.Part.Name.ToLowerInvariant()} in {_build.Part.Room.Name} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
-        (ColonistTask.Build, _) => $"walking to build a {_build.Part.Name.ToLowerInvariant()}",
+            $"building a {_build.Name.ToLowerInvariant()}{_build.Where} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
+        (ColonistTask.Build, _) => $"walking to build a {_build.Name.ToLowerInvariant()}",
         _ => "idle",
     };
 
@@ -129,7 +144,7 @@ public sealed class Colonist
 
         if (Task == ColonistTask.Designation && JobTarget is { } job && !sim.Designations.IsClaimedBy(job, Id))
             Abandon(sim); // cancelled, re-designated, or completed by someone else
-        else if (Task == ColonistTask.Build && _build.Part.Removed)
+        else if (Task == ColonistTask.Build && _build.Removed)
             Abandon(sim); // the blueprint was cancelled (or its floor lost)
         else if (Task is ColonistTask.CraftFetch or ColonistTask.CraftWork && _craft.Machine.Removed)
             Abandon(sim); // the machine was removed (or its floor lost)
@@ -149,6 +164,20 @@ public sealed class Colonist
             case ColonistState.Moving:
                 if (NextStep is null)
                 {
+                    if (_path.Count == 0 && _trip is { } trip)
+                    {
+                        // End of a leg: plan the next one (when the shared path budget allows).
+                        if (sim.PathBudgetExhausted) return;
+                        sim.PathSearches++;
+                        var leg = PlanPath(sim, trip.Goals, trip.Near);
+                        _trip = _plannedTrip;
+                        if (leg is null)
+                        {
+                            Abandon(sim);
+                            return;
+                        }
+                        foreach (var p in leg) _path.Enqueue(p);
+                    }
                     if (_path.Count == 0)
                     {
                         Arrive(sim);
@@ -170,7 +199,7 @@ public sealed class Colonist
                 {
                     Position = NextStep!.Value;
                     NextStep = null;
-                    if (_path.Count == 0) Arrive(sim);
+                    if (_path.Count == 0 && _trip is null) Arrive(sim);
                 }
                 break;
 
@@ -291,7 +320,7 @@ public sealed class Colonist
 
     private bool TryHaul(ColonySim sim, int component)
     {
-        foreach (var plan in Hauling.Plans(sim.Items, sim.Stockpiles, sim.Rooms, sim.Connectivity, Position, component, _pathFailed))
+        foreach (var plan in Hauling.Plans(sim.Items, sim.Stockpiles, sim.Rooms, sim.Connectivity, Position, component, _pathFailed, sim.Constructions))
         {
             if (sim.PathBudgetExhausted)
             {
@@ -461,17 +490,48 @@ public sealed class Colonist
                 continue;
             }
             part.BuilderId = Id;
-            _build = new BuildPlan(part, reserved);
+            _build = new BuildPlan(part, null, reserved);
             Begin(ColonistTask.Build, part.Origin, path);
+            return true;
+        }
+        return TryBuildStructure(sim, component);
+    }
+
+    /// <summary>A structure blueprint (wall, wheel, pump) nobody is building whose material is in its cell.</summary>
+    private bool TryBuildStructure(ColonySim sim, int component)
+    {
+        foreach (var site in sim.Constructions.All)
+        {
+            if (site.BuilderId >= 0) continue;
+            var (_, cost) = site.Cost;
+            if (Constructions.MaterialsOnSite(site, sim.Items, available: true) < cost) continue;
+            // Never stand in the cell being built (a wall would entomb the builder).
+            var spots = ReachableAround(sim, site.Cell, component);
+            spots.Remove(site.Cell);
+            if (spots.Count == 0) continue;
+            if (sim.PathBudgetExhausted)
+            {
+                _deferred = true;
+                return false;
+            }
+            var path = Route(sim, spots, site.Cell);
+            if (path is null)
+            {
+                _pathFailed.Add(site.Cell);
+                continue;
+            }
+            if (!sim.Items.Reserve(site.Cell, cost)) continue;
+            site.BuilderId = Id;
+            _build = new BuildPlan(null, site, [(site.Cell, cost)]);
+            Begin(ColonistTask.Build, site.Cell, path);
             return true;
         }
         return false;
     }
 
-    /// <summary>Construction done: the materials are used up and the part starts working.</summary>
+    /// <summary>Construction done: the materials are used up and the part or structure starts working.</summary>
     private void FinishBuild(ColonySim sim)
     {
-        var part = _build.Part;
         int needed = 0, taken = 0;
         foreach (var (c, n) in _build.Materials)
         {
@@ -481,12 +541,13 @@ public sealed class Colonist
         if (taken < needed)
         {
             // Something took materials from under us (shouldn't happen with reservations): give them back.
-            if (taken > 0) sim.Items.Drop(_build.Materials[0].Cell, part.Cost.Material, taken);
-            part.BuilderId = -1;
+            if (taken > 0) sim.Items.Drop(_build.Materials[0].Cell, _build.Cost.Material, taken);
+            _build.ReleaseBuilder(Id);
             Finish();
             return;
         }
-        sim.Rooms.CompleteConstruction(part);
+        if (_build.Part is { } part) sim.Rooms.CompleteConstruction(part);
+        else sim.CompleteConstruction(_build.Site!);
         Finish();
     }
 
@@ -583,6 +644,7 @@ public sealed class Colonist
         JobTarget = target;
         _path.Clear();
         foreach (var p in path) _path.Enqueue(p);
+        _trip = _plannedTrip; // the path is one leg of a longer trip if the plan said so
         State = ColonistState.Moving;
     }
 
@@ -590,6 +652,7 @@ public sealed class Colonist
     private List<TilePos>? Route(ColonySim sim, HashSet<TilePos> goals, TilePos near)
     {
         if (goals.Count == 0) return null;
+        _plannedTrip = null;
         if (goals.Contains(Position)) return new List<TilePos>();
         sim.PathSearches++;
         return PlanPath(sim, goals, near);
@@ -617,7 +680,7 @@ public sealed class Colonist
         bool inReach = Task switch
         {
             ColonistTask.CraftWork => _craft.Machine.Cells.Any(c => InReach(Position, c)), // machines can be several tiles long
-            ColonistTask.Build => _build.Part.Cells.Any(c => InReach(Position, c)),
+            ColonistTask.Build => _build.InReach(Position),
             _ => InReach(Position, target),
         };
         if (!inReach)
@@ -636,7 +699,7 @@ public sealed class Colonist
                 StartWorking((int)MathF.Round(_craft.Batch.WorkTicks / _craft.Machine.Room.Efficiency));
                 break;
             case ColonistTask.Build:
-                StartWorking(PartInfo.BuildTicks(_build.Part.Type, _build.Part.Size));
+                StartWorking(_build.Ticks);
                 break;
             case ColonistTask.Designation:
                 if (!sim.Designations.TryGet(target, out var kind))
@@ -700,6 +763,7 @@ public sealed class Colonist
     /// <summary>Task done: back to idle, looking for work straight away.</summary>
     private void Finish()
     {
+        _trip = null;
         Task = ColonistTask.None;
         JobTarget = null;
         State = ColonistState.Idle;
@@ -733,7 +797,7 @@ public sealed class Colonist
                 break;
             case ColonistTask.Build:
                 foreach (var (c, n) in _build.Materials) sim.Items.Unreserve(c, n);
-                if (_build.Part.BuilderId == Id) _build.Part.BuilderId = -1;
+                _build.ReleaseBuilder(Id);
                 break;
         }
         if (_carried.Count > 0)
@@ -772,11 +836,32 @@ public sealed class Colonist
     /// Hierarchical pathfinding: pick a corridor of connectivity regions first, then run tile A* only inside
     /// it. Keeps long trips across hilly terrain from exploring the whole map.
     /// </summary>
+    /// <para>
+    /// Long trips go in legs of <see cref="LegRegions"/> regions: the path only reaches the region that many
+    /// steps along the chain, and the next leg is planned on arrival (<see cref="_plannedTrip"/> says so). A trip
+    /// across the map would otherwise be one search of tens of thousands of nodes (a frame-long stall), and a
+    /// failed one, retried whenever the world changed, a stall that repeats while the colonist never sets off.
+    /// </para>
     private List<TilePos>? PlanPath(ColonySim sim, HashSet<TilePos> goals, TilePos near)
     {
+        _plannedTrip = null;
         var connectivity = sim.Connectivity;
-        var corridor = connectivity.Corridor(Position, goals);
-        if (corridor is null) return null;
+        var chain = connectivity.RegionChain(Position, goals);
+        if (chain is null) return null;
+        if (chain.Count > LegRegions + LegRegions / 2)
+        {
+            int stop = chain[LegRegions];
+            var leg = connectivity.Widen(chain, 0, LegRegions + 1);
+            var (lmin, lmax) = connectivity.RegionBounds(leg);
+            const int lpad = 2;
+            var lbox = TileBox.Capture(sim.World, lmin.X - lpad, lmin.Y - lpad, lmin.Z - lpad,
+                lmax.X - lmin.X + 2 * lpad, lmax.Y - lmin.Y + 2 * lpad, lmax.Z - lmin.Z + 2 * lpad);
+            var path = Pathfinder.FindPathToward(lbox, sim.World.Width, sim.World.Depth, Position,
+                p => connectivity.RegionOf(p) == stop, near, LegMaxNodes, p => leg.Contains(connectivity.RegionOf(p)));
+            if (path is not null) _plannedTrip = (goals, near);
+            return path;
+        }
+        var corridor = connectivity.Widen(chain, 0, chain.Count);
         bool InCorridor(TilePos p) => corridor.Contains(connectivity.RegionOf(p));
 
         // Search a snapshot of the corridor's bounding box when it is small enough: reads become plain array
@@ -794,6 +879,10 @@ public sealed class Colonist
         }
         return Pathfinder.FindPathToAny(sim.World, Position, goals, near, allowed: InCorridor);
     }
+
+    /// <summary>Regions per leg of a long trip (trips up to 1.5x this go in one search).</summary>
+    private const int LegRegions = 10;
+    private const int LegMaxNodes = 12_000;
 
     /// <summary>Largest corridor bounding box (in tiles) worth copying into a snapshot for pathfinding.</summary>
     private const long MaxSnapshotTiles = 2_000_000;

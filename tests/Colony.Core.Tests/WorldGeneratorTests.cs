@@ -156,4 +156,53 @@ public class WorldGeneratorTests
         Assert.Equal(TileType.Air, w.Get(-1, 0, 0));
         Assert.Equal(TileType.Air, w.Get(0, 0, 99));
     }
+
+    [Theory]
+    [InlineData(12345)]
+    [InlineData(7)]
+    public void GeneratedWater_IsConnectedLevelAndContained(int seed)
+    {
+        var t = Terrain.Generate(new WorldGenSettings(seed, 768, 768, 384));
+        int w = t.Width, d = t.Depth, n = w * d;
+        int Level(int i) => t.Surface[i] + t.Water[i];
+        bool Wet(int i) => t.Kind[i] != SurfaceKind.Land;
+
+        // Every river and lake drains to the map edge through water (no orphaned lakes, no rivers to nowhere).
+        var reach = new bool[n];
+        var queue = new Queue<int>();
+        for (int i = 0; i < n; i++)
+        {
+            int x = i % w, y = i / w;
+            if (Wet(i) && (x == 0 || y == 0 || x == w - 1 || y == d - 1)) { reach[i] = true; queue.Enqueue(i); }
+        }
+        while (queue.TryDequeue(out int c))
+            foreach (int m in Neighbours(c))
+                if (Wet(m) && !reach[m]) { reach[m] = true; queue.Enqueue(m); }
+        int orphans = 0, spills = 0, ledges = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (!Wet(i)) continue;
+            if (!reach[i]) orphans++;
+            foreach (int m in Neighbours(i))
+            {
+                if (!Wet(m)) { if (t.Surface[m] < Level(i)) spills++; continue; }
+                // A river never stands beside lower river water unless that's where it flows.
+                if (t.Kind[i] == SurfaceKind.RiverBed && t.Kind[m] == SurfaceKind.RiverBed && Level(m) < Level(i) &&
+                    t.FlowDirection[i] != Direction(i, m) && t.FlowDirection[m] != Direction(m, i)) ledges++;
+            }
+        }
+        Assert.Equal(0, orphans);
+        Assert.Equal(0, spills);
+        Assert.Equal(0, ledges);
+
+        IEnumerable<int> Neighbours(int i)
+        {
+            int x = i % w, y = i / w;
+            if (x + 1 < w) yield return i + 1;
+            if (x > 0) yield return i - 1;
+            if (y + 1 < d) yield return i + w;
+            if (y > 0) yield return i - w;
+        }
+        int Direction(int from, int to) => to == from + 1 ? 0 : to == from + w ? 1 : to == from - 1 ? 2 : 3;
+    }
 }

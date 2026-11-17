@@ -37,8 +37,9 @@ public static class Hauling
     private const int Considered = 3;
 
     /// <summary>Role of the pile at <paramref name="p"/>. Wrong goods in an input crate count as loose (cleared out).</summary>
-    public static StorageRole RoleOf(TilePos p, ItemType type, Stockpiles stockpiles, Rooms rooms)
+    public static StorageRole RoleOf(TilePos p, ItemType type, Stockpiles stockpiles, Rooms rooms, Orders.Constructions? sites = null)
     {
+        if (sites?.At(p) is { } site) return site.Cost.Material == type ? StorageRole.Construction : StorageRole.Loose;
         var part = rooms.PartAt(p);
         if (part is { Built: false }) return part.Cost.Material == type ? StorageRole.Construction : StorageRole.Loose;
         if (part?.Role == PartRole.Input) return part.Room.Needs(type) ? StorageRole.Input : StorageRole.Loose;
@@ -47,7 +48,7 @@ public static class Hauling
     }
 
     public static List<HaulPlan> Plans(ItemPiles items, Stockpiles stockpiles, Rooms rooms, Connectivity connectivity,
-        TilePos from, int component, IReadOnlySet<TilePos>? exclude = null)
+        TilePos from, int component, IReadOnlySet<TilePos>? exclude = null, Orders.Constructions? sites = null)
     {
         var plans = new List<HaulPlan>();
         bool Usable(TilePos p) => (exclude is null || !exclude.Contains(p)) && connectivity.ComponentOf(p) == component;
@@ -75,13 +76,23 @@ public static class Hauling
                 }
             }
         }
+        // Structure blueprints (walls, wheels, pumps) want their material in their own cell.
+        if (sites is not null)
+            foreach (var bp in sites.All)
+            {
+                var (material, cost) = bp.Cost;
+                int need = cost;
+                if (items.TryGet(bp.Cell, out var pile)) need = pile.Type == material ? cost - pile.Count - pile.Incoming : 0;
+                int space = Math.Min(items.RoomAt(bp.Cell, material), need);
+                if (space > 0 && Usable(bp.Cell)) demands.Offer(Dist(bp.Cell, from), (bp.Cell, material, space));
+            }
         foreach (var (cell, type, space) in demands.Items)
         {
             var source = new Nearest<(TilePos Pos, int Available)>(1);
             foreach (var (p, pile) in items.All)
             {
                 if (pile.Type != type || pile.Available <= 0 || !Usable(p)) continue;
-                if (RoleOf(p, pile.Type, stockpiles, rooms) is StorageRole.Input or StorageRole.Construction) continue;
+                if (RoleOf(p, pile.Type, stockpiles, rooms, sites) is StorageRole.Input or StorageRole.Construction) continue;
                 source.Offer(Dist(p, cell), (p, pile.Available));
             }
             foreach (var (src, available) in source.Items)
@@ -94,7 +105,7 @@ public static class Hauling
         foreach (var (p, pile) in items.All)
         {
             if (pile.Available <= 0 || !Usable(p)) continue;
-            var role = RoleOf(p, pile.Type, stockpiles, rooms);
+            var role = RoleOf(p, pile.Type, stockpiles, rooms, sites);
             if (role is StorageRole.Loose or StorageRole.Output) sources.Offer(Dist(p, from), (p, pile));
         }
         foreach (var (src, pile) in sources.Items)

@@ -32,12 +32,14 @@ public enum TileType : byte
     Sulfur,
     /// <summary>Aetherite: the deepest strata, faintly glowing.</summary>
     Aetherite,
+    /// <summary>Built stone wall (dams, canal sides): solid, carries load, digs back out as stone.</summary>
+    Wall,
 }
 
 public static class TileInfo
 {
     /// <summary>Number of <see cref="TileType"/> values (for palettes and lookup tables).</summary>
-    public const int Count = 17;
+    public const int Count = 18;
 
     /// <summary>Blocks movement: natural rock and earth. Stairs are walk-in cells, not solid.</summary>
     public static bool IsSolid(TileType t) => t != TileType.Air && !IsStair(t);

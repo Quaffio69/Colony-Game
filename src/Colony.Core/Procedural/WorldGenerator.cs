@@ -100,10 +100,12 @@ public static class WorldGenerator
         if (kind == SurfaceKind.LakeBed) return (TileType.Clay, 3, TileType.Clay);
 
         int slope = 0;
-        if (x > 0) slope = Math.Max(slope, Math.Abs(t.SurfaceAt(x - 1, y) - surface));
-        if (x < s.Width - 1) slope = Math.Max(slope, Math.Abs(t.SurfaceAt(x + 1, y) - surface));
-        if (y > 0) slope = Math.Max(slope, Math.Abs(t.SurfaceAt(x, y - 1) - surface));
-        if (y < s.Depth - 1) slope = Math.Max(slope, Math.Abs(t.SurfaceAt(x, y + 1) - surface));
+        // A river or lake bed beside the land is its bank, not a cliff: only land neighbours count.
+        int Drop(int nx, int ny) => t.Kind[ny * s.Width + nx] == SurfaceKind.Land ? Math.Abs(t.SurfaceAt(nx, ny) - surface) : 0;
+        if (x > 0) slope = Math.Max(slope, Drop(x - 1, y));
+        if (x < s.Width - 1) slope = Math.Max(slope, Drop(x + 1, y));
+        if (y > 0) slope = Math.Max(slope, Drop(x, y - 1));
+        if (y < s.Depth - 1) slope = Math.Max(slope, Drop(x, y + 1));
 
         if (slope >= 3 || surface >= RockLine(s)) return (TileType.Stone, 0, TileType.Stone); // cliffs and peaks: bare rock
         int soil = 1 + (slope <= 1 ? 2 : 0) + (int)(Noise.Hash(x, y, 7, s.Seed) * 2); // 1..4

@@ -28,6 +28,7 @@ public partial class Main : Node3D
     private WorldView _world = null!;
     private FloraView _flora = null!;
     private ItemView _items = null!;
+    private WaterView _waterView = null!;
     private DesignationTool _tool = null!;
     private Label _hud = null!;
     private CameraRig _rig = null!;
@@ -59,7 +60,8 @@ public partial class Main : Node3D
         });
 
         ulong start = Time.GetTicksMsec();
-        _sim = ColonySim.Generate(new WorldGenSettings(Seed, WorldWidth, WorldDepth, WorldHeight), StartingColonists);
+        _sim = ColonySim.Generate(new WorldGenSettings(Seed, WorldWidth, WorldDepth, WorldHeight), StartingColonists,
+            settleWaterInBackground: true); // settles while the terrain is meshed for the first frames
         GD.Print($"World {WorldWidth}x{WorldDepth}x{WorldHeight} built in {Time.GetTicksMsec() - start} ms: {_sim.StartupReport}");
 
         _world = GetNode<WorldView>("WorldView");
@@ -76,6 +78,10 @@ public partial class Main : Node3D
         var rooms = new RoomView { Name = "RoomView" };
         AddChild(rooms);
         rooms.Initialize(_sim, _world);
+
+        _waterView = new WaterView { Name = "WaterView" };
+        AddChild(_waterView);
+        _waterView.Initialize(_sim, _world);
 
         GetNode<ColonistView>("ColonistView").Initialize(_sim, _world);
 
@@ -129,7 +135,7 @@ public partial class Main : Node3D
     {
         HandleDevArgs(delta);
 
-        if (!_paused)
+        if (!_paused && _sim.WaterReady) // the world starts once its water has settled
         {
             // Fixed-rate simulation; cap catch-up so a long frame can't snowball.
             _tickAccumulator += delta * Speeds[_speedIndex];
@@ -154,6 +160,15 @@ public partial class Main : Node3D
         string hover = _tool.Hovered is { } h
             ? $"{TileInfo.Name(_sim.World.Get(h))} at {h}" + (_sim.Flora.TryGet(h.Offset(0, 0, 1), out var plant) ? $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" + (Colony.Core.Nature.PlantInfo.IsGatherable(plant) ? " (ripe)" : "") : "")
             : "-";
+        if (_tool.Hovered is { } wh && _sim.Water.MassAt(wh.Offset(0, 0, 1)) is var wm and >= Colony.Core.Fluids.Water.MinMass)
+            hover += $", water {_sim.Water.Level(wh.Offset(0, 0, 1))}/7";
+        if (_tool.Hovered is { } sh && _sim.Waterworks.At(sh.Offset(0, 0, 1)) is { } thing)
+            hover += thing switch
+            {
+                Colony.Core.Fluids.WaterWheel ww => $", water wheel making {ww.Power:0.#} power",
+                Colony.Core.Fluids.Pump pp => $", pump moving {pp.Pumped} water per step",
+                _ => "",
+            };
         if (_tool.Hovered is { } fh && _sim.Farms.TryGet(fh.Offset(0, 0, 1), out var crop))
             hover += $", farm plot ({Colony.Core.Nature.PlantInfo.Name(crop).ToLowerInvariant()})";
         if (_tool.HoveredMachine() is { Recipe: { } making } hm)
@@ -168,6 +183,7 @@ public partial class Main : Node3D
         sb.AppendLine($"Tool: {tool}    Hover: {hover}");
         sb.AppendLine($"Designations: {_sim.Designations.Count}    {_tool.SelectionInfo ?? _tool.LastAction}");
         sb.AppendLine(StockLine());
+        sb.AppendLine(WaterLine());
         if (_tool.Hovered is { } hc && _sim.Rooms.RoomAt(hc.Offset(0, 0, 1)) is { } room) AppendRoomPanel(sb, room);
         if (_sim.RecentCaveIns.Count > 0)
         {
@@ -269,7 +285,7 @@ public partial class Main : Node3D
     }
 
     // ---- Dev aids -------------------------------------------------------------------------------
-    // godot --path game -- [--size=WxDxH] [--seed=N] [--level=N] [--dig-demo] [--stairs-demo] [--ticks=N]
+    // godot --path game -- [--size=WxDxH] [--seed=N] [--level=N] [--look=X,Y (camera on that column)] [--dig-demo] [--stairs-demo] [--ticks=N]
     //                      [--zoom=DIST] [--screenshot=out.png] [--bench]
     // With --screenshot or --bench: waits until the world is fully meshed, measures 120 frames, prints a
     // performance report, saves the screenshot (if asked) and quits.
@@ -314,6 +330,9 @@ public partial class Main : Node3D
         if (_frames == 1)
         {
             _firstFrameMs = Time.GetTicksMsec();
+            // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
+            if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--ticks" }.Any(a => Arg(a) != null))
+                _sim.WaitForWater();
             if (int.TryParse(Arg("--level"), out int level)) _world.ViewLevel = level;
             if (Arg("--dig-demo") != null) DigDemo();
             if (Arg("--stairs-demo") != null) StairsDemo();
@@ -322,17 +341,20 @@ public partial class Main : Node3D
             if (Arg("--parts-demo") != null) PartsDemo();
             if (Arg("--showroom") is { } showroom) ShowroomDemo(showroom);
             if (Arg("--build-menu") is { } menu) _tool.OpenBuildMenu(menu);
+            if (Arg("--water-demo") != null) WaterDemo();
             if (int.TryParse(Arg("--ticks"), out int ticks))
                 for (int i = 0; i < ticks; i++) _sim.Step();
             if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
             if (float.TryParse(Arg("--zoom"), out float zoom)) _rig.Focus(_world.Center, zoom, yaw: 200f, pitch: -50f);
+            if (Arg("--look")?.Split(',') is [var lx, var ly] && int.TryParse(lx, out int lookX) && int.TryParse(ly, out int lookY))
+                _rig.Focus(SimSpace.TileCenter(new TilePos(lookX, lookY, _sim.World.SurfaceLevel(lookX, lookY))), float.TryParse(Arg("--zoom"), out float lz) ? lz : 60f, yaw: 200f, pitch: -55f);
             _benchActive = Arg("--screenshot") != null || Arg("--bench") != null;
         }
         if (!_benchActive) return;
 
         if (_meshedAtMs == 0)
         {
-            if (_frames > 2 && _world.PendingSections == 0 && _flora.PendingRegions == 0)
+            if (_frames > 2 && _world.PendingSections == 0 && _flora.PendingRegions == 0 && _waterView.PendingSections == 0)
             {
                 _meshedAtMs = Time.GetTicksMsec();
                 _maxSimMs = 0;
@@ -360,6 +382,7 @@ public partial class Main : Node3D
             GetViewport().GetTexture().GetImage().SavePng(path);
             GD.Print($"Saved screenshot to {path}");
         }
+        _benchActive = false; // Quit takes effect a few frames later
         GetTree().Quit();
     }
 
@@ -445,6 +468,65 @@ public partial class Main : Node3D
         rooms.InstantBuild = false;
         _rig.Focus(SimSpace.TileCenter(new TilePos((x0 + x1) / 2, (y0 + y1) / 2, f)), 17f, yaw: 200f, pitch: -58f);
         GD.Print($"Parts demo: {rooms.All.Sum(r => r.Parts.Count)} parts, efficiency {rooms.All[0].Efficiency:P0}");
+    }
+
+    /// <summary>"Water: 1200 spans moving in 30 blocks (40 wet)    Power: 12 made by 1 wheel, 5 wanted by 1 pump (100%)".</summary>
+    private string WaterLine()
+    {
+        var w = _sim.Water;
+        var works = _sim.Waterworks;
+        string power = works.Wheels.Count + works.Pumps.Count == 0 ? "" :
+            $"    Power: {works.Generated:0.#} made by {works.Wheels.Count} wheel{(works.Wheels.Count == 1 ? "" : "s")}, " +
+            $"{works.Demand:0.#} wanted by {works.Pumps.Count} pump{(works.Pumps.Count == 1 ? "" : "s")} ({works.Supply:P0})";
+        string sites = _sim.Constructions.Count > 0 ? $"    Blueprints: {_sim.Constructions.Count}" : "";
+        return $"Water: {w.LastStepCells} spans moving in {w.AwakeChunks} blocks " +
+               $"({w.WetChunks} wet){power}{sites}";
+    }
+
+    /// <summary>
+    /// A small waterworks next to the colony (dev only: edits tiles directly): a spring-fed channel on a stone
+    /// terrace falls onto a water wheel and runs on to a large pond (the spring never stops, so after some minutes
+    /// it overflows: dam or drain it); a pump powered by the wheel lifts pond water into a ditch beside a wheat
+    /// field (irrigated, so it grows twice as fast).
+    /// </summary>
+    private void WaterDemo()
+    {
+        var c = _sim.Colonists[0].Position;
+        int g = c.Z - 1, x0 = c.X + 8, yc = c.Y + 12;
+        LevelPad(x0 - 30, yc - 30, x0 + 75, yc + 30, g);
+        void Set(int x0_, int y0, int z0, int x1, int y1, int z1, TileType t)
+        {
+            for (int z = z0; z <= z1; z++)
+            for (int y = y0; y <= y1; y++)
+            for (int x = x0_; x <= x1; x++) _sim.World.Set(x, y, z, t);
+        }
+        // Terrace (top at g+4) with a walled channel along y = yc on top; it ends at the terrace edge x0+12.
+        Set(x0, yc - 3, g + 1, x0 + 12, yc + 3, g + 4, TileType.Stone);
+        Set(x0, yc - 1, g + 5, x0 + 12, yc - 1, g + 6, TileType.Wall);
+        Set(x0, yc + 1, g + 5, x0 + 12, yc + 1, g + 6, TileType.Wall);
+        Set(x0, yc, g + 5, x0, yc, g + 6, TileType.Wall);
+        _sim.Water.AddSpring(new TilePos(x0 + 1, yc, g + 5));
+        // Below the fall, a walled channel at ground level runs on to a pond dug three deep.
+        Set(x0 + 13, yc - 1, g + 1, x0 + 30, yc - 1, g + 3, TileType.Wall);
+        Set(x0 + 13, yc + 1, g + 1, x0 + 30, yc + 1, g + 3, TileType.Wall);
+        Set(x0 + 13, yc - 1, g + 4, x0 + 14, yc - 1, g + 6, TileType.Wall); // a flume around the fall
+        Set(x0 + 13, yc + 1, g + 4, x0 + 14, yc + 1, g + 6, TileType.Wall);
+        Set(x0 + 14, yc, g + 4, x0 + 14, yc, g + 6, TileType.Wall);
+        Set(x0 + 31, yc - 6, g - 3, x0 + 50, yc + 6, g, TileType.Air);
+        Set(x0 + 31, yc - 6, g - 4, x0 + 50, yc + 6, g - 4, TileType.Stone);
+        // The wheel turns in the falling water; the pump in the pond's far corner lifts water east, onto the
+        // bank, where it runs into a ditch alongside a wheat field.
+        _sim.Waterworks.AddWheel(_sim.Water, new TilePos(x0 + 13, yc, g + 4), 0); // in the free fall, above the pool
+        _sim.Waterworks.AddPump(new TilePos(x0 + 50, yc, g), 0);
+        Set(x0 + 52, yc, g, x0 + 66, yc, g, TileType.Air);
+        _sim.Farms.AddFloorBox(Colony.Core.Nature.PlantKind.Wheat, new TilePos(x0 + 52, yc - 3, g), new TilePos(x0 + 66, yc - 1, g));
+        _sim.Farms.AddFloorBox(Colony.Core.Nature.PlantKind.Wheat, new TilePos(x0 + 52, yc + 1, g), new TilePos(x0 + 66, yc + 3, g));
+        foreach (var cell in _sim.Farms.Cells)
+            if (_sim.Farms.TryGet(cell, out var crop))
+                _sim.Flora.Add(new Colony.Core.Nature.Plant(cell, crop, (byte)(60 + (cell.X * 37 + cell.Y * 11) % 120), (byte)(cell.X * 7 + cell.Y)));
+        _stairsDemoAt = null;
+        _rig.Focus(SimSpace.TileCenter(new TilePos(x0 + 30, yc, g + 1)), 34f, yaw: 200f, pitch: -48f);
+        GD.Print($"Water demo: spring at ({x0 + 1},{yc},{g + 5}), wheel, pump, pond and irrigated field");
     }
 
     /// <summary>Dev only: flattens a pad of grass over soil at ground level g (edits tiles directly).</summary>

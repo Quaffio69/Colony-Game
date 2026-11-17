@@ -76,7 +76,7 @@ public sealed class Farms
     }
 
     /// <summary>Grows every plot's crop and places Sow and Gather orders. Call once per tick.</summary>
-    internal void Tick(long tick, Flora flora, Designations orders)
+    internal void Tick(long tick, Flora flora, Designations orders, Fluids.Water? water = null)
     {
         if (tick % GrowInterval != 0 || _order.Count == 0) return;
         foreach (var cell in _order)
@@ -91,11 +91,24 @@ public sealed class Farms
             if (plant.Growth < 255)
             {
                 int step = (int)MathF.Ceiling(255f * GrowInterval / PlantInfo.GrowTicks(plant.Kind));
+                if (water is not null && Irrigated(water, cell)) step *= 2; // irrigated plots grow twice as fast
                 flora.Update(plant with { Growth = (byte)Math.Min(255, plant.Growth + step) });
             }
             else if (!orders.Contains(cell)) orders.Designate(cell, DesignationKind.Gather);
         }
     }
+
+    /// <summary>Water within <see cref="IrrigationRadius"/> tiles, on the plot's level or the one below (a ditch beside it).</summary>
+    public static bool Irrigated(Fluids.Water water, TilePos cell)
+    {
+        for (int dz = -1; dz <= 0; dz++)
+        for (int dy = -IrrigationRadius; dy <= IrrigationRadius; dy++)
+        for (int dx = -IrrigationRadius; dx <= IrrigationRadius; dx++)
+            if (water.MassAt(cell.X + dx, cell.Y + dy, cell.Z + dz) >= Fluids.Water.Full / 4) return true;
+        return false;
+    }
+
+    public const int IrrigationRadius = 2;
 
     private static void ForBox(TilePos a, TilePos b, Action<TilePos> action)
     {

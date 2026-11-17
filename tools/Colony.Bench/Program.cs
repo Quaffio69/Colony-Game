@@ -8,6 +8,357 @@ using Colony.Core;
 using Colony.Core.Navigation;
 using Colony.Core.Procedural;
 
+if (args.Length > 0 && args[0] == "flood")
+{
+    // Flooding check: dotnet run -c Release --project tools/Colony.Bench -- flood [size] [ticks]. Counts water standing
+    // on land columns (outside the river and lake beds the terrain carved) inside the simulated area, over time.
+    int fsize = args.Length > 1 ? int.Parse(args[1]) : 1024, fticks = args.Length > 2 ? int.Parse(args[2]) : 12000;
+    var fs = ColonySim.Generate(new WorldGenSettings(12345, fsize, fsize, fsize == 512 ? 160 : 384), Environment.GetEnvironmentVariable("FLOOD_ALL") is null ? 7 : 0);
+    var t = fs.Terrain!;
+    for (int tick = 1; tick <= fticks; tick++)
+    {
+        fs.Step();
+        if (Environment.GetEnvironmentVariable("FLOOD_WATCH") is { } watch && tick % 500 == 0)
+        {
+            var wp = watch.Split(',');
+            int wx = int.Parse(wp[0]), wy = int.Parse(wp[1]);
+            var line = new System.Text.StringBuilder($"  t{tick}:");
+            for (int x = wx - 30; x <= wx + 30; x += 3)
+            {
+                int i = wy * fsize + x, s = t.Surface[i], top = s;
+                while (top < 383 && fs.Water.MassAt(x, wy, top + 1) >= Colony.Core.Fluids.Water.Full / 4) top++;
+                line.Append($" {(t.Kind[i] == SurfaceKind.RiverBed ? 'R' : t.Kind[i] == SurfaceKind.LakeBed ? 'K' : '.')}{s % 100}+{top - s}");
+            }
+            Console.WriteLine(line);
+        }
+        if (tick % (fticks / 8) != 0 && tick != 1) continue;
+        int flooded = 0, wet = 0, films = 0;
+        for (int y = 0; y < fsize; y++)
+        for (int x = 0; x < fsize; x++)
+        {
+
+            { int fi = y * fsize + x; if (t.Kind[fi] == SurfaceKind.Land && fs.Water.MassAt(x, y, t.Surface[fi] + 1) >= 20) films++; }
+            int i = y * fsize + x, s = t.Surface[i];
+            bool any = false;
+            for (int z = s + 1; z <= Math.Min(383, s + 6); z++)
+                if (fs.Water.MassAt(x, y, z) >= Colony.Core.Fluids.Water.Full / 4) { any = true; break; }
+            if (!any) continue;
+            wet++;
+            if (t.Kind[i] == SurfaceKind.Land && t.Water[i] == 0) flooded++;
+        }
+        var fillHist = new int[11];
+        for (int y = 0; y < fsize; y++)
+        for (int x = 0; x < fsize; x++)
+        {
+            int i = y * fsize + x;
+            if (t.Kind[i] != SurfaceKind.RiverBed) continue;
+            fillHist[Math.Min(10, fs.Water.MassAt(x, y, t.Surface[i] + t.Water[i]) / 100)]++;
+        }
+        Console.WriteLine($"  river top cells by tenths full: {string.Join(" ", fillHist)}");
+        Console.WriteLine($"tick {tick}: {wet} wet columns, {flooded} of them on land (flooded), {films} land columns with a film; drained {fs.Water.Drained / 1000} cells; total {fs.Water.Total() / 1000}, sourced {fs.Water.Sourced / 1000}, evaporated {fs.Water.Evaporated / 1000}, balance {(fs.Water.Total() + fs.Water.Drained + fs.Water.Evaporated - fs.Water.Sourced) / 1000}");
+    }
+    // Where: flooded columns per 32x32 block, the worst first, with the distance to the nearest carved water.
+    var blocks = new Dictionary<(int, int), (int N, int MinDist, int X, int Y)>();
+    for (int y = 0; y < fsize; y++)
+    for (int x = 0; x < fsize; x++)
+    {
+        int i = y * fsize + x, s = t.Surface[i];
+        if (t.Kind[i] != SurfaceKind.Land || t.Water[i] != 0) continue;
+        if (fs.Water.MassAt(x, y, s + 1) < Colony.Core.Fluids.Water.Full / 4) continue;
+        var k = (x >> 5, y >> 5);
+        var b = blocks.TryGetValue(k, out var have) ? have : (N: 0, MinDist: 999, X: x, Y: y);
+        blocks[k] = (b.N + 1, Math.Min(b.MinDist, t.WaterDistance[i]), b.X, b.Y);
+    }
+    foreach (var (k, b) in blocks.OrderByDescending(kv => kv.Value.N).Take(8))
+        Console.WriteLine($"  block {k}: {b.N} flooded, nearest carved water {b.MinDist} tiles, e.g. ({b.X},{b.Y})");
+    if (Environment.GetEnvironmentVariable("FLOOD_TRACE") is { } trace)
+    {
+        var tp = trace.Split(',');
+        int sx0 = int.Parse(tp[0]), sy0 = int.Parse(tp[1]);
+        // Nearest river tile, then BFS over river tiles to an outlet (map edge, lake or frozen area).
+        int start = -1, best = int.MaxValue;
+        for (int y = sy0 - 8; y <= sy0 + 8; y++) for (int x = sx0 - 8; x <= sx0 + 8; x++)
+            if (t.Kind[y * fsize + x] == SurfaceKind.RiverBed && (x - sx0) * (x - sx0) + (y - sy0) * (y - sy0) < best) { best = (x - sx0) * (x - sx0) + (y - sy0) * (y - sy0); start = y * fsize + x; }
+        var from = new Dictionary<int, int> { [start] = -1 };
+        var q = new Queue<int>(); q.Enqueue(start); int end = -1;
+        while (q.TryDequeue(out int c) && end < 0)
+        {
+            int qx = c % fsize, qy = c / fsize;
+            for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++)
+            {
+                if ((dx != 0) == (dy != 0)) continue;
+                int nx = qx + dx, ny = qy + dy, n = ny * fsize + nx;
+                if (nx < 0 || ny < 0 || nx >= fsize || ny >= fsize || from.ContainsKey(n)) continue;
+                if (t.Kind[n] != SurfaceKind.Land && (nx == 0 || ny == 0 || nx == fsize - 1 || ny == fsize - 1)) { from[n] = c; end = n; break; }
+                if (t.Kind[n] == SurfaceKind.Land) continue;
+                from[n] = c; q.Enqueue(n);
+            }
+        }
+        var path = new List<int>();
+        for (int p = end; p >= 0; p = from[p]) path.Add(p);
+        path.Reverse();
+        Console.WriteLine($"  path of {path.Count} tiles to {(end < 0 ? "nowhere" : t.Kind[end] == SurfaceKind.LakeBed ? "a lake" : "the edge")}:");
+        var sb2 = new System.Text.StringBuilder();
+        for (int k = 0; k < path.Count; k += Math.Max(1, path.Count / 40))
+        {
+            int p = path[k], x = p % fsize, y = p / fsize, s = t.Surface[p], top = s;
+            while (top < 383 && fs.Water.MassAt(x, y, top + 1) >= Colony.Core.Fluids.Water.Full / 4) top++;
+            sb2.Append($" {(t.Kind[p] == SurfaceKind.LakeBed ? 'K' : 'R')}{t.Surface[p] + t.Water[p]}/{top}");
+        }
+        Console.WriteLine($"  carved top / water top along it:{sb2}");
+    }
+    if (Environment.GetEnvironmentVariable("FLOOD_MAP") is { } fmap)
+    {
+        // Every 3rd column: kind letter and water level % 100 (land: height % 100, '*' if water stands on it).
+        var mp2 = fmap.Split(',');
+        int ax = int.Parse(mp2[0]), ay = int.Parse(mp2[1]);
+        for (int y = ay - 45; y <= ay + 45; y += 3)
+        {
+            var line = new System.Text.StringBuilder();
+            for (int x = ax - 75; x <= ax + 75; x += 3)
+            {
+                if (x < 0 || y < 0 || x >= fsize || y >= fsize) { line.Append("    "); continue; }
+                int i = y * fsize + x, top = t.Surface[i] + t.Water[i];
+                bool wetLand = t.Kind[i] == SurfaceKind.Land && fs.Water.MassAt(x, y, t.Surface[i] + 1) >= 100;
+                char k = t.Kind[i] == SurfaceKind.RiverBed ? 'R' : t.Kind[i] == SurfaceKind.LakeBed ? 'K' : wetLand ? '*' : '.';
+                line.Append($"{k}{top % 100,2} ");
+            }
+            Console.WriteLine(line);
+        }
+    }
+    if (Environment.GetEnvironmentVariable("FLOOD_MASS") is { } fm)
+    {
+        // Per column: kind, water level (or land height) % 100, and the mass in the top water cell / the cell above it.
+        var mp = fm.Split(',');
+        int mx0 = int.Parse(mp[0]), my0 = int.Parse(mp[1]);
+        for (int y = my0 - 6; y <= my0 + 6; y++)
+        {
+            var line = new System.Text.StringBuilder();
+            for (int x = mx0 - 9; x <= mx0 + 9; x++)
+            {
+                int i = y * fsize + x, top = t.Surface[i] + t.Water[i];
+                char kind = t.Kind[i] == SurfaceKind.RiverBed ? 'R' : t.Kind[i] == SurfaceKind.LakeBed ? 'K' : '.';
+                int below = t.Kind[i] == SurfaceKind.Land ? fs.Water.MassAt(x, y, top + 1) : fs.Water.MassAt(x, y, top);
+                line.Append($"{kind}{top % 100,2}:{below,4}/{fs.Water.MassAt(x, y, top + 1 + (t.Kind[i] == SurfaceKind.Land ? 1 : 0)),3} ");
+            }
+            Console.WriteLine(line);
+        }
+    }
+    if (Environment.GetEnvironmentVariable("FLOOD_AT") is { } at)
+    {
+        var parts = at.Split(',');
+        int cx0 = int.Parse(parts[0]), cy0 = int.Parse(parts[1]);
+        for (int y = cy0 - 8; y <= cy0 + 8; y++)
+        {
+            var line = new System.Text.StringBuilder();
+            for (int x = cx0 - 20; x <= cx0 + 20; x++)
+            {
+                int i = y * fsize + x, s = t.Surface[i];
+                int top = s;
+                while (top < 383 && fs.Water.MassAt(x, y, top + 1) >= Colony.Core.Fluids.Water.Full / 4) top++;
+                char kind = t.Kind[i] == SurfaceKind.RiverBed ? 'R' : t.Kind[i] == SurfaceKind.LakeBed ? 'K' : '.';
+                line.Append($"{kind}{s % 100,2}{(top > s ? (top - s).ToString() : " ")} ");
+            }
+            Console.WriteLine(line);
+        }
+    }
+    var spawn = fs.Colonists[0].Position;
+    Console.WriteLine($"  colony at ({spawn.X},{spawn.Y}); springs: {fs.Water.Springs.Count}");
+    return;
+}
+
+if (args.Length > 0 && args[0] == "terrain")
+{
+    // Hydrology consistency: dotnet run -c Release --project tools/Colony.Bench -- terrain [size]
+    int tsize = args.Length > 1 ? int.Parse(args[1]) : 1024;
+    var tt = Terrain.Generate(new WorldGenSettings(12345, tsize, tsize, 384));
+    int spills = 0, steps = 0, rivers = 0, lakes = 0, drops = 0, ex = -1, lakeSide = 0, intoLake = 0;
+    for (int y = 0; y < tsize; y++)
+    for (int x = 0; x < tsize; x++)
+    {
+        int i = y * tsize + x;
+        if (tt.Kind[i] == SurfaceKind.Land) continue;
+        if (tt.Kind[i] == SurfaceKind.RiverBed) rivers++; else lakes++;
+        int lvl = tt.Surface[i] + tt.Water[i];
+        for (int k = 0; k < 4; k++)
+        {
+            int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+            if (nx < 0 || ny < 0 || nx >= tsize || ny >= tsize) continue;
+            int j = ny * tsize + nx;
+            if (tt.Kind[j] == SurfaceKind.Land)
+            {
+                if (tt.Surface[j] < lvl) { spills++; if (ex < 0) ex = i; }
+                continue;
+            }
+            int other = tt.Surface[j] + tt.Water[j];
+            if (other == lvl) continue;
+            if (other < lvl) { drops++; if (tt.FlowDirection[i] != (k == 0 ? 0 : k == 1 ? 2 : k == 2 ? 1 : 3)) { steps++; if (tt.Kind[i] == SurfaceKind.LakeBed) lakeSide++; else if (tt.Kind[j] == SurfaceKind.LakeBed) intoLake++; } }
+        }
+    }
+    Console.WriteLine($"{rivers} river, {lakes} lake tiles; {spills} water-to-lower-land contacts (e.g. {ex % tsize},{ex / tsize}); " +
+                      $"{drops} drops, {steps} of them not downstream (side steps: {lakeSide} from a lake, {intoLake} river beside a lower lake)");
+
+    // Water systems (4-connected) that never reach the map edge, river tiles with no way out, big drops, heads.
+    var comp = new int[tsize * tsize];
+    int orphans = 0, orphanTiles = 0, orphanLakes = 0, noFlow = 0, bigDrops = 0, heads = 0;
+    var oq = new Stack<int>();
+    for (int s0 = 0; s0 < comp.Length; s0++)
+    {
+        if (tt.Kind[s0] == SurfaceKind.Land || comp[s0] != 0) continue;
+        comp[s0] = 1;
+        oq.Push(s0);
+        bool edge = false, lake = false;
+        int csize = 0;
+        while (oq.TryPop(out int c))
+        {
+            csize++;
+            int ocx = c % tsize, ocy = c / tsize;
+            edge |= ocx == 0 || ocy == 0 || ocx == tsize - 1 || ocy == tsize - 1;
+            lake |= tt.Kind[c] == SurfaceKind.LakeBed;
+            for (int k = 0; k < 4; k++)
+            {
+                int nx = ocx + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = ocy + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                if (nx < 0 || ny < 0 || nx >= tsize || ny >= tsize) continue;
+                int j = ny * tsize + nx;
+                if (tt.Kind[j] == SurfaceKind.Land || comp[j] != 0) continue;
+                comp[j] = 1;
+                oq.Push(j);
+            }
+        }
+        if (!edge) { orphans++; orphanTiles += csize; if (lake) orphanLakes++; }
+    }
+    for (int i = 0; i < comp.Length; i++)
+    {
+        if (tt.Kind[i] != SurfaceKind.RiverBed) continue;
+        if (tt.FlowDirection[i] == Terrain.NoFlow) noFlow++;
+        int x = i % tsize, y = i / tsize, lvl = tt.Surface[i] + tt.Water[i];
+        bool hasUp = false;
+        for (int k = 0; k < 4; k++)
+        {
+            int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+            if (nx < 0 || ny < 0 || nx >= tsize || ny >= tsize) continue;
+            int j = ny * tsize + nx;
+            if (tt.Kind[j] == SurfaceKind.Land) continue;
+            if (lvl - (tt.Surface[j] + tt.Water[j]) >= 3) bigDrops++;
+            if (tt.Kind[j] == SurfaceKind.RiverBed && tt.FlowDirection[j] == (k == 0 ? 2 : k == 1 ? 0 : k == 2 ? 3 : 1)) hasUp = true;
+        }
+        if (!hasUp) heads++;
+    }
+    Console.WriteLine($"{orphans} water systems not reaching the edge ({orphanTiles} tiles, {orphanLakes} with a lake); " +
+                      $"{noFlow} river tiles with no way out; {bigDrops} drops of 3+ levels; {heads} river tiles nothing flows into");
+
+    // Traps: water tiles that can't reach the edge without flowing uphill (walking upstream from the edge only
+    // ever to water at the same level or higher).
+    var drainsOut = new bool[tsize * tsize];
+    var dq = new Queue<int>();
+    for (int i = 0; i < drainsOut.Length; i++)
+    {
+        int x = i % tsize, y = i / tsize;
+        if (tt.Kind[i] != SurfaceKind.Land && (x == 0 || y == 0 || x == tsize - 1 || y == tsize - 1)) { drainsOut[i] = true; dq.Enqueue(i); }
+    }
+    while (dq.TryDequeue(out int c))
+    {
+        int cx2 = c % tsize, cy2 = c / tsize, lc = tt.Surface[c] + tt.Water[c];
+        for (int k = 0; k < 4; k++)
+        {
+            int nx = cx2 + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = cy2 + (k == 2 ? 1 : k == 3 ? -1 : 0);
+            if (nx < 0 || ny < 0 || nx >= tsize || ny >= tsize) continue;
+            int j = ny * tsize + nx;
+            if (drainsOut[j] || tt.Kind[j] == SurfaceKind.Land || tt.Surface[j] + tt.Water[j] < lc) continue;
+            drainsOut[j] = true;
+            dq.Enqueue(j);
+        }
+    }
+    int traps = 0, trapEx = -1;
+    for (int i = 0; i < drainsOut.Length; i++)
+        if (tt.Kind[i] != SurfaceKind.Land && !drainsOut[i])
+        {
+            traps++;
+            int bx2 = i % tsize, by2 = i / tsize;
+            foreach (int j in new[] { i + 1, i - 1, i + tsize, i - tsize })
+                if (j >= 0 && j < drainsOut.Length && drainsOut[j] && trapEx < 0) { trapEx = i; Console.WriteLine($"  trap edge at ({bx2},{by2}) {tt.Kind[i]} level {tt.Surface[i] + tt.Water[i]} next to {tt.Kind[j]} level {tt.Surface[j] + tt.Water[j]} at ({j % tsize},{j / tsize}), flow {tt.FlowDirection[i]}"); }
+        }
+    Console.WriteLine($"{traps} water tiles with no downhill way out (e.g. {trapEx % tsize},{trapEx / tsize})");
+
+    if (args.Length > 3)
+    {
+        // Map around (x, y): kind, flow arrow, water level % 100 (land: '.' and height % 100).
+        int mx = int.Parse(args[2]), my = int.Parse(args[3]), st = args.Length > 4 ? int.Parse(args[4]) : 1;
+        for (int y = my - 12 * st; y <= my + 12 * st; y += st)
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int x = mx - 18 * st; x <= mx + 18 * st; x += st)
+            {
+                if (x < 0 || y < 0 || x >= tsize || y >= tsize) { sb.Append("    "); continue; }
+                int i = y * tsize + x, lvl = tt.Surface[i] + tt.Water[i];
+                char a = tt.Kind[i] == SurfaceKind.Land ? '.' : tt.Kind[i] == SurfaceKind.LakeBed ? 'K' :
+                    tt.FlowDirection[i] switch { 0 => '>', 1 => 'v', 2 => '<', 3 => '^', _ => '?' };
+                sb.Append($"{a}{lvl % 100,2} ");
+            }
+            Console.WriteLine(sb);
+        }
+    }
+    return;
+}
+
+if (args.Length > 0 && args[0] == "far")
+{
+    // Long trips: dotnet run -c Release --project tools/Colony.Bench -- far [size] [ticks]. Digs the top off the
+    // highest peak and follows the colonists walking there.
+    int psize = args.Length > 1 ? int.Parse(args[1]) : 2048, pticks = args.Length > 2 ? int.Parse(args[2]) : 20000;
+    var ps = ColonySim.Generate(new WorldGenSettings(12345, psize, psize, 384), 7);
+    int bx = 0, by = 0, bz = 0;
+    for (int y = 8; y < psize - 8; y += 2)
+    for (int x = 8; x < psize - 8; x += 2)
+        if (ps.World.SurfaceLevel(x, y) > bz) (bx, by, bz) = (x, y, ps.World.SurfaceLevel(x, y));
+    int n = ps.Designations.DesignateBox(new(bx - 4, by - 4, bz - 3), new(bx + 4, by + 4, bz));
+    var start = ps.Colonists[0].Position;
+    Console.WriteLine($"peak ({bx},{by},{bz}), {n} digs; colony at {start}, {Math.Abs(bx - start.X) + Math.Abs(by - start.Y)} tiles away");
+    var psw = new Stopwatch();
+    double pworst = 0, ptotal = 0;
+    for (int t = 1; t <= pticks; t++)
+    {
+        long nodes0 = Pathfinder.NodesExpanded, s0 = ps.PathSearches;
+        psw.Restart();
+        ps.Step();
+        double ms = psw.Elapsed.TotalMilliseconds;
+        ptotal += ms;
+        if (ms > pworst || ms > 20)
+        {
+            pworst = Math.Max(pworst, ms);
+            Console.WriteLine($"  tick {t}: {ms:0.0} ms, {ps.PathSearches - s0} searches, {Pathfinder.NodesExpanded - nodes0} nodes");
+        }
+        if (t % 1000 == 0)
+        {
+            var c = ps.Colonists;
+            Console.WriteLine($"tick {t}: avg {ptotal / t:0.00} ms; digs left {ps.Designations.Count}; colonists {string.Join(" ", c.Select(k => $"{k.State}:{Math.Abs(bx - k.Position.X) + Math.Abs(by - k.Position.Y)}"))}");
+        }
+    }
+    return;
+}
+
+if (args.Length > 0 && args[0] == "water")
+{
+    // Water only: dotnet run -c Release --project tools/Colony.Bench -- water [size] [steps]
+    int wsize = args.Length > 1 ? int.Parse(args[1]) : 1024, steps = args.Length > 2 ? int.Parse(args[2]) : 600;
+    var ws = ColonySim.Generate(new WorldGenSettings(12345, wsize, wsize, 384), 0);
+    Console.WriteLine($"world {wsize}: {ws.StartupReport}");
+    var clock = new Stopwatch();
+    double worst = 0, sum = 0;
+    for (int s = 1; s <= steps; s++)
+    {
+        clock.Restart();
+        ws.Water.Step();
+        double ms = clock.Elapsed.TotalMilliseconds;
+        sum += ms;
+        worst = Math.Max(worst, ms);
+        if (s % 50 == 0 || s <= 3)
+            Console.WriteLine($"  step {s}: {ms:0.00} ms [{ws.Water.Timings}], {ws.Water.LastStepCells} wet cells visited, {ws.Water.AwakeChunks} awake / {ws.Water.WetChunks} wet chunks, drained {ws.Water.Drained / Colony.Core.Fluids.Water.Full} cells");
+    }
+    Console.WriteLine($"water: avg {sum / steps:0.00} ms/step, worst {worst:0.00} ms");
+    return;
+}
+
 int size = args.Length > 0 ? int.Parse(args[0]) : 1024;
 int colonists = args.Length > 1 ? int.Parse(args[1]) : 20;
 int ticks = args.Length > 2 ? int.Parse(args[2]) : 6000;

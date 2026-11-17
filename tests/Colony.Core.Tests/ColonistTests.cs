@@ -43,6 +43,36 @@ public class ColonistTests
     }
 
     [Fact]
+    public void LongTrips_GoInLegs_WithSmallSearches_AndArrive()
+    {
+        // A 640-tile winding road across rough ground: far more regions than one leg.
+        var w = new VoxelWorld(640, 48, 16);
+        for (int y = 0; y < 48; y++)
+        for (int x = 0; x < 640; x++)
+        {
+            int k = (x / 16 + y / 16) % 4, top = 3 + (k == 3 ? 1 : k); // terraces one level apart: many regions
+            for (int z = 0; z <= top; z++) w.Set(x, y, z, TileType.Stone);
+            // Serpentine walls every 40 tiles with the gap at alternating ends: the straight line is always blocked.
+            bool wall = x % 40 == 20 && (x / 40 % 2 == 0 ? y < 44 : y > 3);
+            if (wall) for (int z = top + 1; z <= 12; z++) w.Set(x, y, z, TileType.Stone);
+        }
+        var sim = new ColonySim(w);
+        var c = sim.AddColonist("Walker", new TilePos(2, 2, w.SurfaceLevel(2, 2) + 1));
+        var target = new TilePos(630, 40, w.SurfaceLevel(630, 40));
+        sim.Designations.Designate(target);
+
+        long worst = 0;
+        for (int i = 0; i < 20000 && sim.Designations.Count > 0; i++)
+        {
+            long before = Pathfinder.NodesExpanded;
+            sim.Step();
+            worst = Math.Max(worst, Pathfinder.NodesExpanded - before);
+        }
+        Assert.Equal(0, sim.Designations.Count);
+        Assert.True(worst <= 10_000, $"a single tick expanded {worst} nodes");
+    }
+
+    [Fact]
     public void Colonists_ShareWork_AndFinishAPit()
     {
         var sim = FlatSim();

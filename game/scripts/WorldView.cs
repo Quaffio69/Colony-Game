@@ -116,6 +116,7 @@ public partial class WorldView : Node3D
         TileType.Quartz => new Color(0.93f, 0.92f, 0.97f),
         TileType.Sulfur => new Color(0.88f, 0.85f, 0.25f),
         TileType.Aetherite => new Color(0.36f, 0.88f, 0.93f, 0.2f), // alpha < 1: glows (see tiles.gdshaderinc)
+        TileType.Wall => new Color(0.66f, 0.63f, 0.58f),
         TileType.UpStair => new Color(0.74f, 0.64f, 0.46f),
         TileType.DownStair => new Color(0.62f, 0.54f, 0.42f),
         TileType.UpDownStair => new Color(0.80f, 0.72f, 0.56f),
@@ -463,8 +464,9 @@ public partial class WorldView : Node3D
         {
             var visible = new List<TilePos>();
             foreach (var (p, k) in _sim.Designations.All)
-                // Plant orders always show: that work happens on the surface whatever level is in view.
-                if (k == kind && (Designations.IsPlantOrder(k) || p.Z <= _viewLevel)) visible.Add(p);
+                // Plant orders always show: that work happens on the surface whatever level is in view. Farms place
+                // their own sow and harvest orders; those stay unmarked (the plot overlay already shows the farm).
+                if (k == kind && (Designations.IsPlantOrder(k) || p.Z <= _viewLevel) && !_sim.Farms.Contains(p)) visible.Add(p);
 
             var mm = marks.Multimesh;
             mm.InstanceCount = visible.Count;

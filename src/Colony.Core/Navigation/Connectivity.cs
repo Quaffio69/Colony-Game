@@ -343,6 +343,30 @@ public sealed class Connectivity
     /// </summary>
     public HashSet<int>? Corridor(TilePos start, IEnumerable<TilePos> goals)
     {
+        var chain = RegionChain(start, goals);
+        if (chain is null) return null;
+        return Widen(chain, 0, chain.Count);
+    }
+
+    /// <summary>Regions <paramref name="from"/>..<paramref name="to"/> (exclusive) of a chain plus their neighbours.</summary>
+    public HashSet<int> Widen(List<int> chain, int from, int to)
+    {
+        var corridor = new HashSet<int>();
+        for (int k = from; k < to; k++)
+        {
+            int r = chain[k];
+            corridor.Add(r);
+            for (int i = _adjStart[r]; i < _adjStart[r + 1]; i++) corridor.Add(_adj[i]);
+        }
+        return corridor;
+    }
+
+    /// <summary>
+    /// The fewest-hops chain of regions from <paramref name="start"/>'s region to the nearest region holding one
+    /// of <paramref name="goals"/> (breadth-first over the region graph), start first. Null if none is reachable.
+    /// </summary>
+    public List<int>? RegionChain(TilePos start, IEnumerable<TilePos> goals)
+    {
         int from = RegionOf(start);
         if (from < 0) return null;
         var goalRegions = new HashSet<int>();
@@ -364,13 +388,10 @@ public sealed class Connectivity
         }
         if (end < 0) return null;
 
-        var corridor = new HashSet<int>();
-        for (int r = end; r >= 0; r = parent[r])
-        {
-            corridor.Add(r);
-            for (int i = _adjStart[r]; i < _adjStart[r + 1]; i++) corridor.Add(_adj[i]);
-        }
-        return corridor;
+        var chain = new List<int>();
+        for (int r = end; r >= 0; r = parent[r]) chain.Add(r);
+        chain.Reverse();
+        return chain;
     }
 
     private int[] _fill = [];
