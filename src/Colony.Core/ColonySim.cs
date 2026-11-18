@@ -105,6 +105,7 @@ public sealed class ColonySim
         Farms.IsBlocked = c => Stockpiles.Contains(c) || Rooms.RoomAt(c) is not null;
         Designations.CanSow = c => Farms.TryGet(c, out var crop) && !Flora.TryGet(c, out _) && PlantInfo.CanGrowAt(World, c, crop);
         _caveIns = new CaveIns(world);
+        DevHooks.SimCreated?.Invoke(this);
     }
 
     /// <summary>
@@ -281,6 +282,8 @@ public sealed class ColonySim
 
         clock.Restart();
         sim.Water.FillFromTerrain(generated.Terrain);
+        var stepping = DevHooks.Stepping; // generation's own settling isn't the caller's step (Wait may inline it)
+        DevHooks.Stepping = null;
         // Settling the water only reads the terrain, as do flora placement and connectivity: run it alongside them.
         long waterMs = 0;
         var settle = Task.Run(() =>
@@ -307,6 +310,7 @@ public sealed class ColonySim
         long connMs = clock.ElapsedMilliseconds;
         if (settleWaterInBackground) sim._waterSettling = settle; // the game draws its first frames meanwhile
         else settle.Wait();
+        DevHooks.Stepping = stepping;
         var t = generated.Terrain;
         sim.StartupReport = $"terrain {genMs} ms ({t.RiverCells} river cells, {t.LakeCells} lake cells), " +
                             $"water settling {(settleWaterInBackground ? "in the background" : $"{waterMs} ms in parallel")} ({sim.Water.WetChunks} wet chunks, {sim.Water.Springs.Count} springs), " +
@@ -439,6 +443,7 @@ public sealed class ColonySim
 
     public void Step()
     {
+        DevHooks.Stepping?.Invoke();
         WaitForWater();
         Tick++;
         _tickNodeStart = Pathfinder.NodesExpanded;

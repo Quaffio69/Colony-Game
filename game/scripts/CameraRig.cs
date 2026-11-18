@@ -35,6 +35,7 @@ public partial class CameraRig : Node3D
     {
         float dt = (float)delta;
         var input = Vector2.Zero;
+        if (GetViewport().GuiGetFocusOwner() is LineEdit) return; // typing in a text box (the test menu's filter)
         if (Input.IsKeyPressed(Key.W)) input.Y -= 1;
         if (Input.IsKeyPressed(Key.S)) input.Y += 1;
         if (Input.IsKeyPressed(Key.A)) input.X -= 1;

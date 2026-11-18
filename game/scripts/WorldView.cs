@@ -226,6 +226,12 @@ public partial class WorldView : Node3D
     }
 
     /// <summary>A chunk's tiles (or a neighbour's border tiles) changed: requeue its section, patch the cap.</summary>
+    // The test menu reloads the scene onto another sim and may bring this one back later: let go of its world.
+    public override void _ExitTree()
+    {
+        if (_sim != null) World.ChunkChanged -= OnChunkChanged;
+    }
+
     private void OnChunkChanged(int chunkIndex)
     {
         var c = World.Chunks[chunkIndex].Coord;

@@ -60,9 +60,21 @@ public partial class Main : Node3D
         });
 
         ulong start = Time.GetTicksMsec();
-        _sim = ColonySim.Generate(new WorldGenSettings(Seed, WorldWidth, WorldDepth, WorldHeight), StartingColonists,
-            settleWaterInBackground: true); // settles while the terrain is meshed for the first frames
-        GD.Print($"World {WorldWidth}x{WorldDepth}x{WorldHeight} built in {Time.GetTicksMsec() - start} ms: {_sim.StartupReport}");
+        if (s_launch is { } launched)
+        {
+            // A world handed over by the test menu (a test's, or the colony coming back from one).
+            _sim = launched;
+            _test = s_launchResult;
+            s_launch = null;
+            s_launchResult = null;
+            _paused = _test is { Stopped: true }; // watching: start where the test set up, Space to run
+        }
+        else
+        {
+            _sim = ColonySim.Generate(new WorldGenSettings(Seed, WorldWidth, WorldDepth, WorldHeight), StartingColonists,
+                settleWaterInBackground: true); // settles while the terrain is meshed for the first frames
+            GD.Print($"World {WorldWidth}x{WorldDepth}x{WorldHeight} built in {Time.GetTicksMsec() - start} ms: {_sim.StartupReport}");
+        }
 
         _world = GetNode<WorldView>("WorldView");
         _world.Initialize(_sim);
@@ -90,7 +102,8 @@ public partial class Main : Node3D
 
         _rig = GetNode<CameraRig>("CameraRig");
         _rig.GroundHeight = VisibleGround;
-        FocusOnColony();
+        if (_test != null) FocusOnTestWorld();
+        else FocusOnColony();
 
         var ui = new CanvasLayer();
         _hud = new Label { Position = new Vector2(12, 10) };
@@ -98,7 +111,70 @@ public partial class Main : Node3D
         _hud.AddThemeConstantOverride("outline_size", 4);
         _hud.AddThemeColorOverride("font_outline_color", new Color(0, 0, 0, 0.6f));
         ui.AddChild(_hud);
+        _testMenu = new TestMenu { Name = "TestMenu" };
+        ui.AddChild(_testMenu);
+        _testMenu.Initialize(this);
         AddChild(ui);
+    }
+
+    // ---- Test menu ------------------------------------------------------------------------------
+    // Opening a world (a test's, or the colony again) hands its sim to the next Main through these statics and
+    // reloads the scene, so every view starts fresh on it. The colony waits in s_home while you look at tests.
+
+    private static ColonySim? s_launch, s_home;
+    private static TestResult? s_launchResult;
+    private static bool s_devArgsDone;
+    private TestResult? _test; // the test whose world this is, if any
+    private TestMenu _testMenu = null!;
+
+    public bool InTestWorld => _test != null;
+    public bool CanRunDemos => _test == null && _sim.Colonists.Count > 0 && _sim.Terrain != null;
+
+    /// <summary>Opens the world a test built (the colony is kept to come back to).</summary>
+    public void ShowTestWorld(TestResult result)
+    {
+        if (result.Sim == null) return;
+        if (_test == null) s_home = _sim;
+        s_launch = result.Sim;
+        s_launchResult = result;
+        GetTree().ReloadCurrentScene();
+    }
+
+    /// <summary>Back from a test's world to the colony, as it was left.</summary>
+    public void ReturnHome()
+    {
+        if (s_home == null) return;
+        s_launch = s_home;
+        s_home = null;
+        s_launchResult = null;
+        GetTree().ReloadCurrentScene();
+    }
+
+    /// <summary>Runs a dev demo in the current colony (the same as its --xxx-demo flag).</summary>
+    public void RunDemo(string id)
+    {
+        if (!CanRunDemos) return;
+        _sim.WaitForWater();
+        _stairsDemoAt = null;
+        switch (id)
+        {
+            case "dig": DigDemo(); break;
+            case "stairs": StairsDemo(); break;
+            case "haul": HaulDemo(); break;
+            case "factory": FactoryDemo(); break;
+            case "parts": PartsDemo(); break;
+            case "showroom": ShowroomDemo(""); break;
+            case "water": WaterDemo(); break;
+        }
+        if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
+    }
+
+    /// <summary>A test's world is small: frame all of it.</summary>
+    private void FocusOnTestWorld()
+    {
+        var w = _sim.World;
+        float size = Math.Max(w.Width, w.Depth);
+        _rig.Focus(new Vector3(w.Width / 2f, w.Height / 2f, w.Depth / 2f), size * 1.2f + 12f, yaw: 205f, pitch: -50f);
     }
 
     public override void _UnhandledInput(InputEvent e)
@@ -113,7 +189,9 @@ public partial class Main : Node3D
             case Key.Key1: _speedIndex = 0; _paused = false; break;
             case Key.Key2: _speedIndex = 1; _paused = false; break;
             case Key.Key3: _speedIndex = 2; _paused = false; break;
-            case Key.C when !key.Echo: FocusOnColony(); break;
+            case Key.C when !key.Echo: if (_test != null) FocusOnTestWorld(); else FocusOnColony(); break;
+            case Key.T when !key.Echo: _testMenu.Toggle(); break;
+            case Key.Escape when _testMenu.Visible: _testMenu.Toggle(); GetViewport().SetInputAsHandled(); break;
         }
     }
 
@@ -161,7 +239,7 @@ public partial class Main : Node3D
             ? $"{TileInfo.Name(_sim.World.Get(h))} at {h}" + (_sim.Flora.TryGet(h.Offset(0, 0, 1), out var plant) ? $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" + (Colony.Core.Nature.PlantInfo.IsGatherable(plant) ? " (ripe)" : "") : "")
             : "-";
         if (_tool.Hovered is { } wh && _sim.Water.MassAt(wh.Offset(0, 0, 1)) is var wm and >= Colony.Core.Fluids.Water.MinMass)
-            hover += $", water {_sim.Water.Level(wh.Offset(0, 0, 1))}/7";
+            hover += $", water {_sim.Water.Level(wh.Offset(0, 0, 1))}/7" + (_sim.Water.Pressure(wh.Offset(0, 0, 1)) is var pr and > 0.05f ? $" (pressed by {pr:0.0} levels)" : "");
         if (_tool.Hovered is { } sh && _sim.Waterworks.At(sh.Offset(0, 0, 1)) is { } thing)
             hover += thing switch
             {
@@ -177,6 +255,8 @@ public partial class Main : Node3D
         string tool = _tool.ModeName(_tool.Mode);
         double seconds = _sim.Tick / (double)ColonySim.TicksPerSecond;
 
+        if (_test != null)
+            sb.AppendLine($"TEST WORLD: {_test.Case.FullName}: {_test.Message.Replace("\n", " ")}    (T: tests, back to the colony)");
         sb.AppendLine($"Level {_world.ViewLevel} / {_sim.World.Height - 1}    Time {seconds:0}s [{time}]    " +
                       $"{Engine.GetFramesPerSecond()} fps, sim {_simMsThisFrame:0.0} ms" +
                       (_world.PendingSections > 0 ? $"    building terrain: {_world.PendingSections} sections left" : ""));
@@ -204,7 +284,7 @@ public partial class Main : Node3D
         sb.AppendLine("F/Shift+F over a machine: change its recipe   LMB: start/confirm box or place   RMB: remove box");
         sb.AppendLine("Z/X while selecting: span levels");
         sb.AppendLine("Z/X: level down/up   Space: pause   1/2/3: speed   Enter: (debug) complete all");
-        sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists");
+        sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists   T: tests and demos");
         // StringBuilder uses \r\n on Windows, which Label renders as an extra blank line.
         _hud.Text = sb.ToString().Replace("\r", "").TrimEnd();
     }
@@ -330,21 +410,43 @@ public partial class Main : Node3D
         if (_frames == 1)
         {
             _firstFrameMs = Time.GetTicksMsec();
-            // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-            if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--ticks" }.Any(a => Arg(a) != null))
-                _sim.WaitForWater();
             if (int.TryParse(Arg("--level"), out int level)) _world.ViewLevel = level;
-            if (Arg("--dig-demo") != null) DigDemo();
-            if (Arg("--stairs-demo") != null) StairsDemo();
-            if (Arg("--haul-demo") != null) HaulDemo();
-            if (Arg("--factory-demo") != null) FactoryDemo();
-            if (Arg("--parts-demo") != null) PartsDemo();
-            if (Arg("--showroom") is { } showroom) ShowroomDemo(showroom);
-            if (Arg("--build-menu") is { } menu) _tool.OpenBuildMenu(menu);
-            if (Arg("--water-demo") != null) WaterDemo();
-            if (int.TryParse(Arg("--ticks"), out int ticks))
-                for (int i = 0; i < ticks; i++) _sim.Step();
-            if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
+            if (Arg("--test-menu") != null) _testMenu.Toggle();            // World-editing flags apply once, to the first world (not again when the test menu reloads the scene).
+            if (!s_devArgsDone)
+            {
+                s_devArgsDone = true;
+                // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--ticks" }.Any(a => Arg(a) != null))
+                    _sim.WaitForWater();
+                if (Arg("--dig-demo") != null) DigDemo();
+                if (Arg("--stairs-demo") != null) StairsDemo();
+                if (Arg("--haul-demo") != null) HaulDemo();
+                if (Arg("--factory-demo") != null) FactoryDemo();
+                if (Arg("--parts-demo") != null) PartsDemo();
+                if (Arg("--showroom") is { } showroom) ShowroomDemo(showroom);
+                if (Arg("--build-menu") is { } menu) _tool.OpenBuildMenu(menu);
+                if (Arg("--water-demo") != null) WaterDemo();
+                if (int.TryParse(Arg("--ticks"), out int ticks))
+                    for (int i = 0; i < ticks; i++) _sim.Step();
+                if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
+                // --test=NAME [--test-watch]: run the first test whose name contains NAME and open its world.
+                if (Arg("--test") is { Length: > 0 } testName)
+                {
+                    var test = TestRunner.Discover().FirstOrDefault(c => c.FullName.Contains(testName, StringComparison.OrdinalIgnoreCase));
+                    if (test == null) GD.PrintErr($"No test matches '{testName}'");
+                    else
+                    {
+                        var result = TestRunner.RunNow(test, Arg("--test-watch") != null);
+                        GD.Print($"Test {test.FullName}: {result.Message} ({result.Ms:0} ms)");
+                        if (result.Sim != null)
+                        {
+                            ShowTestWorld(result);
+                            _frames = 0; // this scene is going; the next one runs the bench flags
+                            return;
+                        }
+                    }
+                }
+            }
             if (float.TryParse(Arg("--zoom"), out float zoom)) _rig.Focus(_world.Center, zoom, yaw: 200f, pitch: -50f);
             if (Arg("--look")?.Split(',') is [var lx, var ly] && int.TryParse(lx, out int lookX) && int.TryParse(ly, out int lookY))
                 _rig.Focus(SimSpace.TileCenter(new TilePos(lookX, lookY, _sim.World.SurfaceLevel(lookX, lookY))), float.TryParse(Arg("--zoom"), out float lz) ? lz : 60f, yaw: 200f, pitch: -55f);

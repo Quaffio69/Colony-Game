@@ -55,6 +55,115 @@ public partial class WaterView : Node3D
         _brass = Mat(new Color(0.78f, 0.6f, 0.3f));
         _structures = new Node3D { Name = "Waterworks" };
         AddChild(_structures);
+
+        var world = sim.World;
+        _capData = new byte[world.Width * world.Depth];
+        _capImage = Image.CreateFromData(world.Width, world.Depth, false, Image.Format.R8, _capData);
+        _capTexture = ImageTexture.CreateFromImage(_capImage);
+        var capMaterial = new ShaderMaterial { Shader = GD.Load<Shader>("res://shaders/water_cap.gdshader") };
+        capMaterial.SetShaderParameter("cells", _capTexture);
+        _cap = new MeshInstance3D
+        {
+            Name = "WaterCap",
+            Mesh = new PlaneMesh { Size = new Vector2(world.Width, world.Depth) },
+            MaterialOverride = capMaterial,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            Visible = false,
+        };
+        AddChild(_cap);
+    }
+
+    // ---- Water cut by the view level ---------------------------------------------------------------------
+    // The slice hides every water surface above the cut, so a lake or flooded tunnel seen from a level below its
+    // surface would vanish. A quad at the cut (like the terrain's cap) draws the water's cross-section there from a
+    // map-sized R8 texture: per column, how far its water stands above the cut (1/16 levels). Rebuilt over the wet
+    // blocks when the level changes, patched per block when a block's water visibly changes, uploaded at most a few
+    // times a second.
+
+    private const double CapUploadSeconds = 0.2;
+    private byte[] _capData = [];
+    private Image _capImage = null!;
+    private ImageTexture _capTexture = null!;
+    private MeshInstance3D _cap = null!;
+    private int _capLevel = int.MinValue;
+    private readonly Dictionary<int, int> _capVersions = new(); // wet block -> the version drawn into the cap
+    private readonly HashSet<int> _capBlocks = new();           // blocks with water above the cut
+    private readonly HashSet<int> _wetNow = new();
+    private readonly List<int> _capGone = new();
+    private bool _capChanged;
+    private double _capWait;
+
+    private void UpdateCap(double delta)
+    {
+        var water = _sim.Water;
+        int level = _worldView.ViewLevel;
+        if (level != _capLevel)
+        {
+            _capLevel = level;
+            Array.Clear(_capData);
+            _capBlocks.Clear();
+            _capVersions.Clear();
+            _capChanged = true;
+            _capWait = 0; // show the new level at once
+            _cap.Position = new Vector3(_sim.World.Width / 2f, level + 1.02f, _sim.World.Depth / 2f); // just over a floor at the cut
+        }
+        _wetNow.Clear();
+        foreach (int bi in water.WetBlockIndices())
+        {
+            _wetNow.Add(bi);
+            int v = water.BlockVersion(bi);
+            if (_capVersions.TryGetValue(bi, out int had) && had == v) continue;
+            _capVersions[bi] = v;
+            _capChanged |= CapBlock(bi, dry: false);
+        }
+        if (_capVersions.Count > _wetNow.Count) // some blocks dried out
+        {
+            _capGone.Clear();
+            foreach (int bi in _capVersions.Keys)
+                if (!_wetNow.Contains(bi)) _capGone.Add(bi);
+            foreach (int bi in _capGone)
+            {
+                _capVersions.Remove(bi);
+                _capChanged |= CapBlock(bi, dry: true);
+            }
+        }
+        _capWait -= delta;
+        if (!_capChanged || _capWait > 0) return;
+        _capChanged = false;
+        _capWait = CapUploadSeconds;
+        _capImage.SetData(_sim.World.Width, _sim.World.Depth, false, Image.Format.R8, _capData);
+        _capTexture.Update(_capImage);
+        _cap.Visible = _capBlocks.Count > 0;
+    }
+
+    /// <summary>Redraws one block's 16x16 columns into the cap; true if a texel changed.</summary>
+    private bool CapBlock(int bi, bool dry)
+    {
+        var world = _sim.World;
+        var water = _sim.Water;
+        int x0 = bi % world.ChunksX * Chunk.Size, y0 = bi / world.ChunksX * Chunk.Size;
+        float cut = _capLevel + 1;
+        bool changed = false, any = false;
+        for (int y = y0; y < Math.Min(y0 + Chunk.Size, world.Depth); y++)
+        for (int x = x0; x < Math.Min(x0 + Chunk.Size, world.Width); x++)
+        {
+            byte value = 0;
+            int spans = dry ? 0 : water.SpanCount(x, y);
+            for (int k = 0; k < spans; k++)
+            {
+                var (floor, _, surface) = water.Span(x, y, k);
+                if (floor > cut) break; // spans come lowest first: the rest are above the cut (sliced away)
+                // The open space the cut passes through (or that rests on the cut level's floor), wet above the cut.
+                if (surface is { } s && s > cut + 0.03f) value = (byte)Math.Clamp((int)MathF.Round((s - cut) * 16f), 1, 255);
+            }
+            ref byte texel = ref _capData[y * world.Width + x];
+            changed |= texel != value;
+            texel = value;
+            any |= value != 0;
+        }
+        if (any) _capBlocks.Add(bi);
+        else _capBlocks.Remove(bi);
+        return changed;
     }
 
     private ShaderMaterial Mat(Color c)
@@ -80,7 +189,11 @@ public partial class WaterView : Node3D
             _water.SetShaderParameter("cut_height", (float)(level + 1));
             foreach (var m in _sliced) m.SetShaderParameter("cut_height", (float)(level + 1));
         }
-        if (_sim.WaterReady) UpdateWater(); // nothing to mesh until the generated water has settled
+        if (_sim.WaterReady) // nothing to mesh until the generated water has settled
+        {
+            UpdateWater();
+            UpdateCap(delta);
+        }
         if (_sim.Waterworks.Version != _drawnWorks || _sim.Constructions.Version != _drawnSites) RebuildStructures();
         foreach (var (wheel, rotor) in _wheels)
             rotor.RotateObjectLocal(Vector3.Forward, (float)delta * (0.2f + wheel.Power * 0.25f));

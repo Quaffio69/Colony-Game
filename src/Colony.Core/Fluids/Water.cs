@@ -13,8 +13,8 @@ namespace Colony.Core.Fluids;
 /// (clipped to the shared window, so water pours over a lip and down into a lower neighbour: waterfalls, filling
 /// a pit, flooding a tunnel). Each pipe's flow keeps most of last step's (momentum, so rivers carry real volume)
 /// and is scaled down if a span would give more than it holds. A pipe's pull grows with the depth of water at
-/// the window, so deep channels carry more than thin films. There is no pressure: water doesn't rise up the far
-/// side of a U-bend (pumps lift it).
+/// the window, so deep channels carry more than thin films. Water in flooded regions (spans full to their ceilings)
+/// is under pressure and moves as one pipe between its open ends (see <see cref="Pressurize"/>).
 /// </para>
 /// <para>
 /// Steps are two passes over 16x16-column blocks (chunk columns): every span's outflows from the previous state,
@@ -70,6 +70,9 @@ public sealed class Water
         public int[] Link = [];         // per span and slot: the span the pipe leads to (see BuildLinks), or -1
         public byte[] Back = [];        // per span and slot: which of that span's pipes leads back
         public bool LinksValid;
+        public bool[] Confined = [];    // per span: part of a flooded region this step (see Pressurize)
+        public int[] Press = [];        // per span: that region's head (units), while Confined
+        public bool HasFull;            // some span is full to its ceiling (a flooded region may start here)
         public int[] FlowX = [], FlowY = []; // per span: net flow last step (for drawing, wheels)
         public int[] NewVol = [];
         public int[] Shown = [];        // per span: the volume views last drew (see Apply)
@@ -93,6 +96,8 @@ public sealed class Water
     private readonly int _bw, _bd;
     private readonly SortedSet<int> _wet = new();
     private readonly HashSet<int> _dirty = new();
+    private readonly SortedSet<int> _fullBlocks = new(); // blocks with a span full to its ceiling (see Pressurize)
+    private readonly List<(Block B, int S)> _confined = new();
     private List<Block> _awake = new();
     private readonly List<Block> _prepared = new();
     private readonly Dictionary<TilePos, (int Rate, int Limit)> _springs = new();
@@ -128,6 +133,7 @@ public sealed class Water
     public int Version { get; private set; }
     public long Steps { get; private set; }
     public string Timings { get; private set; } = "";
+
     private static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
     private static double Sw() => Clock.Elapsed.TotalMilliseconds;
     /// <summary>Spans stepped by the last step (diagnostics).</summary>
@@ -157,7 +163,19 @@ public sealed class Water
     public float? SurfaceAt(int x, int y, int z)
     {
         if (!Find(x, y, z, out var b, out int s) || b.Vol[s] < Dry) return null;
-        return b.Floor[s] + b.Vol[s] / (float)U;
+        return b.Floor[s] + Math.Min(b.Vol[s], (b.Ceil[s] - b.Floor[s]) * U) / (float)U;
+    }
+
+    /// <summary>
+    /// How hard the water in a cell's space is pressed, in levels of head above its ceiling: 0 for open water or a
+    /// space not yet full; a flooded tunnel under a lake ten levels above its roof is pressed by about ten.
+    /// </summary>
+    public float Pressure(TilePos p)
+    {
+        if (!Find(p.X, p.Y, p.Z, out var b, out int s)) return 0;
+        if (!b.Confined[s]) return 0;
+        long over = b.Press[s] - (long)b.Ceil[s] * U;
+        return over > 0 ? over / (float)U : 0f;
     }
 
     /// <summary>Open spans of a column (floor, ceiling, water surface or null), lowest first, for drawing.</summary>
@@ -324,6 +342,7 @@ public sealed class Water
     /// <summary>Advances the water one step. Cost follows the awake blocks.</summary>
     public void Step()
     {
+        DevHooks.Stepping?.Invoke();
         Steps++;
         if (_dirty.Count > 0)
         {
@@ -336,6 +355,7 @@ public sealed class Water
             }
             _dirty.Clear();
         }
+        if (_fullBlocks.Count > 0 || _confined.Count > 0) Pressurize();
         if (_awake.Count == 0)
         {
             LastStepCells = 0;
@@ -380,6 +400,7 @@ public sealed class Water
             b.Drained = 0;
             (b.Vol, b.NewVol) = (b.NewVol, b.Vol);
             if (b.Wet > 0) _wet.Add(b.Index); else _wet.Remove(b.Index);
+            if (b.HasFull) _fullBlocks.Add(b.Index); else _fullBlocks.Remove(b.Index);
             if (b.Changed)
             {
                 b.Version++;
@@ -441,7 +462,12 @@ public sealed class Water
                 continue;
             }
             long floor = (long)b.Floor[s] * U, ceil = (long)b.Ceil[s] * U;
-            long surface = Math.Min(floor + vol, ceil);
+            if (b.Confined[s])
+            {
+                Array.Clear(o, ob, Slots); // flooded: its region moves its water (see Pressurize)
+                continue;
+            }
+            long head = floor + vol;
             long sum = 0;
             for (int slot = 0; slot < Slots; slot++)
             {
@@ -455,12 +481,17 @@ public sealed class Water
                 int t = l & SpanMask;
                 long nf = (long)nb.Floor[t] * U, nc = (long)nb.Ceil[t] * U;
                 long lo = Math.Max(floor, nf), hi = Math.Min(ceil, nc);
-                long other = Math.Min(nf + nb.Vol[t], nc);
-                long ha = Math.Clamp(surface, lo, hi), hb = Math.Clamp(other, lo, hi);
-                long window = Math.Clamp(Math.Max(ha, hb) - lo, U / 8, U);
+                if (nb.Confined[t])
+                {
+                    o[ob + slot] = 0;
+                    continue;
+                }
+                long other = nf + nb.Vol[t];
+                long ha = Math.Max(head, lo), hb = Math.Max(other, lo);
+                long window = Math.Clamp(Math.Min(Math.Max(ha, hb), hi) - lo, U / 8, U);
                 long f = (long)o[ob + slot] * FrictionKeep / FrictionDiv + (ha - hb) * window / ((long)U * Accel);
                 if (f < MinFlow) f = 0;
-                f = Math.Min(f, Math.Max(0, surface - lo)); // only water above the window passes
+                f = Math.Min(f, Math.Max(0, head - lo)); // only water above the window passes
                 o[ob + slot] = (int)f;
                 sum += f;
             }
@@ -476,7 +507,7 @@ public sealed class Water
         var link = b.Link;
         var back = b.Back;
         int wet = 0, visited = 0;
-        bool changed = false, received = false, still = true;
+        bool changed = false, received = false, still = true, full = false;
         long drained = 0, evaporated = 0;
         for (int c = 0; c < Chunk.Size * Chunk.Size; c++)
         {
@@ -489,6 +520,7 @@ public sealed class Water
                 for (int s = b.Start[c]; s < b.Start[c + 1]; s++)
                 {
                     b.NewVol[s] = b.Vol[s];
+                    full |= b.Vol[s] >= (long)(b.Ceil[s] - b.Floor[s]) * U;
                     if (b.Vol[s] > 0) wet++;
                 }
                 continue;
@@ -520,14 +552,13 @@ public sealed class Water
                     if (over > 0) { long e = Math.Min(over, Seepage); n -= e; evaporated += e; }
                 }
                 if (n < Dry && inflow == 0) { evaporated += n; n = 0; }
-                long cap = (long)(b.Ceil[s] - b.Floor[s]) * U;
-                if (n > cap) n = cap;
                 if (edge && n > 0)
                 {
                     drained += n;
                     n = 0;
                 }
                 b.NewVol[s] = (int)n;
+                full |= n >= (long)(b.Ceil[s] - b.Floor[s]) * U;
                 b.FlowX[s] = (int)(fx / 2);
                 b.FlowY[s] = (int)(fy / 2);
                 if (n > 0) wet++;
@@ -547,10 +578,143 @@ public sealed class Water
         b.Visited = visited;
         b.Drained = drained;
         b.Evaporated = evaporated;
+        b.HasFull = full;
         b.Changed = changed;
         b.Received = received;
         b.Quiet = still ? b.Quiet + 1 : 0;
     }
+
+    /// <summary>
+    /// Pressure. Water in a flooded region (connected spans full to their ceilings: a drowned tunnel, a flooded
+    /// mine) can't rise or fall, so it acts as one pipe between the free water at its ends (the lake above a shaft,
+    /// an open shaft at the far end, a cave half full). All its ends share one pressure: their water heads averaged,
+    /// weighted by the size of their openings. Ends standing higher than that push water in, lower ones receive
+    /// it, the same amount both ways, so the region stays exactly full and hides nothing: a shaft dug down from a
+    /// lake, along a tunnel and up again fills to the lake's level, and a U-bend levels out. Each opening passes
+    /// up to about a level of water a step (a real flooded tunnel fills a shaft in seconds). If the ends stand lower
+    /// than the region's roof, it isn't under pressure: ordinary pipes drain it. Regions are found each step from
+    /// the blocks that have full spans; inside them pipes carry nothing (they're marked Confined). Serial and in
+    /// block/span order: deterministic.
+    /// </summary>
+    private void Pressurize()
+    {
+        foreach (var (cb, cs) in _confined)
+            if (cs < cb.Confined.Length) cb.Confined[cs] = false;
+        _confined.Clear();
+        if (_fullBlocks.Count == 0) return;
+
+        var seen = new HashSet<long>();
+        var members = new List<(Block B, int S)>();
+        var ends = new List<(Block B, int S, long Lo, long Window, long Head)>();
+        var queue = new Queue<(Block B, int S)>();
+        foreach (int bi in _fullBlocks.ToArray())
+        {
+            var b0 = _blocks[bi]!;
+            if (b0.NeedsSpans) continue;
+            if (!b0.LinksValid) BuildLinks(b0);
+            for (int s0 = 0; s0 < b0.Spans; s0++)
+            {
+                if (!IsFull(b0, s0) || !seen.Add((long)b0.Index << SpanBits | s0)) continue;
+                members.Clear();
+                ends.Clear();
+                queue.Enqueue((b0, s0));
+                long top = 0;
+                while (queue.TryDequeue(out var m))
+                {
+                    members.Add(m);
+                    var (b, s) = m;
+                    top = Math.Max(top, (long)b.Ceil[s] * U);
+                    if (!b.LinksValid) BuildLinks(b);
+                    for (int slot = 0; slot < Slots; slot++)
+                    {
+                        int l = b.Link[s * Slots + slot];
+                        if (l < 0) continue;
+                        var nb = _blocks[l >> SpanBits]!;
+                        int t = l & SpanMask;
+                        if (IsFull(nb, t))
+                        {
+                            if (seen.Add((long)nb.Index << SpanBits | t)) queue.Enqueue((nb, t));
+                            continue;
+                        }
+                        long lo = (long)Math.Max(b.Floor[s], nb.Floor[t]) * U, hi = (long)Math.Min(b.Ceil[s], nb.Ceil[t]) * U;
+                        long head = Math.Max((long)nb.Floor[t] * U + nb.Vol[t], lo); // dry below the opening: water pours in
+                        ends.Add((nb, t, lo, Math.Min(hi - lo, U), head));
+                    }
+                }
+                // The region's pressure: its ends' heads, averaged by opening.
+                long weight = 0;
+                double sum = 0;
+                foreach (var e in ends)
+                {
+                    weight += e.Window;
+                    sum += (double)e.Window * e.Head;
+                }
+                long press = weight > 0 ? (long)(sum / weight) : top;
+                if (press < top - U / 16) continue; // not pressed: ordinary pipes drain or fill it
+                long extra = 0;
+                foreach (var (b, s) in members)
+                {
+                    long cap = (long)(b.Ceil[s] - b.Floor[s]) * U;
+                    extra += Math.Max(0, b.Vol[s] - cap); // water squeezed in earlier: let it out
+                    b.Vol[s] = (int)Math.Min(b.Vol[s], cap);
+                    b.Confined[s] = true;
+                    b.Press[s] = (int)Math.Min(int.MaxValue, press);
+                    _confined.Add((b, s));
+                }
+                if (ends.Count == 0)
+                {
+                    members[0].B.Vol[members[0].S] += (int)extra; // sealed: nowhere to go
+                    continue;
+                }
+                // Ends above the pressure give, ends below it take, half the difference a step, at most a level per
+                // opening; scaled so that what goes in comes out (plus any extra that was squeezed in).
+                long give = 0, take = 0;
+                var flow = new long[ends.Count];
+                for (int k = 0; k < ends.Count; k++)
+                {
+                    var e = ends[k];
+                    long q = (e.Head - press) * e.Window / (2L * U);
+                    q = Math.Clamp(q, -e.Window, e.Window);
+                    if (q > 0) q = Math.Min(q, Math.Max(0, (long)e.B.Floor[e.S] * U + e.B.Vol[e.S] - e.Lo)); // only water above the opening
+                    flow[k] = q;
+                    if (q > 0) give += q; else take -= q;
+                }
+                long moved = Math.Min(give + extra, take);
+                if (moved <= 0)
+                {
+                    members[0].B.Vol[members[0].S] += (int)extra;
+                    continue;
+                }
+                long fromExtra = Math.Min(extra, moved), fromEnds = moved - fromExtra;
+                long given = fromExtra, received = 0;
+                int lastTaker = -1;
+                for (int k = 0; k < ends.Count; k++)
+                {
+                    var e = ends[k];
+                    if (flow[k] > 0)
+                    {
+                        long q = give > 0 ? flow[k] * fromEnds / give : 0;
+                        e.B.Vol[e.S] -= (int)q;
+                        given += q;
+                    }
+                }
+                for (int k = 0; k < ends.Count; k++)
+                {
+                    if (flow[k] >= 0) continue;
+                    var e = ends[k];
+                    long q = -flow[k] * given / take;
+                    e.B.Vol[e.S] += (int)q;
+                    received += q;
+                    lastTaker = k;
+                }
+                if (lastTaker >= 0) ends[lastTaker].B.Vol[ends[lastTaker].S] += (int)(given - received); // rounding
+                if (extra > fromExtra) members[0].B.Vol[members[0].S] += (int)(extra - fromExtra);
+                foreach (var e in ends) Touch(e.B, visible: true);
+            }
+        }
+    }
+
+    private static bool IsFull(Block b, int s) => b.Vol[s] >= (long)(b.Ceil[s] - b.Floor[s]) * U;
 
     private const int SpanBits = 13, SpanMask = (1 << SpanBits) - 1;
 
@@ -674,7 +838,7 @@ public sealed class Water
         var ceils = new List<short>();
         var start = new int[Chunk.Size * Chunk.Size + 1];
         var open = new bool[h];
-        var oldWater = new List<(long Bottom, long Top)>();
+        var oldWater = new List<(long Bottom, long Top, long Pressed)>();
         var newVol = new List<int>();
         for (int c = 0; c < Chunk.Size * Chunk.Size; c++)
         {
@@ -693,27 +857,34 @@ public sealed class Water
                 newVol.Add(0);
             }
             if (!hadSpans) continue;
-            // Lay the old water back in.
+            // Lay the old water back in; a pressed span's extra (past its ceiling) stays with the space its floor is in.
             oldWater.Clear();
             for (int s = b.Start[c]; s < b.Start[c + 1]; s++)
-                if (b.Vol[s] > 0) oldWater.Add(((long)b.Floor[s] * U, Math.Min((long)b.Floor[s] * U + b.Vol[s], (long)b.Ceil[s] * U)));
-            foreach (var (bottom, topW) in oldWater)
+                if (b.Vol[s] > 0)
+                {
+                    long bottom = (long)b.Floor[s] * U, cap = (long)(b.Ceil[s] - b.Floor[s]) * U;
+                    oldWater.Add((bottom, bottom + Math.Min(b.Vol[s], cap), Math.Max(0, b.Vol[s] - cap)));
+                }
+            foreach (var (bottom, topW, pressed) in oldWater)
             {
-                long left = topW - bottom;
+                long left = topW - bottom + pressed;
+                int home = -1;
                 for (int s = first; s < floors.Count; s++)
                 {
+                    if (bottom >= (long)floors[s] * U && bottom < (long)ceils[s] * U) home = s;
                     long lo = Math.Max(bottom, (long)floors[s] * U), hi = Math.Min(topW, (long)ceils[s] * U);
                     if (hi <= lo) continue;
                     newVol[s] += (int)(hi - lo);
                     left -= hi - lo;
                 }
                 if (left <= 0) continue;
-                // Displaced: into the lowest space above where it was, else the highest one below.
-                int to = -1;
-                for (int s = first; s < floors.Count; s++)
-                    if ((long)floors[s] * U >= bottom) { to = s; break; }
+                // Displaced (and pressure): to the space the water stood in, else the lowest space above it, else
+                // the highest one below. Past its ceiling it presses, and flows on.
+                int to = home;
+                for (int s = first; s < floors.Count && to < 0; s++)
+                    if ((long)floors[s] * U >= bottom) to = s;
                 if (to < 0) to = floors.Count - 1;
-                if (to >= first) newVol[to] = (int)Math.Min(newVol[to] + left, (long)(ceils[to] - floors[to]) * U);
+                if (to >= first) newVol[to] += (int)left;
             }
         }
         start[Chunk.Size * Chunk.Size] = floors.Count;
@@ -726,6 +897,10 @@ public sealed class Water
         b.FlowX = new int[floors.Count];
         b.FlowY = new int[floors.Count];
         b.Out = null;
+        b.Confined = new bool[floors.Count];
+        b.Press = new int[floors.Count];
+        b.HasFull = true; // let the next step look for flooded regions here
+        _fullBlocks.Add(b.Index);
         b.LinksValid = false;
         for (int side = 0; side < 4; side++)
         {

@@ -170,8 +170,16 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   difference in surface height clipped to the shared window (water pours over a lip into a lower neighbour:
   falls, pits, flooding a tunnel under an overhang); each pipe keeps 31/32 of last step's flow (momentum) plus
   1/5 of the head difference times the depth at the window (up to a level), scaled down if a span would give more
-  than it holds. Accel must stay above 4 (sides) or alternate columns ping-pong. No pressure: no U-bends (pumps
-  lift water). Spans are rebuilt from the world on `ChunkChanged`, laying old water back in cell by cell (water
+  than it holds. Accel must stay above 4 (sides) or alternate columns ping-pong. **Pressure** (`Pressurize`): each
+  step, connected spans full to their ceilings form a flooded region acting as one pipe between its open ends (free
+  spans linked to it). Its pressure = the ends' heads averaged by opening size; ends above it give, ends below take
+  (half the difference a step, at most a level per opening), equal amounts, so the region stays exactly full and
+  hides no water; inside it pipes carry nothing (`Confined`). Pressure is even along a still tunnel; a shaft at the
+  far end fills to the lake's level, or gushes out if it opens below it (artesian). If the ends stand below the
+  region's roof it isn't pressed and drains normally. (The first try, pressure as stiff squeezed-in water, hid
+  water and lost head along tunnels: a 30-tile tunnel showed 37 levels at one end, 12 at the other.)
+  `Water.Pressure` reports it (and the hover text). No siphons (no suction).
+  Spans are rebuilt from the world on `ChunkChanged`, laying old water back in cell by cell (water
   in now-solid cells goes to the space above). Map borders drain. Springs add up to a rate until their span's
   surface reaches their limit. Public amounts are thousandths of a cell (`Full`); `MassAt` = how full a cell is.
   **Seepage:** water above its column's natural level (generated: just under a lake's shore / a river's bank, or the
@@ -201,7 +209,9 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   moves a sixteenth of a level from what was last drawn (hysteresis); unbuilt sections build first, changed ones
   take turns within a 3 ms/frame budget. UV carries the flow (`Water.FlowAt`, exaggerated for the eye) so ripples
   stream along it. No draw distance. (Remote Desktop caps rendering at ~30 fps: frame times of ~31 ms there
-  are not the game.)
+  are not the game.) The slice hides water above the cut, so a **water cap** (`water_cap.gdshader`, like the
+  terrain cap) draws the cross-section at the cut from a map-sized R8 texture (water above the cut per column, 1/16
+  levels): rebuilt over wet blocks on a level change, patched per changed block, uploaded at most 5x a second.
 - **Waterworks:** `Orders.Constructions` holds single-cell blueprints (walls from 1 stone; water wheels and
   pumps from planks) built like room parts (haulers deliver, Designations-labor builders build;
   `ColonySim.CompleteConstruction`). Walls stack on wall blueprints, so dams rise level by level; a wall is
@@ -230,6 +240,13 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   (or `-- water [size] [steps]` for the water simulation alone, whole map)
   (prints per-phase totals, slow-tick breakdowns and GC counts; the render bench prints a startup breakdown).
 - VS Code: F5 "Play Game" or "Open Godot Editor" (see `.vscode/launch.json`).
+- **In-game test menu (T):** every xUnit test, run inside the game (`TestRunner`: the test DLL from
+  `tests/Colony.Core.Tests/bin/Debug` loaded from bytes into its own load context sharing the game's Colony.Core;
+  "Reload tests" picks up a rebuild). "Run" opens the first `ColonySim` the test built, at its end; "Watch" stops it
+  at its first step (`DevHooks`, per-thread hooks in Core) and opens that world paused. The colony waits in a static
+  while you look ("Back to the colony"); worlds swap by scene reload, so views must unsubscribe from the sim on
+  `_ExitTree`. Also launches the dev demos into the colony. CLI: `--test=NAME [--test-watch] [--test-menu]`.
+  Tests that should be watchable just build a `ColonySim` (hand-built worlds are drawn like any other).
 
 ## Status / roadmap
 
@@ -257,7 +274,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       deterministic two-pass steps on awake blocks, generated rivers/lakes settled at load, springs by catchment,
       `WaterView` smooth sloping surfaces with flow-streamed ripples; walls (dams, canals), water wheels, pumps,
       colony power pool, irrigation.
-- [ ] Next for water: the step off the main thread (2048 cost), pressure (U-bends) if wanted, wading/swimming
+- [ ] Next for water: the step off the main thread (2048 cost), siphons, wading/swimming
       and drowning (water blocking deep cells), axles and separate power networks, powered workshops,
       floodgates/sluices, aquifers, freezing, wells, meandering river courses (they follow the 4-tile drainage).
 - [x] Flora: ~130k trees (oak, birch, pine, spruce, willow) and ~100k surface plants (shrubs, berry bushes,

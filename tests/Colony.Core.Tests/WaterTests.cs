@@ -60,6 +60,99 @@ public class WaterTests
     }
 
     [Fact]
+    public void UBend_LevelsOutThroughAFloodedTunnel()
+    {
+        // Two shafts (x=10 and x=14) in a block of rock, joined by a tunnel along the floor at z=3.
+        var sim = Flat(height: 20);
+        Fill(sim, 8, 8, 3, 16, 12, 18);
+        Fill(sim, 10, 10, 4, 10, 10, 18, TileType.Air);
+        Fill(sim, 14, 10, 4, 14, 10, 18, TileType.Air);
+        Fill(sim, 10, 10, 3, 14, 10, 3, TileType.Air);
+        sim.Water.Add(new TilePos(10, 10, 4), F * 10); // ten levels poured into the west shaft
+        long total = sim.Water.Total();
+        Steps(sim, 3000);
+
+        float west = sim.Water.SurfaceAt(10, 10, 4) ?? 0, east = sim.Water.SurfaceAt(14, 10, 4) ?? 0;
+        Assert.True(east > 6f, $"the east shaft fills up through the tunnel ({east}, west {west})");
+        Assert.InRange(west - east, -0.2f, 0.2f); // and the two stand level
+        Assert.Equal(F, sim.Water.MassAt(12, 10, 3)); // the tunnel is full (under pressure)
+        Assert.InRange(sim.Water.Total(), total - total / 200, total);
+        Assert.True(sim.Water.Pressure(new TilePos(12, 10, 3)) > 2f, "the tunnel's water is pressed by the shafts");
+        Assert.Equal(0f, sim.Water.Pressure(new TilePos(10, 10, 4)));
+    }
+
+    [Fact]
+    public void AShaftDugUpFromATunnelUnderALake_FillsToTheLakesLevel()
+    {
+        // A lake (floor z=8, water to z=12) on a plateau of rock; a tunnel at z=3 runs from under it to a shaft
+        // 12 tiles away, joined to the lake by a hole through its floor.
+        var sim = Flat(size: 48, height: 20);
+        Fill(sim, 0, 0, 3, 47, 47, 7);
+        for (int x = 5; x <= 14; x++)
+        for (int y = 20; y <= 28; y++) sim.Water.Add(new TilePos(x, y, 8), 4 * F);
+        Basin(sim, 5, 20, 14, 28, 14);
+        Fill(sim, 10, 24, 3, 30, 24, 3, TileType.Air); // the tunnel
+        Fill(sim, 10, 24, 4, 10, 24, 7, TileType.Air); // the hole up into the lake
+        Fill(sim, 30, 24, 4, 30, 24, 19, TileType.Air); // the shaft at its far end, up into the open
+        Fill(sim, 29, 23, 8, 31, 25, 16); // walls around the shaft's top so it can stand higher than the plateau
+        Fill(sim, 30, 24, 8, 30, 24, 16, TileType.Air);
+        Steps(sim, 4000);
+        float lake = sim.Water.SurfaceAt(8, 22, 9) ?? 0, shaft = sim.Water.SurfaceAt(30, 24, 10) ?? 0;
+        Assert.True(shaft > 10f, $"water rises up the shaft past the plateau ({shaft})");
+        Assert.InRange(shaft - lake, -0.3f, 0.3f);
+    }
+
+    [Fact]
+    public void ALongFloodedTunnel_PassesTheLakesFullPressure_AndTheFarShaftFillsToTheLakesLevel()
+    {
+        // Rock up to z=44 with a lake on it (floor z=45, three levels deep); a shaft from the lake bed down to a
+        // tunnel at z=6 running 30 tiles east, and a shaft at its end back up to the open air.
+        var w = new VoxelWorld(64, 48, 60);
+        for (int y = 0; y < 48; y++)
+        for (int x = 0; x < 64; x++)
+        for (int z = 0; z <= 44; z++) w.Set(x, y, z, TileType.Stone);
+        var sim = new ColonySim(w);
+        Basin(sim, 2, 2, 25, 25, 50);
+        Fill(sim, 1, 1, 3, 26, 26, 44); // (Basin's walls start at z=3; the rock below is solid anyway)
+        for (int y = 2; y <= 25; y++)
+        for (int x = 2; x <= 25; x++) sim.Water.Add(new TilePos(x, y, 45), 3 * F);
+        Fill(sim, 10, 20, 6, 10, 20, 44, TileType.Air); // the shaft down from the lake bed
+        Fill(sim, 10, 20, 6, 40, 20, 6, TileType.Air);  // the tunnel
+        Fill(sim, 40, 20, 6, 40, 20, 59, TileType.Air); // the shaft up at its end...
+        Fill(sim, 39, 19, 45, 41, 21, 55);               // ...walled up above the lake (or it gushes out on the plateau)
+        Fill(sim, 40, 20, 45, 40, 20, 55, TileType.Air);
+        long total = sim.Water.Total();
+        Steps(sim, 1500);
+
+        float lake = sim.Water.SurfaceAt(15, 15, 46) ?? 0, far = sim.Water.SurfaceAt(40, 20, 10) ?? 0;
+        float near = sim.Water.Pressure(new TilePos(12, 20, 6)), end = sim.Water.Pressure(new TilePos(39, 20, 6));
+        Assert.True(Math.Abs(far - lake) < 0.3f, $"communicating vessels: lake {lake}, far shaft {far}, pressure near {near} end {end}, tunnel mass {sim.Water.MassAt(25, 20, 6)}, total {sim.Water.Total()} of {total}");
+        Assert.InRange(near - end, -0.5f, 0.5f); // a still flooded tunnel is pressed alike all along
+        Assert.True(near > 35f, $"the tunnel carries the lake's head ({near})");
+        Assert.Equal(F, sim.Water.MassAt(25, 20, 6));
+        Assert.InRange(sim.Water.Total(), total - total / 500, total); // nothing hidden, nothing lost
+    }
+
+    [Fact]
+    public void AShaftEndingBelowTheLakesLevel_GushesLikeAnArtesianWell()
+    {
+        // As above, but the far shaft opens on the plateau, a level below the lake's surface: it overflows.
+        var w = new VoxelWorld(64, 48, 60);
+        for (int y = 0; y < 48; y++)
+        for (int x = 0; x < 64; x++)
+        for (int z = 0; z <= 44; z++) w.Set(x, y, z, TileType.Stone);
+        var sim = new ColonySim(w);
+        Basin(sim, 2, 2, 25, 25, 50);
+        for (int y = 2; y <= 25; y++)
+        for (int x = 2; x <= 25; x++) sim.Water.Add(new TilePos(x, y, 45), 3 * F);
+        Fill(sim, 10, 20, 6, 10, 20, 44, TileType.Air);
+        Fill(sim, 10, 20, 6, 40, 20, 6, TileType.Air);
+        Fill(sim, 40, 20, 6, 40, 20, 44, TileType.Air);
+        Steps(sim, 600);
+        Assert.True(sim.Water.MassAt(42, 20, 45) > 0, "water spills out over the plateau around the shaft");
+    }
+
+    [Fact]
     public void WaterLeavesTheWorld_OverItsBorder()
     {
         var sim = Flat();
