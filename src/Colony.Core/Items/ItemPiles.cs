@@ -114,6 +114,17 @@ public sealed class ItemPiles
         Store(p, pile with { Incoming = Math.Max(0, pile.Incoming - amount) });
     }
 
+    /// <summary>Uses up to <paramref name="amount"/> unreserved units where they lie (the colony consuming goods). Returns how many.</summary>
+    public int Consume(TilePos p, int amount)
+    {
+        if (!_piles.TryGetValue(p, out var pile)) return 0;
+        int n = Math.Min(amount, pile.Available);
+        if (n <= 0) return 0;
+        Store(p, pile with { Count = pile.Count - n });
+        LayoutVersion++;
+        return n;
+    }
+
     /// <summary>Takes up to <paramref name="amount"/> reserved units for a hauler; releases that reservation.</summary>
     public int TakeReserved(TilePos p, int amount)
     {

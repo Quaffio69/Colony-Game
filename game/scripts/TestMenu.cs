@@ -36,7 +36,7 @@ public partial class TestMenu : PanelContainer
     private static readonly (string Label, string Id)[] Demos =
     [
         ("Water", "water"), ("Factory", "factory"), ("Hauling", "haul"), ("Parts", "parts"),
-        ("Showroom", "showroom"), ("Stairs", "stairs"), ("Dig", "dig"),
+        ("Homes", "homes"), ("Showroom", "showroom"), ("Stairs", "stairs"), ("Dig", "dig"),
     ];
 
     public void Initialize(Main main)

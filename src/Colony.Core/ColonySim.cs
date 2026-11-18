@@ -304,6 +304,12 @@ public sealed class ColonySim
             int n = sim._colonists.Count;
             sim.AddColonist(NameGenerator.Generate(settings.Seed, n), p, education: n == 0 ? 2 : n <= 2 ? 1 : 0);
         }
+        if (sim._colonists.Count > 0)
+        {
+            var landing = sim._colonists[^1].Position;
+            sim.Items.Drop(landing, ItemType.Berries, StartingBerries);
+            sim.Items.Drop(landing, Catalog.Item("bread"), StartingBread);
+        }
 
         clock.Restart();
         sim.Connectivity.Update();
@@ -337,11 +343,39 @@ public sealed class ColonySim
 
     public Colonist AddColonist(string name, TilePos position, int education = 0, bool automaton = false)
     {
-        var c = new Colonist(_colonists.Count + _arriving.Count, name, position, education) { IsAutomaton = automaton };
+        var c = new Colonist(ColonistsEver++, name, position, education) { IsAutomaton = automaton };
         if (_stepping) _arriving.Add(c); // joining mid-tick (e.g. an automaton finished): starts next tick
         else _colonists.Add(c);
         return c;
     }
+
+    /// <summary>Colonists who ever joined (ids are never reused, even after someone leaves).</summary>
+    public int ColonistsEver { get; private set; }
+
+    /// <summary>Hunger, the living standard and settlers (<see cref="Society"/>). Off for sandbox tests that don't feed anyone.</summary>
+    public bool NeedsEnabled { get; set; } = true;
+
+    public Society Society { get; } = new();
+
+    /// <summary>Homes, their furnishing policies, fixtures and residents.</summary>
+    public Housing Housing { get; } = new();
+
+    /// <summary>A colonist leaves for good: drops what it carries and lets go of every claim.</summary>
+    internal void Depart(Colonist c)
+    {
+        c.Leave(this);
+        _colonists.Remove(c);
+    }
+
+    /// <summary>Where newcomers arrive: standable ground around the landing place (or the first colonist).</summary>
+    internal List<TilePos> ArrivalSpots(int count)
+    {
+        if (Terrain is { } t) return FindSpawnPoints(t.SpawnX, t.SpawnY, count);
+        return _colonists.Count > 0 ? FindSpawnPoints(_colonists[0].Position.X, _colonists[0].Position.Y, count) : [];
+    }
+
+    /// <summary>Food the founders bring along, about two weeks for seven (dropped beside the landing place).</summary>
+    public const int StartingBerries = 90, StartingBread = 48;
 
     private readonly List<Colonist> _arriving = new();
     private bool _stepping;
@@ -474,6 +508,8 @@ public sealed class ColonySim
         {
             _stepping = false;
         }
+        Housing.Tick(this); // follows home rooms, wears fixtures, houses people
+        if (NeedsEnabled) Society.Tick(this);
 
         // Water steps last in the tick, after everything that changes the world. With AsyncWater it computes on
         // worker threads until the next tick begins (the game draws a frame meanwhile); the outcome is the same.

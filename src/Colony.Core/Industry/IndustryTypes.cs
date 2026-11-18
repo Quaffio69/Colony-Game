@@ -15,6 +15,8 @@ public sealed class RoomType
     /// <summary>sRGB floor tint as 0xRRGGBB.</summary>
     public uint Color { get; init; } = 0xffffff;
     public IReadOnlyList<string> Later { get; init; } = [];
+    /// <summary>A home rather than a workshop: no machines; furnished by its housing policy.</summary>
+    public bool IsHome => Id == "home";
     public List<PartType> Stations { get; } = new();
     public List<Recipe> Recipes { get; } = new();
     public override string ToString() => Id;
@@ -132,7 +134,7 @@ public static class RoomInfo
     public static string Name(RoomType t) => t.Name;
 
     /// <summary>Parts that can be placed in this room type: its own stations, plus tools, lanterns and crates.</summary>
-    public static bool Allows(RoomType room, PartType part) => part.Workshop is null || part.Workshop == room;
+    public static bool Allows(RoomType room, PartType part) => !room.IsHome && (part.Workshop is null || part.Workshop == room);
 }
 
 /// <summary>

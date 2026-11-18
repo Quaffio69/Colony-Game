@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using Colony.Core;
+using Colony.Core.Agents;
 using Colony.Core.Industry;
 using Colony.Core.Nature;
 using Colony.Core.Orders;
@@ -261,6 +262,11 @@ public partial class DesignationTool : Node3D
         var box = new VBoxContainer();
         box.AddThemeConstantOverride("separation", 4);
         _menu.AddChild(box);
+        var homeButton = new Button { Text = "Home  (where colonists live: size sets room, its housing policy the furnishing)", ToggleMode = true, Alignment = HorizontalAlignment.Left, TooltipText = Catalog.Home.About };
+        homeButton.AddThemeColorOverride("font_color", RoomView.RoomColor(Catalog.Home) with { A = 1f });
+        homeButton.Pressed += () => SelectWorkshop(Catalog.Home);
+        box.AddChild(homeButton);
+        _workshopButtons[Catalog.Home] = homeButton;
         box.AddChild(new Label { Text = "Workshops (click to paint a room; B closes)" });
         var grid = new GridContainer { Columns = 2 };
         box.AddChild(grid);
@@ -296,9 +302,11 @@ public partial class DesignationTool : Node3D
     {
         Workshop = w;
         foreach (var (ws, b) in _workshopButtons) b.ButtonPressed = ws == w;
-        _partsTitle.Text = $"{w.Name}: parts\n[ ] size   R rotate   F: recipe of the machine under the cursor";
+        _partsTitle.Text = w.IsHome
+            ? $"Home: paint any size, on any levels (at least {Housing.MinCells} cells). Colonists furnish it by its\nhousing policy and move in, one per bed.   F over a home: next policy   H: edit policies"
+            : $"{w.Name}: parts\n[ ] size   R rotate   F: recipe of the machine under the cursor";
         foreach (var child in _partList.GetChildren()) child.QueueFree();
-        foreach (var part in w.Stations.Concat(Catalog.GenericParts))
+        foreach (var part in w.IsHome ? Enumerable.Empty<PartType>() : w.Stations.Concat(Catalog.GenericParts))
         {
             string makes = part.Recipes.Count > 0 ? "  -  " + string.Join(", ", part.Recipes.Select(r => r.Name.ToLowerInvariant())) : "";
             var b = new Button { Text = part.Name + makes, Alignment = HorizontalAlignment.Left, ClipText = true, CustomMinimumSize = new Vector2(356, 0) };
@@ -490,11 +498,27 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
+            // F over a home: switch it to the next housing policy (H edits the policies themselves).
+            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.F } hk when HoveredHome() is { } home:
+            {
+                var policies = _sim.Housing.Policies;
+                int next = (policies.IndexOf(home.Policy) + (hk.ShiftPressed ? policies.Count - 1 : 1)) % policies.Count;
+                _sim.Housing.SetPolicy(home, policies[next]);
+                var plan = Housing.Plan(home);
+                LastAction = $"{home.Name} is now a {policies[next].Name.ToLowerInvariant()}: room for {plan.Residents}";
+                Handled();
+                break;
+            }
+
             case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Enter or Key.KpEnter }:
                 DebugCompleteAll();
                 break;
         }
     }
+
+    /// <summary>The home whose floor is the hovered tile's top, if any.</summary>
+    public Home? HoveredHome() =>
+        Hovered is { } h && _sim.Rooms.RoomAt(h.Offset(0, 0, 1)) is { Type.IsHome: true } room ? _sim.Housing.HomeOf(room) : null;
 
     /// <summary>The machine standing on (or in) the hovered tile, if any.</summary>
     public Part? HoveredMachine()

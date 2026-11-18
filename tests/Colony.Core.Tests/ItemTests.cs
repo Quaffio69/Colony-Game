@@ -171,6 +171,7 @@ public class ItemTests
     public void Hauling_RespectsStockpileCapacity_AndSpillsNothingIntoOtherCells()
     {
         var sim = Meadow();
+        sim.NeedsEnabled = false; // about hauling: nobody wanders off to eat or sleep
         sim.Stockpiles.Add(new TilePos(4, 4, 4)); // one cell: 25 stone fit
         sim.Items.Drop(new TilePos(20, 20, 4), ItemType.Stone, 25);
         sim.Items.Drop(new TilePos(20, 24, 4), ItemType.Stone, 15);

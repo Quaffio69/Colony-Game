@@ -109,9 +109,13 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   Colonists with `Id % 3 == 2` prefer hauling until job priorities exist.
 - **Production tree is data (`data/tech-tree.json`, embedded in Core, loaded by `Industry.Catalog`):** items
   (stack/carry sizes, pile model, colour), 12 broad DF-style workshops (`RoomType`), their 32 stations
-  (`PartType`s with role Machine; build material by size) and 60 recipes (multi-input `Ingredient`s, output
+  (`PartType`s with role Machine; build material by size) and 71 recipes (multi-input `Ingredient`s, output
   count, labour ticks, education). Adding a product is one item + one recipe line; tiers are computed. Load
   errors throw naming the entry. Tests check the tree bootstraps from raw resources and batches fit crates.
+  **Home fixtures** (category "home"): items with `fixture` (slot: bed, furniture, tableware, lighting, decor), `tier`
+  (1 humble, 2 comfortable, 3 fine; `Catalog.Fixtures` per slot, validated 1..n, all makeable) and `wear` (days it
+  lasts in a home: upkeep, longer for better tiers). Humble fixtures need no schooling. They are installed in homes
+  (see Homes below), not used up.
 - **Factory builder (`Industry`):** a `Room` is a typed set of walkable floor cells that is always
   contiguous under the movement rules (so it may span levels joined by stairs/steps). `Rooms.Paint` takes
   every walkable cell in a click-click box (all its levels), merges into touching same-type rooms and splits
@@ -225,6 +229,38 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   cell per step / `FlowPerPower` (hang it in a waterfall: wheels may mount on a wall); pumps lift water from
   their cell to the cell ahead and one level up; power is one colony-wide pool for now (pumps run at the
   share the wheels cover). Farm plots within 2 tiles of water grow twice as fast (`Farms.Irrigated`).
+- **Needs and population (`Agents.Needs`, `Agents.Society`):** a game day is `Needs.Day` (4800 ticks, 4 min at 1x).
+  Food is personal: `Colonist.Satiety` (a day when full) drains; below `Hungry` an idle colonist eats before its
+  next job, below `Famished` it drops its work (only if food is in reach) and walks to the nearest food pile it may
+  use (`Needs.Usable`: never a factory's input crate or construction materials), reserves enough to fill up (never
+  more than fits; a loaf can overfill and simply lasts longer) and eats. Starving a full day (`StarvingLimit`) makes
+  it leave the colony (`ColonySim.Depart`; ids are never reused). Automatons don't eat. Foods and need goods are data:
+  'food' = meals per unit (berries/glowcaps 1, bread 4), "need: X" uses give `ItemDef.Need`. Once a day `Society`
+  uses up the consumable goods (dress, health; per-head rates in `Needs.Goods`) from usable piles, plainest first;
+  `Met` per need, `Standard` smoothed. Daily mood (`Colonist.Happiness`): half home (`Housing.Score`), a fifth belly,
+  the rest the goods standard; `WorkSpeed` 0.85-1.15. Unhappy (< 0.25, i.e. homeless counts) 5 days running: the
+  unhappiest, newest first, leaves, one a day; neither unhappiness nor starvation takes a colony below
+  `Needs.NeverBelow` (7): hardship thins, never empties (no death spirals, by design). Settlers arrive daily while
+  there are >= 3 days of food and nobody starves: pop x (5% + 20% x mood), capped by free beds but at least 1, max 12.
+  Founders bring ~2 weeks of food; daily warnings below 2 days. `ColonySim.NeedsEnabled` switches needs off (tests).
+- **Homes (`Agents.Housing`):** a home is a room of type `Catalog.Home` (build menu; not a workshop, takes no parts),
+  any size and levels, min 4 cells; adjacent home floor merges into one home (separate homes need a wall or gap).
+  **Space:** a quarter of the cells is walkway; beds take 2 cells (one resident each), furniture 1; the policy's
+  furniture per resident sets how many fit (`Housing.Plan`: 12 cells sleep 4 as a dormitory, 3 as a cottage, 2 as a
+  manor); tableware sits on furniture (4 each), lighting/decor on walls (cells/2 + 1). **Policies** (`HousingPolicy`:
+  tier 0-3 and pieces per resident per slot; Dormitory, Cottage, House, Manor; H edits, F over a home switches):
+  editing one refurnishes every home on it. Colonists (hauling labor, `TryFurnish`) bring fixtures of exactly the
+  wanted tier, promised per home (`Pending`), and install them (`Housing.Install`); a wrong-tier piece is swapped out
+  when its replacement arrives and broken down for materials (half its recipe inputs x condition), surplus beyond a
+  shrunken plan is trimmed the same way, worn-out pieces (`wear` days, only while installed: stock is never tracked)
+  vanish and are replaced. Fixtures follow their floor cell across room splits/merges. **Residents:** reassigned
+  from scratch whenever homes, beds or colonists change (and daily): most educated into the best homes (installed
+  quality, then room id). **Rest:** `Colonist.Rest` (a day awake); tired -> sleeps in its own bed (rate by bed tier:
+  humble 3.2, comfortable 4, fine 4.8 per tick) or on the floor (2); exhausted -> drops where it stands. **Quality:**
+  per slot, coverage (pieces per resident vs want) x tier vs expectation (education + 1: Unskilled humble, Literate
+  comfortable, Scholar+ fine), weighted bed .3 furniture .2 tableware .15 lighting .15 decor .2. `ItemView` draws
+  installed fixtures by slot; `--homes-demo` builds and furnishes one home per policy. Scale-up path: `Demands`
+  and fixture counts are linear scans per home.
 - **Cave-ins (DF-style):** a solid tile is supported if face-adjacent solid tiles connect it to z=0. After a
   dig (`ColonySim.CompleteDesignation` -> `World.CaveIns`), each unsupported neighbouring mass falls as one
   rigid piece until it lands; designations on it are cancelled; colonists ride it down or pop out on top.
@@ -243,7 +279,8 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   Waits until the world is fully meshed, measures 120 frames, prints `[bench]` lines (startup phases,
   frame ms, draw calls, memory), saves the PNG and quits.
 - Sim benchmark: `dotnet run -c Release --project tools/Colony.Bench -- [size] [colonists] [ticks]`
-  (or `-- water [size] [steps]` for the water simulation alone, whole map)
+  (or `-- water [size] [steps]` for the water simulation alone, whole map; `-- colony [size] [days]` for population,
+  food and settlers over game days with no player)
   (prints per-phase totals, slow-tick breakdowns and GC counts; the render bench prints a startup breakdown).
 - VS Code: F5 "Play Game" or "Open Godot Editor" (see `.vscode/launch.json`).
 - **In-game test menu (T):** every xUnit test, run inside the game (`TestRunner`: the test DLL from
@@ -296,7 +333,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       Dev flags `--factory-demo` (fell woods, log stockpile, equipped sawmill, plank stockpile) and
       `--parts-demo` (levelled showroom with every saw and tool size). Parts come in 5 sizes ([ ] in the builder).
 - [x] Construction: blueprints, material delivery, builders (log-cost starter parts, plank-cost big ones).
-- [x] Production tree: data-driven catalog, 12 workshops / 32 stations / 60 recipes with models for every
+- [x] Production tree: data-driven catalog, 12 workshops / 32 stations / 71 recipes with models for every
       station size, multi-input crates, recipe per machine, education and the Academy, automatons, build
       menu (B). Raw sources: clay, sand, 8 minerals by depth, wild herbs, grain/herb/glowcap farms.
 - [ ] Next for industry: conveyors between output and input crates; rooms themselves costing
@@ -304,6 +341,10 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       wonders as aux parts (philosopher's stone, farseer orb, orrery); real ratios.
 - [ ] Next for flora: wild growth and spreading/regrowth (staggered, deterministic).
 - [ ] Geology: several stone types in layered/warped strata (palette now has room).
-- [ ] M5: Needs (food, rest) consuming bread, clothing, furniture, tinctures; population growth.
+- [~] M5: Needs and homes. Done: hunger, eating, starving leaves; daily goods standard (clothing, tinctures); homes
+      (sized rooms, housing policies, tiered fixtures with wear, salvage, auto layout), rest in beds, residents by
+      education, mood -> work speed, gentle departures, settlers by food, mood and free beds. Next: wants and likes
+      (favourite food, liked material/art, preferred work), shell quality (walls, floors, windows), births and
+      households, job priorities, health beyond consumption.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.

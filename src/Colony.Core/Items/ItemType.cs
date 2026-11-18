@@ -83,6 +83,16 @@ public sealed class ItemDef
     public int CarryLimit { get; init; } = 6;
     public string? Source { get; init; }
     public IReadOnlyList<string> Uses { get; init; } = [];
+    /// <summary>The colonists' need this item meets (a "need: X" use): "food", "dress", "comfort"...; null if none.</summary>
+    public string? Need { get; init; }
+    /// <summary>Meals of nutrition one unit gives (foods only; a colonist eats about three a day).</summary>
+    public int Nutrition { get; init; }
+    /// <summary>The home fixture slot this item fills ("bed", "furniture", "tableware", "lighting", "decor"), or null.</summary>
+    public string? Fixture { get; init; }
+    /// <summary>The fixture's quality tier (1 humble, 2 comfortable, 3 fine); 0 if not a fixture.</summary>
+    public int FixtureTier { get; init; }
+    /// <summary>Days a fixture lasts in a home before it wears out and is replaced (upkeep).</summary>
+    public int Wear { get; init; }
     /// <summary>1 + the highest tier among the inputs of the recipe that makes it (raw = 0).</summary>
     public int Tier { get; internal set; }
     public bool IsRaw => Category == "raw";

@@ -8,8 +8,8 @@ namespace Colony.Core.Agents;
 
 public enum ColonistState { Idle, Moving, Working }
 
-/// <summary>What a colonist is doing beyond walking: a designation, one leg of a haul trip, or factory work.</summary>
-public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build }
+/// <summary>What a colonist is doing beyond walking: a designation, one leg of a haul trip, factory work, or a meal.</summary>
+public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver }
 
 /// <summary>Kinds of work, in the order a colonist prefers them (see <see cref="Colonist.Labors"/>).</summary>
 public enum Labor { Designations, Hauling, Industry }
@@ -112,6 +112,211 @@ public sealed class Colonist
         Name = name;
         Position = position;
         Education = education;
+        Satiety = Needs.FullSatiety - id * 977 % (Needs.Day / 2); // staggered, so the colony doesn't all eat at once
+        Rest = Needs.FullRest - id * 1531 % (Needs.Day / 2); // ...or sleep at once
+    }
+
+    // ---- Hunger ------------------------------------------------------------------------------------------
+
+    /// <summary>Ticks of fullness left (about <see cref="Needs.FullSatiety"/> after a good meal, more after a big one); 0 = starving.</summary>
+    public int Satiety { get; internal set; }
+    /// <summary>How long it has gone with nothing in its belly (it leaves at <see cref="Needs.StarvingLimit"/>).</summary>
+    public int StarvingTicks { get; private set; }
+    public bool Hungry => !IsAutomaton && Satiety < Needs.Hungry;
+    public bool Starving => !IsAutomaton && Satiety == 0;
+    private (TilePos Cell, ItemType Type, int Units) _meal;
+    private int _foodRetry;
+
+    /// <summary>Gets hungry; drops its work to eat when famished. False if this tick went to that.</summary>
+    private bool TickHunger(ColonySim sim)
+    {
+        if (IsAutomaton || !sim.NeedsEnabled) return true;
+        if (Satiety > 0) Satiety--;
+        else StarvingTicks++;
+        if (_foodRetry > 0) _foodRetry--;
+        if (Satiety >= Needs.Famished || Task == ColonistTask.Eat || _foodRetry > 0) return true;
+        return !TryEat(sim); // drops its work (and any load) only if there is food to go to
+    }
+
+    /// <summary>
+    /// Heads for the nearest food it may eat (not a factory's input crate), reserving enough to fill up; gives up
+    /// its current task first if it has food to go to. False if there is none in reach (it tries again a little later).
+    /// </summary>
+    private bool TryEat(ColonySim sim)
+    {
+        if (sim.PathBudgetExhausted) return false;
+        int component = sim.Connectivity.ComponentOf(Position);
+        _foodRetry = 100;
+        if (component < 0) return false;
+        var options = new List<(TilePos Cell, ItemPile Pile, int Dist)>();
+        foreach (var (p, pile) in sim.Items.All)
+        {
+            if (!Needs.IsFood(pile.Type) || pile.Available <= 0 || !Needs.Usable(sim, p)) continue;
+            if (sim.Connectivity.ComponentOf(p) != component) continue;
+            options.Add((p, pile, Math.Abs(p.X - Position.X) + Math.Abs(p.Y - Position.Y) + 2 * Math.Abs(p.Z - Position.Z)));
+        }
+        if (options.Count == 0) return false;
+        if (Task != ColonistTask.None) Abandon(sim); // the work waits (its claims released, any load dropped)
+        options.Sort((a, b) => a.Dist != b.Dist ? a.Dist.CompareTo(b.Dist) : CompareCells(a.Cell, b.Cell));
+        foreach (var (cell, pile, _) in options.Take(CandidatesPerSearch))
+        {
+            var path = Route(sim, ReachableAround(sim, cell, component), cell);
+            if (path is null) continue;
+            int perUnit = Needs.MealTicks * Needs.Nutrition(pile.Type);
+            int units = Math.Clamp((Needs.FullSatiety - Satiety) / perUnit, 1, pile.Available); // never more than fits
+            if (!sim.Items.Reserve(cell, units)) continue;
+            _meal = (cell, pile.Type, units);
+            _foodRetry = 0;
+            Begin(ColonistTask.Eat, cell, path);
+            return true;
+        }
+        return false;
+    }
+
+    private static int CompareCells(TilePos a, TilePos b) =>
+        a.Z != b.Z ? a.Z.CompareTo(b.Z) : a.Y != b.Y ? a.Y.CompareTo(b.Y) : a.X.CompareTo(b.X);
+
+    private void FinishMeal(ColonySim sim)
+    {
+        int eaten = sim.Items.TakeReserved(_meal.Cell, _meal.Units);
+        Satiety += eaten * Needs.MealTicks * Needs.Nutrition(_meal.Type); // a loaf more than fills it: it lasts longer, nothing wasted
+        if (Satiety > 0) StarvingTicks = 0;
+        Finish();
+    }
+
+    /// <summary>Leaves the colony: lets go of every claim and drops what it carries.</summary>
+    internal void Leave(ColonySim sim) => Abandon(sim);
+
+    // ---- Home, rest and mood -----------------------------------------------------------------------------
+
+    /// <summary>Where it lives (a bed of its own), or null: homeless colonists sleep on the floor.</summary>
+    public Home? Home { get; internal set; }
+    /// <summary>0..1, set each day by <see cref="Society"/> from its home, belly and the living standard.</summary>
+    public float Happiness { get; internal set; } = 0.5f;
+    /// <summary>Days running it has been unhappy (see <see cref="Needs.Unhappy"/>).</summary>
+    public int UnhappyDays { get; internal set; }
+    /// <summary>Work goes 15% slower for the miserable and 15% faster for the content (automatons: steady).</summary>
+    public float WorkSpeed => IsAutomaton ? 1f : 0.85f + 0.3f * Happiness;
+    /// <summary>Ticks awake it can still manage (<see cref="Needs.FullRest"/> after a full sleep).</summary>
+    public float Rest { get; internal set; }
+    public bool Tired => !IsAutomaton && Rest < Needs.Tired;
+    private float _sleepRate;
+
+    /// <summary>Tires while awake; dropping from exhaustion (wherever it is) when rest runs out.</summary>
+    private void TickRest(ColonySim sim)
+    {
+        if (IsAutomaton || !sim.NeedsEnabled || Task == ColonistTask.Sleep) return;
+        Rest = Math.Max(0, Rest - 1);
+        if (Rest > 0 || Task == ColonistTask.Eat) return;
+        if (Task != ColonistTask.None) Abandon(sim);
+        StartSleeping(onTheFloor: true);
+    }
+
+    /// <summary>Goes home to bed, or (homeless, or home out of reach) lies down where it is.</summary>
+    private bool TrySleep(ColonySim sim)
+    {
+        if (Home is { } home && !sim.PathBudgetExhausted)
+        {
+            var bed = Housing.SleepCell(home, this);
+            int component = sim.Connectivity.ComponentOf(Position);
+            if (sim.Connectivity.ComponentOf(bed) == component && Route(sim, new HashSet<TilePos> { bed }, bed) is { } path)
+            {
+                _sleepRate = Housing.RestRate(home, this);
+                Begin(ColonistTask.Sleep, bed, path);
+                return true;
+            }
+        }
+        StartSleeping(onTheFloor: true);
+        return true;
+    }
+
+    private void StartSleeping(bool onTheFloor)
+    {
+        if (onTheFloor) _sleepRate = Housing.RestRate(null, this);
+        Task = ColonistTask.Sleep;
+        JobTarget = Position;
+        _path.Clear();
+        NextStep = null;
+        StartWorking(int.MaxValue);
+    }
+
+    // ---- Furnishing homes ------------------------------------------------------------------------------
+
+    private (Home Home, int Slot, TilePos Source, ItemType Item, int Count) _furnish;
+
+    /// <summary>
+    /// Brings fixtures to a home that its policy wants (nearest homes first, from the nearest pile of exactly the
+    /// wanted tier) and installs them. Pieces are promised to the home so nobody else brings the same ones.
+    /// </summary>
+    private bool TryFurnish(ColonySim sim, int component)
+    {
+        if (sim.Housing.All.Count == 0) return false;
+        var sources = new List<(TilePos Cell, ItemPile Pile)>();
+        foreach (var (p, pile) in sim.Items.All)
+            if (pile.Type.Def.Fixture != null && pile.Available > 0 && Needs.Usable(sim, p) && sim.Rooms.RoomAt(p) is not { Type.IsHome: true }
+                && sim.Connectivity.ComponentOf(p) == component)
+                sources.Add((p, pile));
+        if (sources.Count == 0) return false;
+        int Dist(TilePos a, TilePos b) => Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y) + 2 * Math.Abs(a.Z - b.Z);
+        foreach (var (home, slot, tier, missing) in sim.Housing.Demands().OrderBy(d => Dist(d.Home.Room.Cells.First(), Position)).ThenBy(d => d.Home.Room.Id).ToList())
+        {
+            if (sim.PathBudgetExhausted)
+            {
+                _deferred = true;
+                return false;
+            }
+            var match = sources.Where(s => Housing.SlotOf(s.Pile.Type) == slot && s.Pile.Type.Def.FixtureTier == tier && !_pathFailed.Contains(s.Cell))
+                .OrderBy(s => Dist(s.Cell, Position)).ThenBy(s => CompareKey(s.Cell)).FirstOrDefault();
+            if (match.Pile.Count == 0) continue;
+            if (!home.Room.Cells.Any(c => sim.Connectivity.ComponentOf(c) == component)) continue;
+            var path = Route(sim, ReachableAround(sim, match.Cell, component), match.Cell);
+            if (path is null)
+            {
+                _pathFailed.Add(match.Cell);
+                continue;
+            }
+            int amount = Math.Min(Math.Min(missing, match.Pile.Available), ItemInfo.CarryLimit(match.Pile.Type));
+            if (!sim.Items.Reserve(match.Cell, amount)) continue;
+            sim.Housing.Promise(home, slot, amount);
+            _furnish = (home, slot, match.Cell, match.Pile.Type, amount);
+            Begin(ColonistTask.FurnishPickup, match.Cell, path);
+            return true;
+        }
+        return false;
+    }
+
+    private static (int, int, int) CompareKey(TilePos p) => (p.Z, p.Y, p.X);
+
+    private void FurnishPickUp(ColonySim sim)
+    {
+        int taken = sim.Items.TakeReserved(_furnish.Source, _furnish.Count);
+        if (taken < _furnish.Count) sim.Housing.Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count - taken);
+        _furnish = _furnish with { Count = taken };
+        if (taken == 0)
+        {
+            Finish();
+            return;
+        }
+        CarryingType = _furnish.Item;
+        CarryingCount = taken;
+        int component = sim.Connectivity.ComponentOf(Position);
+        var goals = _furnish.Home.Room.Cells.Where(c => sim.Connectivity.ComponentOf(c) == component).ToHashSet();
+        var path = Route(sim, goals, _furnish.Home.Room.Cells.First());
+        if (path is null)
+        {
+            Abandon(sim);
+            return;
+        }
+        Begin(ColonistTask.FurnishDeliver, path.Count > 0 ? path[^1] : Position, path);
+    }
+
+    private void FurnishInstall(ColonySim sim)
+    {
+        int installed = sim.Housing.Install(sim, _furnish.Home, CarryingType, CarryingCount);
+        sim.Housing.Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
+        if (installed < CarryingCount) sim.Items.Drop(Position, CarryingType, CarryingCount - installed); // surplus: hauled back to store
+        CarryingCount = 0;
+        Finish();
     }
 
     public string Describe() => (Task, State) switch
@@ -129,6 +334,13 @@ public sealed class Colonist
         (ColonistTask.Build, ColonistState.Working) =>
             $"building a {_build.Name.ToLowerInvariant()}{_build.Where} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
         (ColonistTask.Build, _) => $"walking to build a {_build.Name.ToLowerInvariant()}",
+        (ColonistTask.Eat, ColonistState.Working) => $"eating {ItemInfo.Name(_meal.Type).ToLowerInvariant()}",
+        (ColonistTask.Eat, _) => $"going to eat {ItemInfo.Name(_meal.Type).ToLowerInvariant()}",
+        (ColonistTask.Sleep, ColonistState.Working) => Home != null && _sleepRate > Housing.RestRate(null, this) ? "asleep in bed" : "asleep on the floor",
+        (ColonistTask.Sleep, _) => "going to bed",
+        (ColonistTask.FurnishPickup, _) => $"fetching {ItemInfo.Name(_furnish.Item).ToLowerInvariant()} for {_furnish.Home.Name}",
+        (ColonistTask.FurnishDeliver, ColonistState.Working) => $"installing {ItemInfo.Name(CarryingType).ToLowerInvariant()} in {_furnish.Home.Name}",
+        (ColonistTask.FurnishDeliver, _) => $"carrying {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {_furnish.Home.Name}",
         _ => "idle",
     };
 
@@ -141,6 +353,8 @@ public sealed class Colonist
     internal void Tick(ColonySim sim)
     {
         ApplyGravity(sim);
+        TickHunger(sim);
+        TickRest(sim);
 
         if (Task == ColonistTask.Designation && JobTarget is { } job && !sim.Designations.IsClaimedBy(job, Id))
             Abandon(sim); // cancelled, re-designated, or completed by someone else
@@ -157,6 +371,8 @@ public sealed class Colonist
                     _retryDelay--;
                     return;
                 }
+                if (Hungry && sim.NeedsEnabled && _foodRetry == 0 && TryEat(sim)) return; // a meal before the next job
+                if (Tired && sim.NeedsEnabled && TrySleep(sim)) return; // and bed before work
                 if (NothingNewSinceLastSearch(sim)) return;
                 FindWork(sim);
                 break;
@@ -204,6 +420,12 @@ public sealed class Colonist
                 break;
 
             case ColonistState.Working:
+                if (Task == ColonistTask.Sleep)
+                {
+                    Rest = Math.Min(Needs.FullRest, Rest + _sleepRate);
+                    if (Rest >= Needs.FullRest) Finish(); // rested: up and about
+                    return;
+                }
                 if (++WorkDone < WorkRequired) return;
                 switch (Task)
                 {
@@ -234,6 +456,15 @@ public sealed class Colonist
                     case ColonistTask.Build:
                         FinishBuild(sim);
                         break;
+                    case ColonistTask.Eat:
+                        FinishMeal(sim);
+                        break;
+                    case ColonistTask.FurnishPickup:
+                        FurnishPickUp(sim);
+                        break;
+                    case ColonistTask.FurnishDeliver:
+                        FurnishInstall(sim);
+                        break;
                 }
                 break;
         }
@@ -244,9 +475,9 @@ public sealed class Colonist
     private bool NothingNewSinceLastSearch(ColonySim sim) =>
         _searchedDesignations == sim.Designations.Version && _searchedConnectivity == sim.Connectivity.Version &&
         _searchedItems == sim.Items.Version && _searchedStockpiles == sim.Stockpiles.Version &&
-        _searchedRooms == sim.Rooms.Version;
+        _searchedRooms == sim.Rooms.Version && _searchedHousing == sim.Housing.Version;
 
-    private int _searchedRooms = -1;
+    private int _searchedRooms = -1, _searchedHousing = -1;
 
     private void FindWork(ColonySim sim)
     {
@@ -257,6 +488,7 @@ public sealed class Colonist
         _searchedItems = sim.Items.Version;
         _searchedStockpiles = sim.Stockpiles.Version;
         _searchedRooms = sim.Rooms.Version;
+        _searchedHousing = sim.Housing.Version;
         _deferred = false;
 
         if (_pathFailedConnectivity != sim.Connectivity.Version)
@@ -273,7 +505,7 @@ public sealed class Colonist
             bool found = labor switch
             {
                 Labor.Designations => TryTakeJob(sim, component) || (!_deferred && TryBuild(sim, component)),
-                Labor.Hauling => TryHaul(sim, component),
+                Labor.Hauling => TryHaul(sim, component) || (!_deferred && TryFurnish(sim, component)),
                 _ => TryCraft(sim, component),
             };
             if (found) return;
@@ -701,6 +933,18 @@ public sealed class Colonist
             case ColonistTask.Build:
                 StartWorking(_build.Ticks);
                 break;
+            case ColonistTask.Eat:
+                StartWorking(Needs.EatTicks);
+                break;
+            case ColonistTask.Sleep:
+                StartWorking(int.MaxValue); // until rested (see Tick)
+                break;
+            case ColonistTask.FurnishPickup:
+                StartWorking(HandleTicks);
+                break;
+            case ColonistTask.FurnishDeliver:
+                StartWorking(Housing.InstallTicks);
+                break;
             case ColonistTask.Designation:
                 if (!sim.Designations.TryGet(target, out var kind))
                 {
@@ -723,6 +967,8 @@ public sealed class Colonist
     {
         State = ColonistState.Working;
         WorkDone = 0;
+        // Mood sets the pace of real work (not of sleeping, eating or the long sleep sentinel).
+        if (ticks != int.MaxValue && Task is not (ColonistTask.Eat or ColonistTask.Sleep)) ticks = (int)MathF.Round(ticks / WorkSpeed);
         WorkRequired = Math.Max(1, ticks);
     }
 
@@ -798,6 +1044,16 @@ public sealed class Colonist
             case ColonistTask.Build:
                 foreach (var (c, n) in _build.Materials) sim.Items.Unreserve(c, n);
                 _build.ReleaseBuilder(Id);
+                break;
+            case ColonistTask.Eat:
+                sim.Items.Unreserve(_meal.Cell, _meal.Units);
+                break;
+            case ColonistTask.FurnishPickup:
+                sim.Items.Unreserve(_furnish.Source, _furnish.Count);
+                sim.Housing.Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
+                break;
+            case ColonistTask.FurnishDeliver:
+                sim.Housing.Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
                 break;
         }
         if (_carried.Count > 0)

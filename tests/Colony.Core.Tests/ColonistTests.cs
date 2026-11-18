@@ -56,7 +56,7 @@ public class ColonistTests
             bool wall = x % 40 == 20 && (x / 40 % 2 == 0 ? y < 44 : y > 3);
             if (wall) for (int z = top + 1; z <= 12; z++) w.Set(x, y, z, TileType.Stone);
         }
-        var sim = new ColonySim(w);
+        var sim = new ColonySim(w) { NeedsEnabled = false }; // a walk of 20000 ticks: no meals or sleep in this test
         var c = sim.AddColonist("Walker", new TilePos(2, 2, w.SurfaceLevel(2, 2) + 1));
         var target = new TilePos(630, 40, w.SurfaceLevel(630, 40));
         sim.Designations.Designate(target);
@@ -147,6 +147,7 @@ public class ColonistTests
     public void UnreachableJobs_CostNoPathSearches()
     {
         var sim = FlatSim();
+        sim.NeedsEnabled = false; // about path searches: nobody goes to eat or sleep
         for (int i = 0; i < 7; i++) sim.AddColonist($"C{i}", new TilePos(2 + i, 2, 4));
         // A sealed 3-high plateau with designations on top: workable spots exist but can't be reached.
         for (int z = 4; z <= 6; z++)

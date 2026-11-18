@@ -16,6 +16,8 @@ public static class Catalog
 
     public static IReadOnlyList<ItemDef> Items => D.Items;
     public static IReadOnlyList<RoomType> Workshops => D.Workshops;
+    /// <summary>The one room type that is not a workshop: where colonists live (see <see cref="Agents.Housing"/>).</summary>
+    public static RoomType Home => D.Home!;
     public static IReadOnlyList<PartType> Parts => D.Parts;
     public static IReadOnlyList<Recipe> Recipes => D.Recipes;
     public static IReadOnlyList<string> EducationLevels => D.Levels;
@@ -52,6 +54,8 @@ public static class Catalog
         public readonly Dictionary<string, RoomType> WorkshopById = new();
         public readonly Dictionary<string, PartType> PartById = new();
         public readonly Dictionary<ItemType, Recipe> RecipeByOutput = new();
+        public readonly Dictionary<string, List<ItemType>> Fixtures = new();
+        public RoomType? Home;
     }
 
     private static Data Load()
@@ -91,7 +95,16 @@ public static class Catalog
                 CarryLimit = Int(e, "carry") ?? (isRaw ? 5 : 6),
                 Source = Opt(e, "source"),
                 Uses = e.TryGetProperty("uses", out var uses) ? uses.EnumerateArray().Select(u => u.GetString()!).ToList() : [],
+                Need = NeedOf(e),
+                Nutrition = Int(e, "food") ?? 0,
+                Fixture = Opt(e, "fixture"),
+                FixtureTier = Int(e, "tier") ?? 0,
+                Wear = Int(e, "wear") ?? 0,
             });
+            if ((d.Items[^1].Fixture != null) != (d.Items[^1].FixtureTier > 0 && d.Items[^1].Wear > 0))
+                throw Bad($"item '{id}': a fixture needs 'fixture', 'tier' and 'wear' together");
+            if ((d.Items[^1].Need == "food") != (d.Items[^1].Nutrition > 0))
+                throw Bad($"item '{id}': a food needs both a 'need: food' use and a 'food' value");
             d.ItemById[id] = type;
         }
 
@@ -198,8 +211,24 @@ public static class Catalog
         }
         foreach (var p in d.Parts)
             if (p.Role == PartRole.Machine && p.Recipes.Count == 0) throw Bad($"station '{p.Id}' has no recipes");
+        d.Home = new RoomType { Index = d.Workshops.Count, Id = "home", Name = "Home", Color = 0x9ccf6a, About = "Where colonists live: its size sets what fits, its housing policy how it is furnished." };
+        // Home fixtures: each slot's tiers run 1..n without gaps, and every fixture can be made.
+        foreach (var group in d.Items.Where(i => i.Fixture != null).GroupBy(i => i.Fixture!))
+        {
+            var levels = group.Select(i => i.FixtureTier).Distinct().Order().ToList();
+            if (levels[0] != 1 || levels[^1] != levels.Count) throw Bad($"fixture '{group.Key}': tiers must run 1..n, got {string.Join(", ", levels)}");
+            foreach (var i in group)
+                if (!d.RecipeByOutput.ContainsKey(i.Type)) throw Bad($"fixture '{i.Id}' has no recipe");
+            d.Fixtures[group.Key] = group.OrderBy(i => i.FixtureTier).ThenBy(i => i.Type.Index).Select(i => i.Type).ToList();
+        }
         return d;
     }
+
+    /// <summary>Home fixture slots ("bed", "furniture", ...) and the items that fill each, lowest tier first.</summary>
+    public static IReadOnlyDictionary<string, List<ItemType>> Fixtures => D.Fixtures;
+
+    /// <summary>Tier names for home fixtures (index = tier).</summary>
+    public static readonly string[] FixtureTiers = ["none", "humble", "comfortable", "fine"];
 
     private static void AddPart(Data d, PartType p)
     {
@@ -214,6 +243,20 @@ public static class Catalog
         e.TryGetProperty(name, out var v) && v.GetString() is { } s ? s : throw Bad($"missing '{name}' in {e}");
     private static string? Opt(JsonElement e, string name) => e.TryGetProperty(name, out var v) ? v.GetString() : null;
     private static int? Int(JsonElement e, string name) => e.TryGetProperty(name, out var v) ? v.GetInt32() : null;
+
+    /// <summary>"need: household goods (high society)" -> "household goods".</summary>
+    private static string? NeedOf(JsonElement e)
+    {
+        if (!e.TryGetProperty("uses", out var uses)) return null;
+        foreach (var u in uses.EnumerateArray())
+            if (u.GetString() is { } s && s.StartsWith("need: "))
+            {
+                string need = s["need: ".Length..];
+                int paren = need.IndexOf(" (", StringComparison.Ordinal);
+                return (paren >= 0 ? need[..paren] : need).Trim();
+            }
+        return null;
+    }
 
     private static uint ParseColor(string hex, string owner)
     {

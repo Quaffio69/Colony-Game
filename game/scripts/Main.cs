@@ -112,6 +112,9 @@ public partial class Main : Node3D
         _hud.AddThemeConstantOverride("outline_size", 4);
         _hud.AddThemeColorOverride("font_outline_color", new Color(0, 0, 0, 0.6f));
         ui.AddChild(_hud);
+        _housingMenu = new HousingMenu { Name = "HousingMenu" };
+        ui.AddChild(_housingMenu);
+        _housingMenu.Initialize(_sim);
         _testMenu = new TestMenu { Name = "TestMenu" };
         ui.AddChild(_testMenu);
         _testMenu.Initialize(this);
@@ -127,6 +130,7 @@ public partial class Main : Node3D
     private static bool s_devArgsDone;
     private TestResult? _test; // the test whose world this is, if any
     private TestMenu _testMenu = null!;
+    private HousingMenu _housingMenu = null!;
 
     public bool InTestWorld => _test != null;
     public bool CanRunDemos => _test == null && _sim.Colonists.Count > 0 && _sim.Terrain != null;
@@ -166,6 +170,7 @@ public partial class Main : Node3D
             case "parts": PartsDemo(); break;
             case "showroom": ShowroomDemo(""); break;
             case "water": WaterDemo(); break;
+            case "homes": HomesDemo(); break;
         }
         if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
     }
@@ -192,6 +197,8 @@ public partial class Main : Node3D
             case Key.Key3: _speedIndex = 2; _paused = false; break;
             case Key.C when !key.Echo: if (_test != null) FocusOnTestWorld(); else FocusOnColony(); break;
             case Key.T when !key.Echo: _testMenu.Toggle(); break;
+            case Key.H when !key.Echo: _housingMenu.Toggle(); break;
+            case Key.Escape when _housingMenu.Visible: _housingMenu.Toggle(); GetViewport().SetInputAsHandled(); break;
             case Key.Escape when _testMenu.Visible: _testMenu.Toggle(); GetViewport().SetInputAsHandled(); break;
         }
     }
@@ -265,8 +272,14 @@ public partial class Main : Node3D
         sb.AppendLine($"Tool: {tool}    Hover: {hover}");
         sb.AppendLine($"Designations: {_sim.Designations.Count}    {_tool.SelectionInfo ?? _tool.LastAction}");
         sb.AppendLine(StockLine());
+        if (_peopleLine == null || _frames % 15 == 0) _peopleLine = PeopleLine(); // scans every pile: a few times a second is plenty
+        sb.AppendLine(_peopleLine);
         sb.AppendLine(WaterLine());
-        if (_tool.Hovered is { } hc && _sim.Rooms.RoomAt(hc.Offset(0, 0, 1)) is { } room) AppendRoomPanel(sb, room);
+        if (_tool.Hovered is { } hc && _sim.Rooms.RoomAt(hc.Offset(0, 0, 1)) is { } room)
+        {
+            if (room.Type.IsHome && _sim.Housing.HomeOf(room) is { } home) AppendHomePanel(sb, home);
+            else if (!room.Type.IsHome) AppendRoomPanel(sb, room);
+        }
         if (_sim.RecentCaveIns.Count > 0)
         {
             var last = _sim.RecentCaveIns[^1];
@@ -279,14 +292,15 @@ public partial class Main : Node3D
             if (_sim.Tick - e.Tick < 60 * ColonySim.TicksPerSecond) sb.AppendLine($"  * {e.Text}");
         const int listed = 14;
         foreach (var c in _sim.Colonists.Take(listed))
-            sb.AppendLine($"  {c.Name,-12} {c.EducationName,-9} {c.Describe()}");
+            sb.AppendLine($"  {c.Name,-12} {c.EducationName,-9} {c.Describe()}" + (c.Starving ? "  [STARVING]" : c.Hungry ? "  [hungry]" : "") +
+                          (c.IsAutomaton ? "" : $"  ({(c.Home is { } ch ? ch.Name : "homeless")}, mood {c.Happiness:P0}{(c.Tired ? ", tired" : "")})"));
         if (_sim.Colonists.Count > listed) sb.AppendLine($"  ... and {_sim.Colonists.Count - listed} more");
         sb.AppendLine();
         sb.AppendLine("Tab/Shift+Tab: orders and zones (dig, stairs, chop, gather, stockpile, farms)   B: build menu (workshop rooms and parts; R rotate, [ ] size)");
         sb.AppendLine("F/Shift+F over a machine: change its recipe   LMB: start/confirm box or place   RMB: remove box");
         sb.AppendLine("Z/X while selecting: span levels");
         sb.AppendLine("Z/X: level down/up   Space: pause   1/2/3: speed   Enter: (debug) complete all");
-        sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists   T: tests and demos");
+        sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists   H: housing   T: tests and demos");
         // StringBuilder uses \r\n on Windows, which Label renders as an extra blank line.
         _hud.Text = sb.ToString().Replace("\r", "").TrimEnd();
     }
@@ -306,6 +320,27 @@ public partial class Main : Node3D
         for (int z = top; z >= System.Math.Max(0, top - 128); z--)
             if (world.IsSolid(x, y, z)) return z + 1;
         return null;
+    }
+
+    /// <summary>Home panel: its policy, room, residents and what is installed per slot against what the policy wants.</summary>
+    private void AppendHomePanel(StringBuilder sb, Colony.Core.Agents.Home home)
+    {
+        var plan = Colony.Core.Agents.Housing.Plan(home);
+        sb.AppendLine($"[{home.Name}]  {home.Room.Cells.Count} cells, {home.Policy.Name.ToLowerInvariant()} (F: next policy, H: edit policies)    " +
+                      $"room for {plan.Residents}, {home.Beds} beds, {home.Residents.Count} living here" +
+                      (home.Room.Cells.Count < Colony.Core.Agents.Housing.MinCells ? $"    TOO SMALL (needs {Colony.Core.Agents.Housing.MinCells} cells)" : ""));
+        for (int s = 0; s < Colony.Core.Agents.Housing.SlotCount; s++)
+        {
+            if (plan.Count[s] == 0 && home.Count(s) == 0) continue;
+            var have = home.Fixtures.Where(f => f.Slot == s).GroupBy(f => f.Item).Select(g => $"{g.Count()} {g.Key.Name.ToLowerInvariant()}");
+            string wanted = plan.Count[s] == 0 ? "none wanted" : $"wants {plan.Count[s]} {Colony.Core.Industry.Catalog.FixtureTiers[plan.Tier[s]]}";
+            float wear = home.Fixtures.Where(f => f.Slot == s).Select(f => f.Condition).DefaultIfEmpty(1).Min();
+            sb.AppendLine($"   {Colony.Core.Agents.Housing.Slots[s],-10} {string.Join(", ", have).PadRight(34)} {wanted}" +
+                          $"  ({Colony.Core.Agents.Housing.SlotEffects[s]}{(wear < 0.25f ? ", some nearly worn out" : "")})");
+        }
+        if (home.Residents.Count > 0)
+            sb.AppendLine("   Living here: " + string.Join(", ", home.Residents.Select(c =>
+                $"{c.Name} ({c.EducationName}, home {Colony.Core.Agents.Housing.Score(home, c):P0})")));
     }
 
     /// <summary>Builder info panel for the room under the cursor.</summary>
@@ -418,7 +453,7 @@ public partial class Main : Node3D
             {
                 s_devArgsDone = true;
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--ticks" }.Any(a => Arg(a) != null))
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
                 if (Arg("--dig-demo") != null) DigDemo();
                 if (Arg("--stairs-demo") != null) StairsDemo();
@@ -428,6 +463,7 @@ public partial class Main : Node3D
                 if (Arg("--showroom") is { } showroom) ShowroomDemo(showroom);
                 if (Arg("--build-menu") is { } menu) _tool.OpenBuildMenu(menu);
                 if (Arg("--water-demo") != null) WaterDemo();
+                if (Arg("--homes-demo") != null) HomesDemo();
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
                 if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
@@ -580,6 +616,23 @@ public partial class Main : Node3D
     }
 
     /// <summary>"Water: 1200 spans moving in 30 blocks (40 wet)    Power: 12 made by 1 wheel, 5 wanted by 1 pump (100%)".</summary>
+    /// <summary>Food in store, the living standard and how the population is changing.</summary>
+    private string? _peopleLine;
+
+    private string PeopleLine()
+    {
+        var society = _sim.Society;
+        float days = Colony.Core.Agents.Society.FoodDays(_sim);
+        string food = float.IsInfinity(days) ? "-" : $"{days:0.0} days ({Colony.Core.Agents.Society.FoodInStore(_sim)} meals)";
+        var met = string.Join(", ", Colony.Core.Agents.Needs.Goods.Select((g, k) => $"{g.Need} {society.Met[k]:P0}"));
+        int hungry = _sim.Colonists.Count(c => c.Hungry), starving = _sim.Colonists.Count(c => c.Starving);
+        return $"Day {society.Days + 1}    Colonists {_sim.Colonists.Count}" + (starving > 0 ? $" ({starving} STARVING)" : hungry > 0 ? $" ({hungry} hungry)" : "") +
+               $"    Food: {food}    Mood {society.Happiness:P0}    Homes {_sim.Housing.All.Count} ({_sim.Colonists.Count(c => !c.IsAutomaton && c.Home == null)} homeless, {_sim.Housing.FreeBeds} free beds)" +
+               $"    Goods: {society.Standard:P0} ({met})" +
+               $"    Settlers {society.SettlersArrived}, left {society.Departed}" +
+               (days < Colony.Core.Agents.Needs.SettlerFoodDays ? $"  (settlers need {Colony.Core.Agents.Needs.SettlerFoodDays:0} days of food)" : "");
+    }
+
     private string WaterLine()
     {
         var w = _sim.Water;
@@ -636,6 +689,44 @@ public partial class Main : Node3D
         _stairsDemoAt = null;
         _rig.Focus(SimSpace.TileCenter(new TilePos(x0 + 30, yc, g + 1)), 34f, yaw: 200f, pitch: -48f);
         GD.Print($"Water demo: spring at ({x0 + 1},{yc},{g + 5}), wheel, pump, pond and irrigated field");
+    }
+
+    /// <summary>
+    /// Four walled homes beside the colony (dev only: edits tiles, installs fixtures directly): a dormitory, a cottage,
+    /// a house and a manor, each furnished by its policy so the tiers and the home-vs-dormitory split are visible.
+    /// </summary>
+    private void HomesDemo()
+    {
+        var c = _sim.Colonists[0].Position;
+        int g = c.Z - 1, x = c.X + 6, y0 = c.Y - 4;
+        LevelPad(x - 2, y0 - 2, x + 44, y0 + 10, g);
+        var housing = _sim.Housing;
+        foreach (var (name, w, d) in new[] { ("Dormitory", 7, 5), ("Cottage", 4, 3), ("House", 6, 4), ("Manor", 8, 6) })
+        {
+            // Walls two high around the floor, a doorway in the south wall.
+            for (int i = -1; i <= w; i++)
+            for (int j = -1; j <= d; j++)
+            {
+                bool edge = i == -1 || j == -1 || i == w || j == d;
+                if (!edge || (j == -1 && i == w / 2)) continue;
+                for (int z = g + 1; z <= g + 2; z++) _sim.World.Set(x + i, y0 + j, z, TileType.Wall);
+            }
+            _sim.Rooms.Paint(Colony.Core.Industry.Catalog.Home, new TilePos(x, y0, g), new TilePos(x + w - 1, y0 + d - 1, g));
+            _sim.Step(); // housing picks the room up
+            var home = housing.HomeOf(_sim.Rooms.RoomAt(new TilePos(x, y0, g + 1))!)!;
+            housing.SetPolicy(home, housing.Policies.First(p => p.Name == name));
+            _sim.Step();
+            var plan = Colony.Core.Agents.Housing.Plan(home);
+            for (int s = 0; s < Colony.Core.Agents.Housing.SlotCount; s++)
+                if (plan.Count[s] > 0)
+                {
+                    var item = Colony.Core.Industry.Catalog.Fixtures[Colony.Core.Agents.Housing.Slots[s]].First(i => i.Def.FixtureTier == plan.Tier[s]);
+                    housing.Install(_sim, home, item, plan.Count[s]);
+                }
+            x += w + 3;
+        }
+        _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 22, y0 + 2, g + 1)), 22f, yaw: 190f, pitch: -62f);
+        GD.Print($"Homes demo: {housing.All.Count} homes, {housing.All.Sum(h => h.Beds)} beds, {housing.All.Sum(h => h.Fixtures.Count)} fixtures");
     }
 
     /// <summary>Dev only: flattens a pad of grass over soil at ground level g (edits tiles directly).</summary>

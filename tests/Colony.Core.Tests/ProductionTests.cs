@@ -61,9 +61,9 @@ public class ProductionTests
     [Fact]
     public void Catalog_LoadsTheWholeTree()
     {
-        Assert.Equal(77, Catalog.Items.Count);
+        Assert.Equal(88, Catalog.Items.Count);
         Assert.Equal(12, Catalog.Workshops.Count);
-        Assert.Equal(60, Catalog.Recipes.Count);
+        Assert.Equal(71, Catalog.Recipes.Count);
         Assert.Equal(32, Catalog.Parts.Count(p => p.Role == PartRole.Machine));
         Assert.All(Catalog.Items, i => Assert.True(i.IsRaw || Catalog.RecipeFor(i.Type) is not null, i.Id));
         Assert.Equal(17, Catalog.Items.Count(i => i.IsRaw));

@@ -338,6 +338,25 @@ if (args.Length > 0 && args[0] == "far")
     return;
 }
 
+if (args.Length > 0 && args[0] == "colony")
+{
+    // Population over game days with no player: the founders' food, settlers, hunger, departures.
+    // dotnet run -c Release --project tools/Colony.Bench -- colony [size] [days]
+    int csize = args.Length > 1 ? int.Parse(args[1]) : 512, days = args.Length > 2 ? int.Parse(args[2]) : 12;
+    var cs = ColonySim.Generate(new WorldGenSettings(12345, csize, csize, 384), 7);
+    var clock = Stopwatch.StartNew();
+    for (int d = 1; d <= days; d++)
+    {
+        for (int t = 0; t < Colony.Core.Agents.Needs.Day; t++) cs.Step();
+        var s = cs.Society;
+        Console.WriteLine($"day {d}: {cs.Colonists.Count} colonists ({cs.Colonists.Count(c => c.Hungry)} hungry, {cs.Colonists.Count(c => c.Starving)} starving), " +
+                          $"food {Colony.Core.Agents.Society.FoodInStore(cs)} meals = {Colony.Core.Agents.Society.FoodDays(cs):0.0} days, " +
+                          $"standard {s.Standard:P0}, settlers {s.SettlersArrived}, left {s.Departed}");
+    }
+    Console.WriteLine($"{days} days in {clock.ElapsedMilliseconds} ms; events: {string.Join(" | ", cs.Events.Select(e => e.Text))}");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "upipe")
 {
     // A U-pipe under the deepest lake near the centre, dug a cell every 2 steps like colonists would: a shaft from the
