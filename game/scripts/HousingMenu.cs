@@ -81,7 +81,12 @@ public partial class HousingMenu : PanelContainer
             var block = new VBoxContainer();
             var head = new Label { Text = $"{p.Name}   ({homes} home{(homes == 1 ? "" : "s")}; a 12-cell home: {plan.Residents} residents)" };
             head.AddThemeColorOverride("font_color", new Color(0.95f, 0.85f, 0.55f));
-            block.AddChild(head);
+            var shared = new CheckBox { Text = "Shared lodging (singles board here; never a family's home)", ButtonPressed = p.Shared };
+            shared.Toggled += on => _sim.Housing.SetShared(p, on);
+            var headRow = new HBoxContainer();
+            headRow.AddChild(head);
+            headRow.AddChild(shared);
+            block.AddChild(headRow);
             var grid = new GridContainer { Columns = 7 };
             for (int s = 0; s < Housing.SlotCount; s++)
             {

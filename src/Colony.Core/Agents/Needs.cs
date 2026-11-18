@@ -35,6 +35,13 @@ public static class Needs
     public const float Unhappy = 0.25f; // fed but homeless and in rags (0.2) counts: homes matter
     public const int UnhappyDaysToLeave = 5, NeverBelow = 7;
 
+    /// <summary>Days from birth to grown (12 days: 48 minutes at normal speed).</summary>
+    public const int ChildDays = 12;
+    /// <summary>Daily chance a couple marries when there is an empty home for them (settlers move in first).</summary>
+    public const float MarriageChance = 0.35f;
+    /// <summary>Daily chance a couple with a free bed at home has a child.</summary>
+    public const float BirthChance = 0.2f;
+
     /// <summary>A colonist starving (no satiety left) this long leaves the colony.</summary>
     public const int StarvingLimit = Day;
 
@@ -80,6 +87,8 @@ public sealed class Society
     public int Days { get; private set; }
 
     public int SettlersArrived { get; private set; }
+    /// <summary>Whether settlers come at all (sandbox and tests switch them off).</summary>
+    public bool SettlersCome { get; set; } = true;
     public int Departed { get; private set; }
 
     /// <summary>Meals of nutrition lying where the colony may eat them.</summary>
@@ -106,7 +115,7 @@ public sealed class Society
         for (int i = sim.Colonists.Count - 1; i >= 0; i--)
         {
             var c = sim.Colonists[i];
-            if (c.StarvingTicks < Needs.StarvingLimit || Eaters(sim) <= Needs.NeverBelow) continue;
+            if (c.StarvingTicks < Needs.StarvingLimit || c.InFamily || c.IsChild || Eaters(sim) <= Needs.NeverBelow) continue; // families stay together
             sim.Depart(c);
             Departed++;
             sim.Announce($"{c.Name} has left the colony, starving");
@@ -116,6 +125,7 @@ public sealed class Society
         Consume(sim);
         Mood(sim);
         Settle(sim);
+        Families(sim);
         if (Eaters(sim) > 0 && FoodDays(sim) is var days and < LowFoodDays)
             sim.Announce(days <= 0
                 ? "There is no food left! Gather berries, farm grain and bake bread, or colonists will leave"
@@ -181,7 +191,7 @@ public sealed class Society
         }
         Happiness = n > 0 ? sum / n : 0.5f;
         if (Eaters(sim) <= Needs.NeverBelow) return;
-        var leaving = sim.Colonists.Where(c => !c.IsAutomaton && c.UnhappyDays >= Needs.UnhappyDaysToLeave)
+        var leaving = sim.Colonists.Where(c => !c.IsAutomaton && !c.InFamily && !c.IsChild && c.UnhappyDays >= Needs.UnhappyDaysToLeave)
             .OrderBy(c => c.Happiness).ThenByDescending(c => c.Id).FirstOrDefault(); // the newest arrivals give up first
         if (leaving == null) return;
         sim.Depart(leaving);
@@ -196,7 +206,7 @@ public sealed class Society
     private void Settle(ColonySim sim)
     {
         int eaters = Eaters(sim);
-        if (eaters == 0 || sim.Colonists.Any(c => c.Starving) || FoodDays(sim) < Needs.SettlerFoodDays) return;
+        if (!SettlersCome || eaters == 0 || sim.Colonists.Any(c => c.Starving) || FoodDays(sim) < Needs.SettlerFoodDays) return;
         int count = Math.Clamp((int)MathF.Round(eaters * (0.05f + 0.2f * Happiness)), 1, 12);
         count = Math.Max(1, Math.Min(count, sim.Housing.FreeBeds));
         var spots = sim.ArrivalSpots(count);
@@ -207,4 +217,66 @@ public sealed class Society
         string why = Happiness >= 0.6f ? "its happy people" : sim.Housing.FreeBeds > 0 ? "its food and free beds" : "its food stores";
         sim.Announce(spots.Count == 1 ? $"A settler arrives, drawn by {why}" : $"{spots.Count} settlers arrive, drawn by {why}");
     }
+
+    public int Marriages { get; private set; }
+    public int Births { get; private set; }
+
+    /// <summary>
+    /// Family life, once a day after settlers have taken their beds: children grow up (and stay at home until they
+    /// marry); couples marry when there is an empty home for them (two adults of different households: never
+    /// siblings) and move in as a new family; couples with a free bed at home have children while the colony has food.
+    /// A family that has filled its home has no more. Rare next to settlers on purpose: outsiders grow a colony fastest.
+    /// </summary>
+    private void Families(ColonySim sim)
+    {
+        long tick = sim.Tick;
+        foreach (var c in sim.Colonists)
+            if (c.IsChild && tick - c.BornTick >= (long)Needs.ChildDays * Needs.Day)
+            {
+                c.IsChild = false;
+                sim.Announce($"{c.Name} has grown up (and still lives at home until they marry)");
+            }
+        sim.Housing.AssignResidents(sim); // settlers first: they take beds before couples look for a home
+
+        // Marriages: a couple needs a home of its own: an empty one, or one where nobody but the two of them lodges
+        // (a home other settlers live in is taken). One per such home, each on a daily chance.
+        var free = sim.Colonists.Where(c => !c.IsAutomaton && !c.IsChild && c.Spouse == null).OrderBy(c => c.Id).ToList();
+        foreach (var home in sim.Housing.CoupleHomes().ToList())
+        {
+            if (Chance(tick, home.Room.Id, 1) >= Needs.MarriageChance) continue;
+            // Who lodges here marries first (if two do, each other); then the longest in the colony.
+            var lodgers = home.Residents.Where(free.Contains).ToList();
+            if (lodgers.Count != home.Residents.Count) continue; // someone here can't marry (or isn't single): taken
+            var a = lodgers.Count > 0 ? lodgers[0] : free.FirstOrDefault();
+            var b = a == null ? null
+                : lodgers.Count == 2 ? (lodgers[1].Household != a.Household ? lodgers[1] : null)
+                : free.FirstOrDefault(c => c != a && c.Household != a.Household); // anyone free from another household (they move out)
+            if (a == null || b == null) continue;
+            free.Remove(a);
+            free.Remove(b);
+            int family = sim.NewFamily();
+            a.Spouse = b;
+            b.Spouse = a;
+            a.Household = b.Household = family;
+            sim.Housing.Claim(home, family);
+            Marriages++;
+            sim.Announce($"{a.Name} and {b.Name} marry and make {home.Name} their home");
+        }
+        sim.Housing.AssignResidents(sim);
+
+        // Births: a couple at home with a bed to spare, while nobody starves.
+        if (sim.Colonists.Any(c => c.Starving)) return;
+        foreach (var c in sim.Colonists.Where(c => c.Spouse is { } s && c.Id < s.Id).ToList())
+        {
+            if (c.Home is not { } home || home.Family != c.Household) continue;
+            int family = sim.Colonists.Count(m => m.Household == c.Household);
+            if (home.Beds <= family || Chance(tick, c.Id, 2) >= Needs.BirthChance) continue;
+            var child = sim.AddChild(c, c.Spouse!);
+            Births++;
+            sim.Announce($"{child.Name} is born to {c.Name} and {c.Spouse!.Name}");
+        }
+        sim.Housing.AssignResidents(sim);
+    }
+
+    private static float Chance(long tick, int id, int salt) => Procedural.Noise.Hash(unchecked((int)(tick / Needs.Day)), id, salt, 7717);
 }

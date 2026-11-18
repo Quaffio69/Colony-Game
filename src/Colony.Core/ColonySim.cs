@@ -378,6 +378,22 @@ public sealed class ColonySim
     /// <summary>Homes, their furnishing policies, fixtures and residents.</summary>
     public Housing Housing { get; } = new();
 
+    private int _families;
+
+    /// <summary>A new family id (households of the married; never a colonist id).</summary>
+    internal int NewFamily() => 1_000_000 + ++_families;
+
+    /// <summary>A child born to a couple: in their household, at home with them, unschooled, too young to work.</summary>
+    internal Colonist AddChild(Colonist mother, Colonist father)
+    {
+        var at = mother.Home is { } home ? Housing.SleepCell(home, mother) : mother.Position;
+        var child = AddColonist(NameGenerator.Generate(unchecked((int)Tick * 37 + 5), ColonistsEver), at);
+        child.IsChild = true;
+        child.BornTick = Tick;
+        child.Household = mother.Household;
+        return child;
+    }
+
     /// <summary>A colonist leaves for good: drops what it carries and lets go of every claim.</summary>
     internal void Depart(Colonist c)
     {

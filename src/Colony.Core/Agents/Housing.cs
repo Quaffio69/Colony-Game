@@ -16,7 +16,10 @@ public sealed class HousingPolicy
     /// <summary>Per slot: pieces per resident (beds are always one each).</summary>
     public float[] PerResident { get; init; } = new float[Housing.SlotCount];
 
-    public HousingPolicy Clone(string name) => new() { Name = name, Tier = (int[])Tier.Clone(), PerResident = (float[])PerResident.Clone() };
+    /// <summary>Shared lodging (a dormitory): singles board here; it never becomes a family's home.</summary>
+    public bool Shared { get; set; }
+
+    public HousingPolicy Clone(string name) => new() { Name = name, Tier = (int[])Tier.Clone(), PerResident = (float[])PerResident.Clone(), Shared = Shared };
 }
 
 /// <summary>An installed piece of furniture: it wears out only while installed (items in store are just counts).</summary>
@@ -41,6 +44,8 @@ public sealed class Home
     public HousingPolicy Policy { get; internal set; } = null!;
     public List<Fixture> Fixtures { get; } = new();
     public List<Colonist> Residents { get; } = new();
+    /// <summary>The family (<see cref="Colonist.Household"/>) whose home this is; 0 while it lodges singles (or stands empty).</summary>
+    public int Family { get; internal set; }
     /// <summary>Per slot: pieces on their way (a colonist is carrying them here).</summary>
     internal readonly int[] Pending = new int[Housing.SlotCount];
 
@@ -116,6 +121,7 @@ public sealed class Housing
             P("House", 2, (2, 1.5f), (2, 1), (2, 0.5f), (2, 0.5f)),
             P("Manor", 3, (3, 2.5f), (3, 1), (3, 1), (3, 1)),
         ];
+        Policies[0].Shared = true; // the dormitory lodges singles
     }
 
     public List<HousingPolicy> Policies { get; }
@@ -142,6 +148,14 @@ public sealed class Housing
     {
         if (slot == Bed) return;
         policy.PerResident[slot] = Math.Clamp(MathF.Round(perResident * 4) / 4, 0, 4);
+        _plansChanged = true;
+        Version++;
+    }
+
+    /// <summary>Makes a policy shared lodging or not; families in homes that become shared move out (and look for another).</summary>
+    public void SetShared(HousingPolicy policy, bool shared)
+    {
+        policy.Shared = shared;
         _plansChanged = true;
         Version++;
     }
@@ -262,7 +276,9 @@ public sealed class Housing
                 if (old == null) break; // the slot is full of the right pieces already
                 Remove(sim, home, old, salvage: true);
             }
-            home.Fixtures.Add(new Fixture { Item = item, Slot = slot, Cell = home.Room.Cells.First(), WearLeft = item.Def.Wear * Needs.Day });
+            // Lifespans vary a little (±20%), so pieces put in together don't all wear out on the same day.
+            float spread = 0.8f + 0.4f * Procedural.Noise.Hash(home.Room.Id, home.Fixtures.Count, (int)(sim.Tick % 100_000), 3301);
+            home.Fixtures.Add(new Fixture { Item = item, Slot = slot, Cell = home.Room.Cells.First(), WearLeft = (int)(item.Def.Wear * Needs.Day * spread) });
             home.LayoutDirty = true;
             installed++;
         }
@@ -394,26 +410,80 @@ public sealed class Housing
     }
 
     /// <summary>
-    /// Beds go to the most educated first, into the best homes (by installed quality, then room order), so a new manor
-    /// draws the Scholars out of the dormitory and their cots pass to newcomers. Recomputed whenever homes, beds or the
-    /// colonists change (and daily); deterministic, and stable while nothing changes. Automatons don't sleep.
+    /// Who sleeps where, recomputed whenever homes, beds or the colonists change (and daily); deterministic.
+    /// <list type="number">
+    /// <item>A family (a married couple, their children grown or not) keeps the home it claimed: all of them live there,
+    /// parents first, as far as its beds go.</item>
+    /// <item>A family that lost its home claims an empty one (no family, nobody lodging, not shared).</item>
+    /// <item>Singles (settlers, the unmarried who came alone) lodge in free beds of homes no family claimed, the most
+    /// educated first; each keeps its bed unless a clearly better home has room, so a new manor draws the Scholars
+    /// out of the dormitory. A home where a single lodges is taken: newlyweds need an empty one.</item>
+    /// </list>
+    /// Automatons don't sleep.
     /// </summary>
     internal void AssignResidents(ColonySim sim)
     {
-        var people = sim.Colonists.Where(c => !c.IsAutomaton).OrderByDescending(c => c.Education).ThenBy(c => c.Id).ToList();
+        var people = sim.Colonists.Where(c => !c.IsAutomaton).ToList();
         var before = _homes.ToDictionary(h => h, h => h.Residents.ToList());
+        var lodgedIn = new Dictionary<Colonist, Home>();
+        foreach (var (home, list) in before)
+            foreach (var c in list)
+                if (home.Family == 0) lodgedIn[c] = home;
         foreach (var home in _homes) home.Residents.Clear();
         foreach (var c in people) c.Home = null;
-        int next = 0;
-        foreach (var home in _homes.OrderByDescending(h => h.Quality).ThenBy(h => h.Room.Id))
-            while (home.Residents.Count < home.Beds && next < people.Count)
+
+        var families = people.Where(c => c.InFamily).GroupBy(c => c.Household)
+            .ToDictionary(g => g.Key, g => g.OrderBy(c => c.IsChild).ThenBy(c => c.BornTick).ThenBy(c => c.Id).ToList());
+        void Move(Home home, List<Colonist> members)
+        {
+            foreach (var c in members)
             {
-                var c = people[next++];
+                if (home.Residents.Count >= home.Beds) break;
                 home.Residents.Add(c);
                 c.Home = home;
             }
+        }
+        // 1. Families stay in their homes.
+        foreach (var home in _homes)
+        {
+            if (home.Family == 0) continue;
+            if (home.Policy.Shared || !families.TryGetValue(home.Family, out var members)) home.Family = 0;
+            else Move(home, members);
+        }
+        // 2. A family without a home takes an empty one (nobody lodging there before).
+        foreach (var (id, members) in families.OrderBy(f => f.Key))
+        {
+            if (members.Any(c => c.Home != null) || _homes.Any(h => h.Family == id)) continue;
+            var free = _homes.Where(h => h.Family == 0 && !h.Policy.Shared && before[h].Count == 0 && h.Beds >= 2)
+                .OrderByDescending(h => h.Quality).ThenBy(h => h.Room.Id).FirstOrDefault();
+            if (free == null) continue;
+            free.Family = id;
+            Move(free, members);
+        }
+        // 3. Singles lodge in homes no family claimed.
+        foreach (var c in people.Where(c => !c.InFamily).OrderByDescending(c => c.Education).ThenBy(c => c.Id))
+        {
+            var open = _homes.Where(h => h.Family == 0 && h.Residents.Count < h.Beds).ToList();
+            if (open.Count == 0) break;
+            var best = open.OrderByDescending(h => h.Quality).ThenBy(h => h.Room.Id).First();
+            var home = lodgedIn.TryGetValue(c, out var had) && open.Contains(had) && best.Quality < had.Quality + 0.5f ? had : best;
+            home.Residents.Add(c);
+            c.Home = home;
+        }
         if (_homes.Any(h => !h.Residents.SequenceEqual(before[h]))) Version++;
     }
 
-    public int FreeBeds => _homes.Sum(h => Math.Max(0, h.Beds - h.Residents.Count));
+    /// <summary>Homes a couple could make theirs: claimed by no family, not shared, two beds or more, two lodgers at most.</summary>
+    public IEnumerable<Home> CoupleHomes() =>
+        _homes.Where(h => h.Family == 0 && !h.Policy.Shared && h.Residents.Count <= 2 && h.Beds >= 2).OrderByDescending(h => h.Quality).ThenBy(h => h.Room.Id);
+
+    /// <summary>Gives a family a home (newlyweds); its members move in at the next assignment.</summary>
+    internal void Claim(Home home, int family)
+    {
+        home.Family = family;
+        Version++;
+    }
+
+    /// <summary>Beds settlers could take: free beds in homes no family has claimed.</summary>
+    public int FreeBeds => _homes.Where(h => h.Family == 0).Sum(h => Math.Max(0, h.Beds - h.Residents.Count));
 }

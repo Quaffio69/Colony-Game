@@ -298,6 +298,19 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   beside beds (rugs), on free wall (tapestries, paintings) or in corners (statues). `HomeView` draws a model per role
   and tier (pallet / framed / canopy bed, stool / chair ...). `--homes-demo` builds one walled home per policy.
   Scale-up path: `Demands` and fixture counts are linear scans per home.
+- **Families (`Society.Families`, `Housing.AssignResidents`):** a colonist's `Household` is its own id while single;
+  newlyweds get a family id (`ColonySim.NewFamily`), shared by their children (`InFamily`). Daily, after settlers
+  arrive (so they take beds first): children grow up after `Needs.ChildDays` (12) and stay home until they marry;
+  a couple marries (`MarriageChance`, two adults of different households: never siblings) only into a home of its own
+  (`Housing.CoupleHomes`: no family's, not shared, 2+ beds, at most the two of them lodging; one where settlers lodge
+  is taken) and claims it (`Home.Family`); couples at home with a spare bed have children (`BirthChance`, while
+  nobody starves): a full home means no more. Housing: families keep their claimed home (all members, parents
+  first); a family that lost its home claims an empty one; singles lodge in homes no family claimed (shared
+  dormitories via `HousingPolicy.Shared`, or empty houses), the most educated first, keeping their bed unless a
+  clearly better home has room. Children don't work, are drawn smaller. Only singles ever leave (starving or unhappy):
+  families stay together. Settlers outpace home growth (40-day bench: ~50 settlers vs ~18 births, 5 weddings);
+  `Society.SettlersCome` switches settlers off (tests). Installed fixtures' lifespans vary ±20% so they don't all
+  wear out on one day. Bench: `-- families [days]`.
 - **Likes (`Colonist`):** fixed per colonist from its id: `FavoriteFood` (walks up to 8 tiles further for it; a treat
   counts for a day), `LikedMaterial` (fixture `material` in its home: wood, stone, metal, glass, cloth, clay),
   `LikedArt` (tapestry/painting/sculpture at home), `PreferredWork` (its `Labors` order; met when most of a day's
@@ -386,7 +399,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       (sized rooms, housing policies, tiered fixtures with wear, salvage, auto layout), rest in beds, residents by
       education, mood -> work speed, gentle departures, settlers by food, mood and free beds; procedural home
       layouts; likes (food, material, art, work); thin walls, doors, windows, floors, roofs (materials, dams, shell
-      quality, wall lines). Next: births and
-      households, job priorities, health beyond consumption.
+      quality, wall lines); families (weddings, births, children, homes per family). Next:
+      job priorities, schooling children, health beyond consumption, settler couples, old age.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.

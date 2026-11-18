@@ -304,7 +304,8 @@ public partial class Main : Node3D
             if (_sim.Tick - e.Tick < 60 * ColonySim.TicksPerSecond) sb.AppendLine($"  * {e.Text}");
         const int listed = 14;
         foreach (var c in _sim.Colonists.Take(listed))
-            sb.AppendLine($"  {c.Name,-12} {c.EducationName,-9} {c.Describe()}" + (c.Starving ? "  [STARVING]" : c.Hungry ? "  [hungry]" : "") +
+            sb.AppendLine($"  {c.Name,-12} {(c.IsChild ? $"Child {(_sim.Tick - c.BornTick) / Colony.Core.Agents.Needs.Day}d" : c.EducationName),-9} {c.Describe()}" +
+                          (c.Spouse is { } spouse ? $"  [married to {spouse.Name}]" : "") + (c.Starving ? "  [STARVING]" : c.Hungry ? "  [hungry]" : "") +
                           (c.IsAutomaton ? "" : $"  ({(c.Home is { } ch ? ch.Name : "homeless")}, mood {c.Happiness:P0}{(c.Tired ? ", tired" : "")}; likes {c.DescribeLikes(_sim.Tick)})"));
         if (_sim.Colonists.Count > listed) sb.AppendLine($"  ... and {_sim.Colonists.Count - listed} more");
         sb.AppendLine();
@@ -340,6 +341,9 @@ public partial class Main : Node3D
         var plan = Colony.Core.Agents.Housing.Plan(home);
         sb.AppendLine($"[{home.Name}]  {home.Room.Cells.Count} cells, {home.Policy.Name.ToLowerInvariant()} (F: next policy, H: edit policies)    " +
                       $"room for {plan.Residents}, {home.Beds} beds, {home.Residents.Count} living here" +
+                      (home.Family != 0 && home.Residents.FirstOrDefault(r => r.Spouse != null) is { } head
+                          ? $"    the family of {head.Name} & {head.Spouse!.Name}"
+                          : home.Policy.Shared ? "    shared lodging" : home.Residents.Count == 0 ? "    empty: settlers or a newly-wed couple may move in" : "    lodgers") +
                       (home.Room.Cells.Count < Colony.Core.Agents.Housing.MinCells ? $"    TOO SMALL (needs {Colony.Core.Agents.Housing.MinCells} cells)" : ""));
         for (int s = 0; s < Colony.Core.Agents.Housing.SlotCount; s++)
         {
@@ -644,7 +648,7 @@ public partial class Main : Node3D
         return $"Day {society.Days + 1}    Colonists {_sim.Colonists.Count}" + (starving > 0 ? $" ({starving} STARVING)" : hungry > 0 ? $" ({hungry} hungry)" : "") +
                $"    Food: {food}    Mood {society.Happiness:P0}    Homes {_sim.Housing.All.Count} ({_sim.Colonists.Count(c => !c.IsAutomaton && c.Home == null)} homeless, {_sim.Housing.FreeBeds} free beds)" +
                $"    Goods: {society.Standard:P0} ({met})" +
-               $"    Settlers {society.SettlersArrived}, left {society.Departed}" +
+               $"    Settlers {society.SettlersArrived}, left {society.Departed}, weddings {society.Marriages}, births {society.Births}" +
                (days < Colony.Core.Agents.Needs.SettlerFoodDays ? $"  (settlers need {Colony.Core.Agents.Needs.SettlerFoodDays:0} days of food)" : "");
     }
 

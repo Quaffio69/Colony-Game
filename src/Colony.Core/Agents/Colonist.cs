@@ -114,6 +114,7 @@ public sealed class Colonist
         Education = education;
         Satiety = Needs.FullSatiety - id * 977 % (Needs.Day / 2); // staggered, so the colony doesn't all eat at once
         Rest = Needs.FullRest - id * 1531 % (Needs.Day / 2); // ...or sleep at once
+        Household = id;
         FavoriteFood = Pick(Catalog.Items.Where(i => i.Nutrition > 0).Select(i => i.Type).ToList(), id, 1);
         LikedMaterial = Pick(Materials, id, 2);
         LikedArt = Pick(Catalog.Fixtures["decor"].Where(i => i.Def.FixtureTier >= 2).ToList(), id, 3);
@@ -242,6 +243,21 @@ public sealed class Colonist
         static string M(string s, bool met) => met ? s + "+" : s;
         return $"{M(FavoriteFood.Name.ToLowerInvariant(), a)}, {M(LikedMaterial, b)}, {M(LikedArt.Name.ToLowerInvariant(), c)}, {M(PreferredWork.ToString().ToLowerInvariant(), d)}";
     }
+
+    // ---- Family -------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Its household: its own id while single; a married couple and their children share a family id (see
+    /// <see cref="Society"/>), and a family lives together in one home (<see cref="Housing"/>).
+    /// </summary>
+    public int Household { get; internal set; }
+    public Colonist? Spouse { get; internal set; }
+    /// <summary>Born in the colony and not grown yet: eats and sleeps, doesn't work.</summary>
+    public bool IsChild { get; internal set; }
+    /// <summary>When it was born (-1: arrived grown).</summary>
+    public long BornTick { get; internal set; } = -1;
+    /// <summary>Part of a family (married, or a child of one, grown or not) rather than a single.</summary>
+    public bool InFamily => Household != Id;
 
     // ---- Home, rest and mood -----------------------------------------------------------------------------
 
@@ -429,6 +445,7 @@ public sealed class Colonist
                 }
                 if (Hungry && sim.NeedsEnabled && _foodRetry == 0 && TryEat(sim)) return; // a meal before the next job
                 if (Tired && sim.NeedsEnabled && TrySleep(sim)) return; // and bed before work
+                if (IsChild) return; // children don't work (they eat and sleep above)
                 if (NothingNewSinceLastSearch(sim)) return;
                 FindWork(sim);
                 break;

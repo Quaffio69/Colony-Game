@@ -338,6 +338,43 @@ if (args.Length > 0 && args[0] == "far")
     return;
 }
 
+if (args.Length > 0 && args[0] == "families")
+{
+    // Population with homes and food to spare: settlers, weddings, births. dotnet run ... -- families [days]
+    int fdays = args.Length > 1 ? int.Parse(args[1]) : 40;
+    var fw = new VoxelWorld(96, 96, 12);
+    for (int z = 0; z <= 3; z++)
+    for (int y = 0; y < 96; y++)
+    for (int x = 0; x < 96; x++) fw.Set(x, y, z, TileType.Stone);
+    var fs = new ColonySim(fw);
+    for (int i = 0; i < 7; i++) fs.AddColonist(Colony.Core.Agents.NameGenerator.Generate(1, i), new TilePos(40 + i, 60, 4), education: i == 0 ? 2 : i <= 2 ? 1 : 0);
+    fs.Items.Drop(new TilePos(80, 80, 4), Colony.Core.Industry.Catalog.Item("bread"), 6000);
+    fs.Items.Drop(new TilePos(80, 60, 4), Colony.Core.Industry.Catalog.Item("straw_pallet"), 120); // replacements for worn-out beds
+    var pallet = Colony.Core.Industry.Catalog.Item("straw_pallet");
+    void Home(int x0, int y0, int w0, int d0, int beds, bool dorm)
+    {
+        fs.Rooms.Paint(Colony.Core.Industry.Catalog.Home, new TilePos(x0, y0, 3), new TilePos(x0 + w0 - 1, y0 + d0 - 1, 3));
+        fs.Step();
+        var h = fs.Housing.HomeOf(fs.Rooms.RoomAt(new TilePos(x0, y0, 4))!)!;
+        if (dorm) fs.Housing.SetPolicy(h, fs.Housing.Policies[0]);
+        fs.Step();
+        fs.Housing.Install(fs, h, pallet, beds);
+    }
+    for (int i = 0; i < 6; i++) Home(4 + i * 8, 4, 5, 5, 4, false);
+    Home(4, 20, 8, 6, 8, true);
+    var clock = Stopwatch.StartNew();
+    for (int d = 1; d <= fdays; d++)
+    {
+        for (int t = 0; t < Colony.Core.Agents.Needs.Day; t++) fs.Step();
+        var s = fs.Society;
+        if (d % 4 == 0 || d == 1)
+            Console.WriteLine($"day {d}: {fs.Colonists.Count} colonists ({fs.Colonists.Count(c => c.IsChild)} children, {fs.Colonists.Count(c => c.Home == null)} homeless), " +
+                              $"settlers {s.SettlersArrived}, weddings {s.Marriages}, births {s.Births}, left {s.Departed}, mood {s.Happiness:P0}");
+    }
+    Console.WriteLine($"{fdays} days in {clock.ElapsedMilliseconds} ms; last events: {string.Join(" | ", fs.Events.TakeLast(6).Select(e => e.Text))}");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "colony")
 {
     // Population over game days with no player: the founders' food, settlers, hunger, departures.

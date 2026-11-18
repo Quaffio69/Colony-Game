@@ -64,6 +64,7 @@ public partial class ColonistView : Node3D
         if (_sim == null) return;
         _time += (float)delta;
 
+        SyncViews();
         foreach (var (c, root) in _views)
         {
             var pos = Foot(c.Position);
@@ -77,6 +78,7 @@ public partial class ColonistView : Node3D
             }
 
             root.Position = pos;
+            root.Scale = Vector3.One * (c.IsChild ? 0.6f : 1f);
 
             // Carried load: a box on the head, coloured by item type.
             var load = root.GetNode<MeshInstance3D>("Load");
@@ -86,6 +88,23 @@ public partial class ColonistView : Node3D
             // Colonists stand in the cell above the solid they walk on, so show those on the cut surface too.
             root.Visible = c.Position.Z <= _world.ViewLevel + 1;
         }
+    }
+
+    /// <summary>Views follow the colony: settlers, newborns and arrivals get one; those who left lose theirs.</summary>
+    private void SyncViews()
+    {
+        if (_views.Count == _sim.Colonists.Count && (_views.Count == 0 || _views[^1].Colonist == _sim.Colonists[^1])) return;
+        var present = new HashSet<Colonist>(_sim.Colonists);
+        for (int i = _views.Count - 1; i >= 0; i--)
+            if (!present.Contains(_views[i].Colonist))
+            {
+                _views[i].Root.QueueFree();
+                _views.RemoveAt(i);
+            }
+        var shown = new HashSet<Colonist>();
+        foreach (var (c, _) in _views) shown.Add(c);
+        foreach (var c in _sim.Colonists)
+            if (!shown.Contains(c)) AddView(c);
     }
 
     private static Vector3 Foot(TilePos p) => new(p.X + 0.5f, p.Z, p.Y + 0.5f);
