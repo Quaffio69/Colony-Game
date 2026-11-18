@@ -164,6 +164,18 @@ public sealed class ColonySim
     {
         if (bp.Removed) return;
         Constructions.Remove(bp);
+        if (bp.IsEdge)
+        {
+            // A door or window cut into a built wall gives back the wall's material.
+            byte old = World.Edge(bp.EdgeCell, bp.Side);
+            if (EdgeInfo.Kind(old) == EdgeKind.Wall && bp.Kind != StructureKind.EdgeWall)
+            {
+                var (mat, n) = Constructions.Cost(StructureKind.EdgeWall, EdgeInfo.Material(old));
+                Items.Drop(bp.Cell, mat, n);
+            }
+            World.SetEdge(bp.EdgeCell, bp.Side, EdgeInfo.Make(Constructions.EdgeKindOf(bp.Kind), bp.Material));
+            return;
+        }
         var cell = bp.Cell;
         switch (bp.Kind)
         {

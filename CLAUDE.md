@@ -222,6 +222,26 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   are not the game.) The slice hides water above the cut, so a **water cap** (`water_cap.gdshader`, like the
   terrain cap) draws the cross-section at the cut from a map-sized R8 texture (water above the cut per column, 1/16
   levels): rebuilt over wet blocks on a level change, patched per changed block, uploaded at most 5x a second.
+- **Thin walls (`World.EdgeInfo`, `WallMaterials`):** walls, doors and windows stand on cell edges, one level tall,
+  so rooms keep their floor. Each cell owns its east (+x) and north (+y) edge: a `ushort` per cell in `Chunk.Edges`
+  (allocated on first use; low byte east, high byte north), each byte kind (2 bits: wall, door, window) + material
+  (6 bits: log, rubble, plank, stone block, brick: item cost, look, quality 0-2). `VoxelWorld.SetEdge` notifies both
+  cells' chunks like a tile change (so connectivity, rooms, water and views follow); `EdgeRevision` for views;
+  `ITileReader.EdgesAt` (and `TileBox` copies edges) so movement reads them on the world or a snapshot.
+  **Movement:** walls/windows block a move across them (doors don't); a diagonal is blocked by any of the four edges
+  round its corner; a climb or drop crosses the edge at the upper of its two levels (a one-level wall can't be
+  stepped over); symmetric (tested on random terrain). Rooms and homes split along walls. **Water:** each pipe has
+  a `Sill`: the top of the watertight edge run from the bottom of the shared window (`Water.SillOf`), so a wall line
+  is a dam that spills over its crest; a door is no dam. **Building:** `Constructions.PlaceEdge`/`PlaceOutline`
+  (walls round a box)/`CancelEdge`/`Demolish` (instant, refunds); edge blueprints are delivered to whichever adjacent
+  cell has floor (`Blueprint.Cell` = site, `EdgeCell`/`Side` = the edge) and built by builders like other structures;
+  a door or window may be cut into a built wall (the wall's material comes back). Costs: wall 1 of its material,
+  door 2 planks, window 1 glass. **Tool:** build menu "Walls & doors": Outline (box), Wall/Door/Window (click the
+  edge nearest the cursor; RMB removes), material row. **Look:** `EdgeView` (stacked logs, rubble, plank panels,
+  coursed blocks, brick; coping, corner posts, door leaves, glazed windows; blueprint ghosts). **Homes:** the shell
+  (`HomeLayout.Survey`: outline closed by walls/doors/windows/rock, their tier vs expectation, windows) is a fifth of
+  `Housing.Score`; wall materials count for liked materials. The old full-cell `TileType.Wall` (Tab order) stays
+  for dams and embankments.
 - **Waterworks:** `Orders.Constructions` holds single-cell blueprints (walls from 1 stone; water wheels and
   pumps from planks) built like room parts (haulers deliver, Designations-labor builders build;
   `ColonySim.CompleteConstruction`). Walls stack on wall blueprints, so dams rise level by level; a wall is
@@ -355,8 +375,8 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - [~] M5: Needs and homes. Done: hunger, eating, starving leaves; daily goods standard (clothing, tinctures); homes
       (sized rooms, housing policies, tiered fixtures with wear, salvage, auto layout), rest in beds, residents by
       education, mood -> work speed, gentle departures, settlers by food, mood and free beds; procedural home
-      layouts; likes (food, material, art, work). Next: building quality (thin walls, doors, windows, floors as the
-      home's shell, a more capable structure tool), births and
+      layouts; likes (food, material, art, work); thin walls, doors, windows (materials, dams, shell quality). Next:
+      floors (planks, flagstone, tiles) and roofs as part of the shell, dragged wall lines, births and
       households, job priorities, health beyond consumption.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.

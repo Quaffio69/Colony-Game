@@ -92,6 +92,10 @@ public partial class Main : Node3D
         AddChild(homes);
         homes.Initialize(_sim, _world);
 
+        var edges = new EdgeView { Name = "EdgeView" };
+        AddChild(edges);
+        edges.Initialize(_sim, _world);
+
         var rooms = new RoomView { Name = "RoomView" };
         AddChild(rooms);
         rooms.Initialize(_sim, _world);
@@ -342,6 +346,9 @@ public partial class Main : Node3D
             sb.AppendLine($"   {Colony.Core.Agents.Housing.Slots[s],-10} {string.Join(", ", have).PadRight(34)} {wanted}" +
                           $"  ({Colony.Core.Agents.Housing.SlotEffects[s]}{(wear < 0.25f ? ", some nearly worn out" : "")})");
         }
+        var shell = home.Shell;
+        sb.AppendLine(shell.Enclosure <= 0 ? "   walls      none (build thin walls round it: B, Walls & doors)"
+            : $"   walls      {shell.Enclosure:P0} closed, {Colony.Core.Industry.Catalog.FixtureTiers[Math.Clamp((int)MathF.Round(shell.Tier), 0, 3)]} ({string.Join(", ", shell.Materials)}), {shell.Windows} window{(shell.Windows == 1 ? "" : "s")}");
         if (home.Residents.Count > 0)
             sb.AppendLine("   Living here: " + string.Join(", ", home.Residents.Select(c =>
                 $"{c.Name} ({c.EducationName}, home {Colony.Core.Agents.Housing.Score(home, c):P0}, likes {c.DescribeLikes(_sim.Tick)})")));
@@ -705,15 +712,20 @@ public partial class Main : Node3D
         int g = c.Z - 1, x = c.X + 6, y0 = c.Y - 4;
         LevelPad(x - 2, y0 - 2, x + 44, y0 + 10, g);
         var housing = _sim.Housing;
-        foreach (var (name, w, d) in new[] { ("Dormitory", 7, 5), ("Cottage", 4, 3), ("House", 6, 4), ("Manor", 8, 6) })
+        foreach (var (name, w, d, material) in new[] { ("Dormitory", 7, 5, 0), ("Cottage", 4, 3, 2), ("House", 6, 4, 3), ("Manor", 8, 6, 4) })
         {
-            // Walls two high around the floor, a doorway in the south wall.
-            for (int i = -1; i <= w; i++)
-            for (int j = -1; j <= d; j++)
+            // Thin walls round the floor: a door in the middle of the south wall, windows along the north and sides.
+            byte wall = EdgeInfo.Make(EdgeKind.Wall, material), window = EdgeInfo.Make(EdgeKind.Window, material);
+            int z = g + 1;
+            for (int i = 0; i < w; i++)
             {
-                bool edge = i == -1 || j == -1 || i == w || j == d;
-                if (!edge || (j == -1 && i == w / 2)) continue;
-                for (int z = g + 1; z <= g + 2; z++) _sim.World.Set(x + i, y0 + j, z, TileType.Wall);
+                _sim.World.SetEdge(new TilePos(x + i, y0 - 1, z), EdgeInfo.North, i == w / 2 ? EdgeInfo.Make(EdgeKind.Door, material) : wall);
+                _sim.World.SetEdge(new TilePos(x + i, y0 + d - 1, z), EdgeInfo.North, i % 3 == 1 ? window : wall);
+            }
+            for (int j = 0; j < d; j++)
+            {
+                _sim.World.SetEdge(new TilePos(x - 1, y0 + j, z), EdgeInfo.East, j == d / 2 && d > 3 ? window : wall);
+                _sim.World.SetEdge(new TilePos(x + w - 1, y0 + j, z), EdgeInfo.East, j == d / 2 ? window : wall);
             }
             _sim.Rooms.Paint(Colony.Core.Industry.Catalog.Home, new TilePos(x, y0, g), new TilePos(x + w - 1, y0 + d - 1, g));
             _sim.Step(); // housing picks the room up
@@ -727,9 +739,9 @@ public partial class Main : Node3D
                     var item = Colony.Core.Industry.Catalog.Fixtures[Colony.Core.Agents.Housing.Slots[s]].First(i => i.Def.FixtureTier == plan.Tier[s]);
                     housing.Install(_sim, home, item, plan.Count[s]);
                 }
-            x += w + 3;
+            x += w + 2;
         }
-        _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 22, y0 + 2, g + 1)), 22f, yaw: 190f, pitch: -62f);
+        _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 20, y0 + 2, g + 1)), 22f, yaw: 190f, pitch: -62f);
         GD.Print($"Homes demo: {housing.All.Count} homes, {housing.All.Sum(h => h.Beds)} beds, {housing.All.Sum(h => h.Fixtures.Count)} fixtures");
     }
 

@@ -54,6 +54,8 @@ public sealed class Home
     /// <summary>How its fixtures are arranged (see <see cref="HomeLayout"/>): redone whenever they or the room change.</summary>
     public IReadOnlyList<Placement> Layout { get; internal set; } = [];
     internal bool LayoutDirty = true;
+    /// <summary>What it is built of (walls, windows), surveyed with its layout.</summary>
+    public HomeShell Shell { get; internal set; } = HomeShell.None;
 }
 
 /// <summary>
@@ -96,6 +98,7 @@ public sealed class Housing
 
     private readonly List<Home> _homes = new();
     private int _seenRooms = -1, _seenEver = -1, _seenCount = -1;
+    private long _seenEdges = -1;
     private bool _plansChanged; // a policy or a home's policy changed: trim surplus pieces next tick
 
     public Housing()
@@ -195,7 +198,10 @@ public sealed class Housing
             float quality = Math.Min(1.25f, tiers / (float)n / expected); // better than expected pleases a little more
             score += Weight[s] * coverage * quality;
         }
-        return Math.Clamp(score, 0, 1);
+        // The shell: closed all round, of walls at the tier expected, with a window or two for light.
+        var shell = home.Shell;
+        float walls = (shell.Tier <= 0 ? 0 : 0.85f * shell.Enclosure * Math.Min(1f, shell.Tier / expected)) + (shell.Windows > 0 ? 0.15f : 0);
+        return Math.Clamp(0.8f * score + 0.2f * Math.Min(1f, walls), 0, 1);
     }
 
     /// <summary>Rest regained per tick of sleep: a fine bed restores fastest, the bare floor slowest.</summary>
@@ -290,6 +296,11 @@ public sealed class Housing
     internal void Tick(ColonySim sim)
     {
         if (sim.Rooms.Version != _seenRooms) Sync(sim);
+        if (sim.World.EdgeRevision != _seenEdges) // walls, doors or windows changed: re-survey and re-arrange homes
+        {
+            _seenEdges = sim.World.EdgeRevision;
+            foreach (var h in _homes) h.LayoutDirty = true;
+        }
         if (sim.ColonistsEver != _seenEver || sim.Colonists.Count != _seenCount) // someone came or went: house them now
         {
             (_seenEver, _seenCount) = (sim.ColonistsEver, sim.Colonists.Count);
@@ -326,6 +337,7 @@ public sealed class Housing
             if (!home.LayoutDirty) continue;
             home.LayoutDirty = false;
             home.Layout = HomeLayout.Arrange(home, sim.World);
+            home.Shell = HomeLayout.Survey(home, sim.World);
             Version++;
         }
     }

@@ -39,7 +39,8 @@ public static class Hauling
     /// <summary>Role of the pile at <paramref name="p"/>. Wrong goods in an input crate count as loose (cleared out).</summary>
     public static StorageRole RoleOf(TilePos p, ItemType type, Stockpiles stockpiles, Rooms rooms, Orders.Constructions? sites = null)
     {
-        if (sites?.At(p) is { } site) return site.Cost.Material == type ? StorageRole.Construction : StorageRole.Loose;
+        if (sites is not null && sites.IsSite(p, type)) return StorageRole.Construction;
+        if (sites?.At(p) is not null) return StorageRole.Loose; // wrong material in a structure's cell
         var part = rooms.PartAt(p);
         if (part is { Built: false }) return part.Cost.Material == type ? StorageRole.Construction : StorageRole.Loose;
         if (part?.Role == PartRole.Input) return part.Room.Needs(type) ? StorageRole.Input : StorageRole.Loose;

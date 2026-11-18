@@ -574,7 +574,7 @@ public partial class WaterView : Node3D
                 case StructureKind.WaterWheel:
                     _structures.AddChild(WheelNode(bp.Cell, bp.Facing, _ghost).Node);
                     break;
-                default:
+                case StructureKind.Pump:
                     _structures.AddChild(PumpNode(bp.Cell, bp.Facing, _ghost));
                     break;
             }

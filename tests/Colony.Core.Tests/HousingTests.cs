@@ -81,7 +81,7 @@ public class HousingTests
         Assert.Equal(3, home.Residents.Count);
         Assert.Equal(1, sim.Colonists.Count(c => c.Home == null)); // three beds, four colonists
         Assert.Equal(6 - 3, Count(sim, Catalog.Item("straw_pallet"))); // the rest stay in store
-        Assert.All(home.Residents, c => Assert.True(Housing.Score(home, c) > 0.8f, $"score {Housing.Score(home, c)}"));
+        Assert.All(home.Residents, c => Assert.True(Housing.Score(home, c) > 0.75f, $"score {Housing.Score(home, c)}")); // unwalled: no shell
     }
 
     [Fact]
@@ -202,6 +202,39 @@ public class HousingTests
             Assert.True(Math.Abs(lamps[i].Cell.X - lamps[j].Cell.X) + Math.Abs(lamps[i].Cell.Y - lamps[j].Cell.Y) >= 2, "lamps bunched together");
         // The residents sleep in the beds.
         Assert.All(home.Fixtures.Where(f => f.Slot == Housing.Bed), f => Assert.Contains(f.Cell, beds.Select(b => b.Cell)));
+    }
+
+    [Fact]
+    public void WallsAndWindows_RaiseAHome_FineMaterialsMoreThanLogs()
+    {
+        var sim = FlatSim();
+        var home = PaintHome(sim, 4, 4, 7, 6);
+        sim.Housing.Install(sim, home, Catalog.Item("wooden_bed"), 1);
+        var lit = new Colonist(50, "Lit", new TilePos(1, 1, 4), education: 1); // expects comfortable
+        float bare = Housing.Score(home, lit);
+        void Walls(int material, bool window)
+        {
+            for (int x = 4; x <= 7; x++)
+            {
+                sim.World.SetEdge(new TilePos(x, 3, 4), EdgeInfo.North, EdgeInfo.Make(x == 5 ? EdgeKind.Door : EdgeKind.Wall, material));
+                sim.World.SetEdge(new TilePos(x, 6, 4), EdgeInfo.North, EdgeInfo.Make(window && x == 6 ? EdgeKind.Window : EdgeKind.Wall, material));
+            }
+            for (int y = 4; y <= 6; y++)
+            {
+                sim.World.SetEdge(new TilePos(3, y, 4), EdgeInfo.East, EdgeInfo.Make(EdgeKind.Wall, material));
+                sim.World.SetEdge(new TilePos(7, y, 4), EdgeInfo.East, EdgeInfo.Make(EdgeKind.Wall, material));
+            }
+            sim.Step(); // housing re-surveys
+        }
+        Walls(material: 0, window: false); // logs
+        float logs = Housing.Score(home, lit);
+        Assert.Equal(1f, home.Shell.Enclosure);
+        Walls(material: 3, window: false); // stone blocks
+        float stone = Housing.Score(home, lit);
+        Walls(material: 3, window: true);
+        float lightened = Housing.Score(home, lit);
+        Assert.True(bare < logs && logs < stone && stone < lightened, $"{bare} < {logs} < {stone} < {lightened}");
+        Assert.Contains("stone", home.Shell.Materials);
     }
 
     [Fact]

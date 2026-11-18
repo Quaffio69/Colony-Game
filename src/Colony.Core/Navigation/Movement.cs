@@ -10,6 +10,8 @@ namespace Colony.Core.Navigation;
 /// orthogonal cells passed between must be open.</item>
 /// <item>Climb up or drop down one level onto an orthogonal neighbour, through the open air cell above the lower
 /// end (headroom). Slow, unless either end is a stair cell.</item>
+/// <item>Thin walls and windows on cell edges (<see cref="EdgeInfo"/>) block any move across them, a diagonal past
+/// either of its corners included; doors don't.</item>
 /// <item>Stairs (DF-style): from an up stair (<see cref="TileType.UpStair"/>/<see cref="TileType.UpDownStair"/>)
 /// straight up into a down stair (<see cref="TileType.DownStair"/>/<see cref="TileType.UpDownStair"/>) and back.</item>
 /// </list>
@@ -52,21 +54,24 @@ public static class Movement
         {
             int x = p.X + dx, y = p.Y + dy;
             var flat = new TilePos(x, y, p.Z);
-            if (IsStandable(w, flat)) output.Add((flat, FlatCost));
+            if (IsStandable(w, flat) && !EdgeBlocks(w, p, flat)) output.Add((flat, FlatCost));
             // No early exit: a stair cell can sit directly above a walkable neighbour, and the reverse drop out
             // of it must stay legal (undirected graph). The conditions below exclude every other overlap.
             // Climb: up through the air above us onto the neighbour one level up.
             var up = new TilePos(x, y, p.Z + 1);
-            if (IsClimb(w, p, up)) output.Add((up, ClimbCost(w, p, up, ClimbUpCost)));
+            if (IsClimb(w, p, up) && !EdgeBlocks(w, p.Offset(0, 0, 1), up)) output.Add((up, ClimbCost(w, p, up, ClimbUpCost)));
             // Drop: through the air above the neighbour down into it.
             var down = new TilePos(x, y, p.Z - 1);
-            if (IsClimb(w, down, p)) output.Add((down, ClimbCost(w, p, down, ClimbDownCost)));
+            if (IsClimb(w, down, p) && !EdgeBlocks(w, p, new TilePos(x, y, p.Z))) output.Add((down, ClimbCost(w, p, down, ClimbDownCost)));
         }
 
         foreach (var (dx, dy) in Diagonal)
         {
             var q = new TilePos(p.X + dx, p.Y + dy, p.Z);
-            if (IsStandable(w, q) && IsOpen(w, p.X + dx, p.Y, p.Z) && IsOpen(w, p.X, p.Y + dy, p.Z))
+            var a = new TilePos(p.X + dx, p.Y, p.Z);
+            var b = new TilePos(p.X, p.Y + dy, p.Z);
+            if (IsStandable(w, q) && IsOpen(w, a.X, a.Y, a.Z) && IsOpen(w, b.X, b.Y, b.Z) &&
+                !EdgeBlocks(w, p, a) && !EdgeBlocks(w, a, q) && !EdgeBlocks(w, p, b) && !EdgeBlocks(w, b, q)) // no squeezing past a wall's end
                 output.Add((q, DiagonalCost));
         }
 
@@ -89,6 +94,20 @@ public static class Movement
     /// <summary>Getting into or out of a stair cell sideways is as easy as a stair step.</summary>
     private static float ClimbCost<T>(in T w, TilePos a, TilePos b, float raw) where T : ITileReader =>
         TileInfo.IsStair(w.Get(a.X, a.Y, a.Z)) || TileInfo.IsStair(w.Get(b.X, b.Y, b.Z)) ? StairCost : raw;
+
+    /// <summary>
+    /// A thin wall or window on the edge between two orthogonally adjacent cells of one level (a door lets walkers
+    /// through). A climb or drop crosses the edge at the upper of its two levels, so a one-level wall can't be
+    /// stepped over either way.
+    /// </summary>
+    public static bool EdgeBlocks<T>(in T w, TilePos a, TilePos b) where T : ITileReader
+    {
+        byte info = b.X > a.X ? EdgeInfo.EastOf(w.EdgesAt(a.X, a.Y, a.Z))
+            : b.X < a.X ? EdgeInfo.EastOf(w.EdgesAt(b.X, b.Y, b.Z))
+            : b.Y > a.Y ? EdgeInfo.NorthOf(w.EdgesAt(a.X, a.Y, a.Z))
+            : EdgeInfo.NorthOf(w.EdgesAt(b.X, b.Y, b.Z));
+        return info != 0 && EdgeInfo.Blocks(info);
+    }
 
     /// <summary>Cost of a single move, or null if it is not currently legal.</summary>
     public static float? MoveCost<T>(in T w, TilePos from, TilePos to) where T : ITileReader

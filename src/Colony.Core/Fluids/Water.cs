@@ -68,6 +68,7 @@ public sealed class Water
         public int[] Vol = [];
         public int[]? Out;              // per span and slot (side * Links + k): outflow this step
         public int[] Link = [];         // per span and slot: the span the pipe leads to (see BuildLinks), or -1
+        public ushort[] Sill = [];      // per span and slot: the level water must reach to pass (thin walls on the edge; see SillOf)
         public byte[] Back = [];        // per span and slot: which of that span's pipes leads back
         public bool LinksValid;
         public bool[] Confined = [];    // per span: part of a flooded region this step (see Pressurize)
@@ -534,7 +535,12 @@ public sealed class Water
                 var nb = _blocks[l >> SpanBits]!;
                 int t = l & SpanMask;
                 long nf = (long)nb.Floor[t] * U, nc = (long)nb.Ceil[t] * U;
-                long lo = Math.Max(floor, nf), hi = Math.Min(ceil, nc);
+                long lo = Math.Max(Math.Max(floor, nf), (long)b.Sill[ob + slot] * U), hi = Math.Min(ceil, nc);
+                if (lo >= hi)
+                {
+                    o[ob + slot] = 0; // walled off
+                    continue;
+                }
                 if (nb.Confined[t])
                 {
                     o[ob + slot] = 0;
@@ -685,12 +691,14 @@ public sealed class Water
                         if (l < 0) continue;
                         var nb = _blocks[l >> SpanBits]!;
                         int t = l & SpanMask;
+                        if (b.Sill[s * Slots + slot] >= Math.Min(b.Ceil[s], nb.Ceil[t])) continue; // a wall between: not one region
                         if (IsFull(nb, t))
                         {
                             if (seen.Add((long)nb.Index << SpanBits | t)) queue.Enqueue((nb, t));
                             continue;
                         }
-                        long lo = (long)Math.Max(b.Floor[s], nb.Floor[t]) * U, hi = (long)Math.Min(b.Ceil[s], nb.Ceil[t]) * U;
+                        long lo = Math.Max((long)Math.Max(b.Floor[s], nb.Floor[t]), b.Sill[s * Slots + slot]) * U, hi = (long)Math.Min(b.Ceil[s], nb.Ceil[t]) * U;
+                        if (lo >= hi) continue; // walled off
                         long head = Math.Max((long)nb.Floor[t] * U + nb.Vol[t], lo); // dry below the opening: water pours in
                         ends.Add((nb, t, lo, Math.Min(hi - lo, U), head));
                     }
@@ -777,6 +785,19 @@ public sealed class Water
     /// range overlaps it (lowest first), as (block, span) packed in an int, and which of that span's pipes leads
     /// back. A pipe exists only if it exists both ways, so every flow out of one span flows into another.
     /// </summary>
+    /// <summary>
+    /// The lowest level water can cross from column (x, y) to (nx, ny) within the shared window [lo, hi): above the
+    /// run of watertight thin walls standing on that edge from the window's bottom (a wall line is a dam; water spills
+    /// over its top). <paramref name="hi"/> or more means the window is walled shut. Walls higher up are ignored.
+    /// </summary>
+    private int SillOf(int x, int y, int nx, int ny, int lo, int hi)
+    {
+        if (!_world.HasEdges) return lo;
+        int z = lo;
+        while (z < hi && EdgeInfo.HoldsWater(_world.EdgeBetween(new TilePos(x, y, z), new TilePos(nx, ny, z)))) z++;
+        return z;
+    }
+
     private void BuildLinks(Block b)
     {
         b.LinksValid = true;
@@ -785,8 +806,10 @@ public sealed class Water
         {
             b.Link = new int[n];
             b.Back = new byte[n];
+            b.Sill = new ushort[n];
         }
         Array.Fill(b.Link, -1);
+        Array.Clear(b.Sill);
         for (int c = 0; c < Chunk.Size * Chunk.Size; c++)
         {
             int x = b.X0 + (c & Chunk.Mask), y = b.Y0 + (c >> Chunk.Shift);
@@ -811,6 +834,7 @@ public sealed class Water
                         if (kb < Links)
                         {
                             b.Link[s * Slots + side * Links + k] = nb.Index << SpanBits | t;
+                            b.Sill[s * Slots + side * Links + k] = (ushort)SillOf(x, y, nx, ny, Math.Max(b.Floor[s], nb.Floor[t]), Math.Min(b.Ceil[s], nb.Ceil[t]));
                             b.Back[s * Slots + side * Links + k] = (byte)kb;
                         }
                         k++;

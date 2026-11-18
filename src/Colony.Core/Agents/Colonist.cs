@@ -224,7 +224,7 @@ public sealed class Colonist
     /// <summary>Which of its likes were met lately: a recent treat, its material and art at home, its kind of work.</summary>
     public (bool Treat, bool Material, bool Art, bool Work) LikesMet(long tick) => (
         tick - LastTreat < Needs.Day,
-        Home?.Fixtures.Any(f => f.Item.Def.Material == LikedMaterial) ?? false,
+        Home is { } h && (h.Fixtures.Any(f => f.Item.Def.Material == LikedMaterial) || h.Shell.Materials.Contains(LikedMaterial)),
         Home?.Fixtures.Any(f => f.Item == LikedArt) ?? false,
         WorkTicks >= 200 && PreferredTicks * 2 >= WorkTicks);
 

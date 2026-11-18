@@ -69,6 +69,23 @@ public sealed class Chunk
 
     internal void Touch() => Version++;
 
+    /// <summary>Thin walls on each cell's east and north edges (see <see cref="EdgeInfo"/>); null until the first one.</summary>
+    internal ushort[]? Edges;
+    /// <summary>Cells with any edge set.</summary>
+    internal int EdgeCells;
+
+    internal bool SetEdges(int lx, int ly, int lz, ushort value)
+    {
+        Edges ??= new ushort[Volume];
+        int i = Index(lx, ly, lz);
+        if (Edges[i] == value) return false;
+        if (Edges[i] == 0) EdgeCells++;
+        else if (value == 0) EdgeCells--;
+        Edges[i] = value;
+        Version++;
+        return true;
+    }
+
     /// <summary>World generation: make the whole chunk one tile type without allocating storage.</summary>
     internal void InitUniform(TileType type)
     {

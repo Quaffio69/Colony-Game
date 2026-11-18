@@ -8,6 +8,7 @@ using Colony.Core.Nature;
 using Colony.Core.Orders;
 using Colony.Core.World;
 using Godot;
+using static ColonyGame.MeshKit;
 
 namespace ColonyGame;
 
@@ -35,7 +36,7 @@ public partial class DesignationTool : Node3D
         // Orders
         Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, Wall,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
-        Room, Part, Structure,
+        Room, Part, Structure, Outline, Edge,
     }
 
     private const ToolMode LastOrder = ToolMode.Wall;
@@ -83,6 +84,11 @@ public partial class DesignationTool : Node3D
     /// <summary>The structure placed by <see cref="ToolMode.Structure"/> (water wheel or pump).</summary>
     public StructureKind Structure { get; private set; } = StructureKind.WaterWheel;
     private int _facing;
+    /// <summary>The edge piece placed by <see cref="ToolMode.Edge"/> (thin wall, door or window) and the wall material for both edge tools.</summary>
+    public StructureKind EdgePiece { get; private set; } = StructureKind.EdgeWall;
+    public int WallMaterial { get; private set; } = 2;
+    private (TilePos Cell, int Side)? _hoverEdge;
+    private readonly List<Button> _materialButtons = new();
     public TilePos? Hovered { get; private set; }
     public string? LastAction { get; private set; }
     /// <summary>Why the part under the cursor can't be placed (null if it can, or not placing).</summary>
@@ -98,6 +104,9 @@ public partial class DesignationTool : Node3D
                 ? $"Build: {PartInfo.Name(part, SizeFor(part))} (size {SizeFor(part)}/{PartInfo.Sizes(part)}, [ ] to change)"
                 : $"Build: {PartInfo.Name(part)}";
         if (m == ToolMode.Structure) return $"Build: {Constructions.Name(Structure)} (facing {FacingName(_facing)}, R turns)";
+        string mat = WallMaterials.All[WallMaterial].Name.ToLowerInvariant();
+        if (m == ToolMode.Outline) return $"Build: {mat} walls round a box (drag over the floor; RMB box clears walls)";
+        if (m == ToolMode.Edge) return $"Build: {Constructions.Name(EdgePiece).ToLowerInvariant()} ({mat}) on the cell edge under the cursor; RMB removes";
         return m == ToolMode.Room ? $"Build: {Workshop.Name} room" : BaseModeName(m);
     }
 
@@ -255,14 +264,14 @@ public partial class DesignationTool : Node3D
         AddChild(layer);
         _menu = new PanelContainer { Visible = false };
         _menu.SetAnchorsPreset(Control.LayoutPreset.TopRight);
-        _menu.OffsetLeft = -380;
+        _menu.OffsetLeft = -430;
         _menu.OffsetTop = 10;
         _menu.OffsetRight = -10;
         layer.AddChild(_menu);
         var box = new VBoxContainer();
         box.AddThemeConstantOverride("separation", 4);
         _menu.AddChild(box);
-        var homeButton = new Button { Text = "Home  (where colonists live: size sets room, its housing policy the furnishing)", ToggleMode = true, Alignment = HorizontalAlignment.Left, TooltipText = Catalog.Home.About };
+        var homeButton = new Button { Text = "Home  (where colonists live)", ToggleMode = true, Alignment = HorizontalAlignment.Left, TooltipText = Catalog.Home.About };
         homeButton.AddThemeColorOverride("font_color", RoomView.RoomColor(Catalog.Home) with { A = 1f });
         homeButton.Pressed += () => SelectWorkshop(Catalog.Home);
         box.AddChild(homeButton);
@@ -280,7 +289,7 @@ public partial class DesignationTool : Node3D
             grid.AddChild(b);
             _workshopButtons[w] = b;
         }
-        _partsTitle = new Label();
+        _partsTitle = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart, CustomMinimumSize = new Vector2(410, 0) };
         box.AddChild(_partsTitle);
         _partList = new VBoxContainer();
         box.AddChild(_partList);
@@ -295,7 +304,97 @@ public partial class DesignationTool : Node3D
             b.Pressed += () => SelectStructure(k);
             works.AddChild(b);
         }
+        box.AddChild(new Label { Text = "Walls & doors (on cell edges; material:)" });
+        var edgeTools = new HBoxContainer();
+        box.AddChild(edgeTools);
+        void EdgeButton(string text, string tip, Action pick)
+        {
+            var b = new Button { Text = text, TooltipText = tip, CustomMinimumSize = new Vector2(86, 0) };
+            b.Pressed += pick;
+            edgeTools.AddChild(b);
+        }
+        EdgeButton("Outline", "Walls all round a box of floor: drag from corner to corner", () => SelectEdgeTool(ToolMode.Outline, EdgePiece));
+        EdgeButton("Wall", "A thin wall on the edge under the cursor (click; RMB removes)", () => SelectEdgeTool(ToolMode.Edge, StructureKind.EdgeWall));
+        EdgeButton("Door", "A door (2 planks): walkers pass, water too. Can be cut into a wall", () => SelectEdgeTool(ToolMode.Edge, StructureKind.Door));
+        EdgeButton("Window", "A window (1 glass): light, no way through. Can be cut into a wall", () => SelectEdgeTool(ToolMode.Edge, StructureKind.Window));
+        var mats = new HBoxContainer();
+        box.AddChild(mats);
+        for (int i = 0; i < WallMaterials.Count; i++)
+        {
+            int m = i;
+            var (name, item, _, quality, color) = WallMaterials.All[i];
+            var b = new Button { Text = name, ToggleMode = true, CustomMinimumSize = new Vector2(68, 0), TooltipText = $"Built from {Catalog.Item(item).Name.ToLowerInvariant()} (1 a wall); quality {quality}" };
+            b.AddThemeColorOverride("font_color", Rgb(color).Lightened(0.25f));
+            b.Pressed += () => SelectWallMaterial(m);
+            mats.AddChild(b);
+            _materialButtons.Add(b);
+        }
+        SelectWallMaterial(WallMaterial);
         SelectWorkshop(Workshop, enterMode: false);
+    }
+
+    private void SelectEdgeTool(ToolMode mode, StructureKind piece)
+    {
+        Mode = mode;
+        EdgePiece = piece;
+        EndSelection();
+    }
+
+    private void SelectWallMaterial(int material)
+    {
+        WallMaterial = WallMaterials.Clamp(material);
+        for (int i = 0; i < _materialButtons.Count; i++) _materialButtons[i].ButtonPressed = i == WallMaterial;
+    }
+
+    /// <summary>The cell edge nearest the mouse on the floor of the hovered tile (null over nothing).</summary>
+    private (TilePos Cell, int Side)? EdgeUnderMouse(System.Numerics.Vector3 origin, System.Numerics.Vector3 dir)
+    {
+        if (Hovered is not { } h || VoxelRaycast.IntersectLevelPlane(origin, dir, h.Z + 1) is not { } pt) return null;
+        int x = (int)MathF.Floor(pt.X), y = (int)MathF.Floor(pt.Y), z = h.Z + 1;
+        float fx = pt.X - x, fy = pt.Y - y;
+        float west = fx, east = 1 - fx, south = fy, north = 1 - fy, best = MathF.Min(MathF.Min(west, east), MathF.Min(south, north));
+        if (best == east) return (new TilePos(x, y, z), EdgeInfo.East);
+        if (best == west) return (new TilePos(x - 1, y, z), EdgeInfo.East);
+        if (best == north) return (new TilePos(x, y, z), EdgeInfo.North);
+        return (new TilePos(x, y - 1, z), EdgeInfo.North);
+    }
+
+    private void PlaceEdgePiece((TilePos Cell, int Side) edge)
+    {
+        var bp = _sim.Constructions.PlaceEdge(EdgePiece, edge.Cell, edge.Side, WallMaterial);
+        string name = Constructions.Name(EdgePiece).ToLowerInvariant();
+        LastAction = bp is not null
+            ? $"Planned a {name}: needs {bp.Cost.Count} {bp.Cost.Material.Name.ToLowerInvariant()} and a builder"
+            : $"Can't place a {name}: {_sim.Constructions.CanPlaceEdge(EdgePiece, edge.Cell, edge.Side)}";
+    }
+
+    /// <summary>Cancels planned and takes down built walls, doors and windows on every edge in or round the box.</summary>
+    private string ClearWalls(TilePos a, TilePos b)
+    {
+        int x0 = Math.Min(a.X, b.X), x1 = Math.Max(a.X, b.X), y0 = Math.Min(a.Y, b.Y), y1 = Math.Max(a.Y, b.Y);
+        int planned = 0, built = 0;
+        for (int z = Math.Min(a.Z, b.Z) + 1; z <= Math.Max(a.Z, b.Z) + 1; z++)
+        for (int y = y0 - 1; y <= y1; y++)
+        for (int x = x0 - 1; x <= x1; x++)
+        {
+            var c = new TilePos(x, y, z);
+            if (!_sim.World.InBounds(c)) continue;
+            foreach (int side in new[] { EdgeInfo.East, EdgeInfo.North })
+            {
+                bool onBox = side == EdgeInfo.East ? y >= y0 : x >= x0; // the edge touches the box
+                if (!onBox) continue;
+                if (_sim.Constructions.CancelEdge(c, side)) planned++;
+                else if (_sim.Constructions.Demolish(c, side, _sim.Items)) built++;
+            }
+        }
+        return $"Cancelled {planned} planned and took down {built} built wall pieces";
+    }
+
+    private void RemoveEdge((TilePos Cell, int Side) edge)
+    {
+        if (_sim.Constructions.CancelEdge(edge.Cell, edge.Side)) LastAction = "Cancelled the planned piece";
+        else if (_sim.Constructions.Demolish(edge.Cell, edge.Side, _sim.Items)) LastAction = "Took the piece down (its material is left beside it)";
+        else LastAction = "Nothing on that edge";
     }
 
     private void SelectWorkshop(RoomType w, bool enterMode = true)
@@ -391,6 +490,17 @@ public partial class DesignationTool : Node3D
         if (Hovered is { } h)
             _cursor.Position = SimSpace.TileCenter(IsAreaTool(Mode) && SurfaceAt(h.X, h.Y) is >= 0 and var s ? h with { Z = s } : h);
         UpdateGhost(placing);
+        _hoverEdge = Mode == ToolMode.Edge && _selection == Selection.None ? EdgeUnderMouse(origin, dir) : null;
+        if (_hoverEdge is { } he)
+        {
+            var (cell, side) = he;
+            PlacementProblem = _sim.Constructions.CanPlaceEdge(EdgePiece, cell, side);
+            _ghost.Position = side == EdgeInfo.East ? new Vector3(cell.X + 1, cell.Z + 0.5f, cell.Y + 0.5f) : new Vector3(cell.X + 0.5f, cell.Z + 0.5f, cell.Y + 1);
+            _ghost.Scale = side == EdgeInfo.East ? new Vector3(0.14f, 1, 1) : new Vector3(1, 1, 0.14f);
+            _ghost.MaterialOverride = PlacementProblem is null ? _ghostOk : _ghostBad;
+            _ghost.Visible = true;
+            _cursor.Visible = false;
+        }
 
         if (_selection != Selection.None)
         {
@@ -422,6 +532,16 @@ public partial class DesignationTool : Node3D
 
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right } when _selection == Selection.Designate:
                 EndSelection();
+                Handled();
+                break;
+
+            // Edge pieces: click the edge under the cursor; right-click removes what is on it.
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left or MouseButton.Right } eb when Mode == ToolMode.Edge && _selection == Selection.None:
+                if (_hoverEdge is { } edge)
+                {
+                    if (eb.ButtonIndex == MouseButton.Left) PlaceEdgePiece(edge);
+                    else RemoveEdge(edge);
+                }
                 Handled();
                 break;
 
@@ -572,7 +692,9 @@ public partial class DesignationTool : Node3D
         var (a, b) = Corners();
         if (_selection == Selection.Cancel)
         {
-            if (Mode == ToolMode.Room)
+            if (Mode == ToolMode.Outline)
+                LastAction = ClearWalls(a, b);
+            else if (Mode == ToolMode.Room)
                 LastAction = $"Erased {_sim.Rooms.Erase(a, b)} room cells";
             else if (Mode == ToolMode.Wall)
                 LastAction = $"Cancelled {_sim.Constructions.CancelBox(a, b)} wall blueprints";
@@ -597,6 +719,12 @@ public partial class DesignationTool : Node3D
                 int plots = _sim.Farms.RemoveBox(a, b);
                 LastAction = $"Cancelled {orders} designations, removed {zones} stockpile and {plots} farm cells";
             }
+        }
+        else if (Mode == ToolMode.Outline)
+        {
+            int n = _sim.Constructions.PlaceOutline(a, b, WallMaterial);
+            var (mat, _) = Constructions.Cost(StructureKind.EdgeWall, WallMaterial);
+            LastAction = n > 0 ? $"Walls: {n} planned round the box ({n} {mat.Name.ToLowerInvariant()}); add doors with the Door tool" : "Walls: none fit (already walled, or no floor beside the outline)";
         }
         else if (Mode == ToolMode.Room)
         {

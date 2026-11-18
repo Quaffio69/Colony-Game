@@ -61,9 +61,15 @@ public sealed class VoxelWorld : ITileReader
         if (!InBounds(x, y, z))
             throw new ArgumentOutOfRangeException(nameof(x), $"({x},{y},{z}) is outside the world.");
 
-        int lx = x & Chunk.Mask, ly = y & Chunk.Mask, lz = z & Chunk.Mask;
-        if (!ChunkAt(x, y, z).Set(lx, ly, lz, type)) return;
+        if (!ChunkAt(x, y, z).Set(x & Chunk.Mask, y & Chunk.Mask, z & Chunk.Mask, type)) return;
         Revision++;
+        Changed(x, y, z);
+    }
+
+    /// <summary>Notifies the chunk holding (x, y, z) and the neighbouring chunks a change there can affect.</summary>
+    private void Changed(int x, int y, int z)
+    {
+        int lx = x & Chunk.Mask, ly = y & Chunk.Mask, lz = z & Chunk.Mask;
         int cx = x >> Chunk.Shift, cy = y >> Chunk.Shift, cz = z >> Chunk.Shift;
         ChunkChanged?.Invoke(ChunkIndex(cx, cy, cz));
 
@@ -92,6 +98,95 @@ public sealed class VoxelWorld : ITileReader
     public event Action<int>? ChunkChanged;
 
     public void Set(TilePos p, TileType type) => Set(p.X, p.Y, p.Z, type);
+
+    // ---- Thin walls on cell edges (see EdgeInfo) ----------------------------------------------------------
+
+    private int _edgeCells;
+
+    /// <summary>Increments whenever any edge changes (for views that draw walls).</summary>
+    public long EdgeRevision { get; private set; }
+    public bool HasEdges => _edgeCells > 0;
+
+    /// <summary>A cell's east (low byte) and north (high byte) edges; 0 when there are none (or out of bounds).</summary>
+    public ushort EdgesAt(int x, int y, int z)
+    {
+        if (_edgeCells == 0 || !InBounds(x, y, z)) return 0;
+        var edges = ChunkAt(x, y, z).Edges;
+        return edges is null ? (ushort)0 : edges[Chunk.Index(x & Chunk.Mask, y & Chunk.Mask, z & Chunk.Mask)];
+    }
+
+    /// <summary>The edge on a cell's <see cref="EdgeInfo.East"/> or <see cref="EdgeInfo.North"/> side.</summary>
+    public byte Edge(TilePos cell, int side)
+    {
+        ushort e = EdgesAt(cell.X, cell.Y, cell.Z);
+        return side == EdgeInfo.East ? EdgeInfo.EastOf(e) : EdgeInfo.NorthOf(e);
+    }
+
+    /// <summary>
+    /// The edge between two orthogonally adjacent cells on the same level (whichever of them owns it), or 0.
+    /// </summary>
+    public byte EdgeBetween(TilePos a, TilePos b) =>
+        b.X > a.X ? Edge(a, EdgeInfo.East) : b.X < a.X ? Edge(b, EdgeInfo.East) : b.Y > a.Y ? Edge(a, EdgeInfo.North) : Edge(b, EdgeInfo.North);
+
+    /// <summary>Puts (or with 0 removes) a thin wall, door or window on a cell's east or north edge.</summary>
+    public void SetEdge(TilePos cell, int side, byte info)
+    {
+        if (!InBounds(cell)) throw new ArgumentOutOfRangeException(nameof(cell), $"{cell} is outside the world.");
+        ushort old = EdgesAt(cell.X, cell.Y, cell.Z);
+        ushort value = side == EdgeInfo.East ? (ushort)((old & 0xff00) | info) : (ushort)((old & 0x00ff) | info << 8);
+        var chunk = ChunkAt(cell.X, cell.Y, cell.Z);
+        int before = chunk.EdgeCells;
+        if (!chunk.SetEdges(cell.X & Chunk.Mask, cell.Y & Chunk.Mask, cell.Z & Chunk.Mask, value)) return;
+        _edgeCells += chunk.EdgeCells - before;
+        Revision++;
+        EdgeRevision++;
+        Changed(cell.X, cell.Y, cell.Z);
+        var other = side == EdgeInfo.East ? cell.Offset(1, 0, 0) : cell.Offset(0, 1, 0);
+        if (InBounds(other)) Changed(other.X, other.Y, other.Z);
+    }
+
+    /// <summary>Every edge with something on it: (cell, side, info). Scans only chunks that have edges.</summary>
+    public IEnumerable<(TilePos Cell, int Side, byte Info)> AllEdges()
+    {
+        if (_edgeCells == 0) yield break;
+        foreach (var chunk in _chunks)
+        {
+            if (chunk.Edges is not { } edges || chunk.EdgeCells == 0) continue;
+            var o = chunk.Origin;
+            for (int i = 0; i < edges.Length; i++)
+            {
+                if (edges[i] == 0) continue;
+                var p = new TilePos(o.X + (i & Chunk.Mask), o.Y + ((i >> Chunk.Shift) & Chunk.Mask), o.Z + (i >> (2 * Chunk.Shift)));
+                if (EdgeInfo.EastOf(edges[i]) is var e and > 0) yield return (p, EdgeInfo.East, e);
+                if (EdgeInfo.NorthOf(edges[i]) is var n and > 0) yield return (p, EdgeInfo.North, n);
+            }
+        }
+    }
+
+    /// <summary>Copies the edges in a box (laid out like <see cref="CopyBox"/>); false (nothing copied) if it has none.</summary>
+    public bool CopyEdges(int x0, int y0, int z0, int sx, int sy, int sz, ushort[] dest)
+    {
+        if (_edgeCells == 0) return false;
+        bool any = false;
+        for (int cz = Math.Max(0, z0) >> Chunk.Shift; cz <= (Math.Min(Height, z0 + sz) - 1) >> Chunk.Shift; cz++)
+        for (int cy = Math.Max(0, y0) >> Chunk.Shift; cy <= (Math.Min(Depth, y0 + sy) - 1) >> Chunk.Shift; cy++)
+        for (int cx = Math.Max(0, x0) >> Chunk.Shift; cx <= (Math.Min(Width, x0 + sx) - 1) >> Chunk.Shift; cx++)
+        {
+            var chunk = _chunks[ChunkIndex(cx, cy, cz)];
+            if (chunk.Edges is not { } edges || chunk.EdgeCells == 0) continue;
+            var o = chunk.Origin;
+            for (int i = 0; i < edges.Length; i++)
+            {
+                if (edges[i] == 0) continue;
+                int x = o.X + (i & Chunk.Mask) - x0, y = o.Y + ((i >> Chunk.Shift) & Chunk.Mask) - y0, z = o.Z + (i >> (2 * Chunk.Shift)) - z0;
+                if ((uint)x >= (uint)sx || (uint)y >= (uint)sy || (uint)z >= (uint)sz) continue;
+                if (!any) Array.Clear(dest, 0, sx * sy * sz);
+                any = true;
+                dest[(z * sy + y) * sx + x] = edges[i];
+            }
+        }
+        return any;
+    }
 
     /// <summary>Fast write for world generation: no bounds check and no neighbour notification.
     /// Safe to call from several threads as long as each thread owns distinct chunks.</summary>

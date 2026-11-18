@@ -15,6 +15,12 @@ public enum FixtureRole : byte { Bed, Table, Chair, Chest, Shelf, Tableware, Tab
 /// </summary>
 public readonly record struct Placement(FixtureRole Role, ItemType Item, int Tier, TilePos Cell, int Facing, float X, float Y, float Height);
 
+/// <summary>A home's walls (see <see cref="HomeLayout.Survey"/>): share of its outline closed, average tier, windows, wall materials.</summary>
+public readonly record struct HomeShell(float Enclosure, float Tier, int Windows, IReadOnlyCollection<string> Materials)
+{
+    public static readonly HomeShell None = new(0, 0, 0, Array.Empty<string>());
+}
+
 /// <summary>
 /// Procedural home layout: arranges a home's installed fixtures the way a house would be lived in, deterministically
 /// but differently for every home (seeded by the room). Doorways are found (floor leading out) and the way in is kept
@@ -284,6 +290,44 @@ public static class HomeLayout
             }
         }
         return placed;
+    }
+
+    /// <summary>
+    /// What a home is built of: how much of its outline is closed (thin walls, doors, windows or bare rock), the average
+    /// tier of what closes it (rock and log or rubble walls humble, planks comfortable, cut stone and brick fine), its
+    /// windows and the materials its walls are made of.
+    /// </summary>
+    public static HomeShell Survey(Home home, VoxelWorld world)
+    {
+        var inside = home.Room.CellSet;
+        int sides = 0, closed = 0, windows = 0, tierCount = 0;
+        float tiers = 0;
+        var materials = new HashSet<string>();
+        foreach (var c in inside)
+            for (int d = 0; d < 4; d++)
+            {
+                var n = Step(c, d);
+                if (inside.Contains(n)) continue;
+                sides++;
+                byte edge = world.InBounds(n) ? world.EdgeBetween(c, n) : (byte)0;
+                if (edge != 0)
+                {
+                    var m = WallMaterials.All[WallMaterials.Clamp(EdgeInfo.Material(edge))];
+                    closed++;
+                    tiers += m.Quality + 1;
+                    tierCount++;
+                    materials.Add(m.Material);
+                    if (EdgeInfo.Kind(edge) == EdgeKind.Window) windows++;
+                }
+                else if (world.IsSolid(n.X, n.Y, n.Z))
+                {
+                    closed++;
+                    tiers += 1;
+                    tierCount++;
+                    materials.Add("stone");
+                }
+            }
+        return new HomeShell(sides == 0 ? 1 : closed / (float)sides, tierCount == 0 ? 0 : tiers / tierCount, windows, materials);
     }
 
     /// <summary>8-neighbours on the same level.</summary>

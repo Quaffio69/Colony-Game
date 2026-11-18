@@ -238,6 +238,32 @@ public class WaterTests
     }
 
     [Fact]
+    public void AThinWallDam_HoldsAReservoir_SpillsOverItsCrest_AndADoorLetsWaterThrough()
+    {
+        // The channel's floor is z=3; a thin wall on the edge between x=12 and x=13, three levels high (z 3..5).
+        var sim = Channel();
+        sim.Water.AddSpring(new TilePos(24, 16, 3), head: 5);
+        byte wall = EdgeInfo.Make(EdgeKind.Wall, 3);
+        for (int z = 3; z <= 5; z++) sim.World.SetEdge(new TilePos(12, 16, z), EdgeInfo.East, wall);
+        Steps(sim, 2500);
+        Assert.True(sim.Water.MassAt(18, 16, 5) > F / 2, "the reservoir rises to the crest");
+        Assert.True(sim.Water.MassAt(5, 16, 3) > F / 100, "and spills over it down the channel");
+        Assert.True(sim.Water.MassAt(18, 16, 8) < F / 10, "but doesn't stack up past the crest");
+
+        // Raised to the channel's full height, nothing gets past.
+        var shut = Channel();
+        shut.Water.AddSpring(new TilePos(24, 16, 3), head: 5);
+        for (int z = 3; z <= 12; z++) shut.World.SetEdge(new TilePos(12, 16, z), EdgeInfo.East, wall);
+        Steps(shut, 2500);
+        Assert.True(shut.Water.MassAt(5, 16, 3) < F / 100, $"below a full wall it stays dry ({shut.Water.MassAt(5, 16, 3)})");
+
+        // A door at the bottom is no dam.
+        shut.World.SetEdge(new TilePos(12, 16, 3), EdgeInfo.East, EdgeInfo.Make(EdgeKind.Door, 2));
+        Steps(shut, 600);
+        Assert.True(shut.Water.MassAt(5, 16, 3) > F / 100, "water runs through the doorway");
+    }
+
+    [Fact]
     public void ALowDam_FillsToItsCrest_ThenSpillsOver()
     {
         var sim = Channel();
