@@ -124,6 +124,7 @@ public sealed class Water
         _blocks = new Block?[_bw * _bd];
         world.ChunkChanged += ci =>
         {
+            Join(); // a step in flight finishes on the old shape (as if the change came just after it)
             int col = ci % (_bw * _bd);
             if (_blocks[col] is not null) _dirty.Add(col);
         };
@@ -229,6 +230,7 @@ public sealed class Water
     /// <summary>Adds water to the open space containing a cell (negative removes). Returns the amount actually changed.</summary>
     public int Add(TilePos p, int amount)
     {
+        Join();
         if (!_world.InBounds(p)) return 0;
         var b = Ensure(p.X >> Chunk.Shift, p.Y >> Chunk.Shift);
         if (!FindIn(b, p.X, p.Y, p.Z, out int s)) return 0;
@@ -246,6 +248,7 @@ public sealed class Water
     /// </summary>
     public int Move(TilePos from, TilePos to, int amount)
     {
+        Join();
         if (amount <= 0 || !_world.InBounds(from) || !_world.InBounds(to)) return 0;
         var fb = Ensure(from.X >> Chunk.Shift, from.Y >> Chunk.Shift);
         var tb = Ensure(to.X >> Chunk.Shift, to.Y >> Chunk.Shift);
@@ -267,13 +270,18 @@ public sealed class Water
     /// </summary>
     public void AddSpring(TilePos p, int rate = SpringRate, int head = SpringHead, int mass = 0)
     {
+        Join();
         if (!_world.InBounds(p) || _springs.ContainsKey(p)) return;
         long limit = mass > 0 ? (long)p.Z * U + (long)mass * U / Full : (long)(p.Z + 1 + head) * U;
         _springs[p] = ((int)((long)Math.Max(1, rate) * U / Full), (int)Math.Min(int.MaxValue, limit));
         Touch(Ensure(p.X >> Chunk.Shift, p.Y >> Chunk.Shift));
     }
 
-    public void RemoveSpring(TilePos p) => _springs.Remove(p);
+    public void RemoveSpring(TilePos p)
+    {
+        Join();
+        _springs.Remove(p);
+    }
 
     /// <summary>
     /// Fills generated rivers and lakes (<see cref="Procedural.Terrain.Water"/>: rivers <see cref="RiverFill"/> of
@@ -340,10 +348,29 @@ public sealed class Water
     // ---- Stepping -------------------------------------------------------------------------------------
 
     /// <summary>Advances the water one step. Cost follows the awake blocks.</summary>
-    public void Step()
+    public void Step() => BeginStep(async: false);
+
+    /// <summary>A step started by <see cref="BeginStep"/> with async is still computing (see <see cref="Join"/>).</summary>
+    public bool StepInFlight => _stepping != null;
+
+    private Task? _stepping;
+    private double _tr, _tp, _tq, _t0, _t1, _t2, _t3;
+    private int _rebuilt;
+
+    /// <summary>
+    /// Starts a step. With <paramref name="async"/>, its heavy part (the pipes and volumes of every awake block)
+    /// runs on worker threads while the caller goes on: until <see cref="Join"/>, readers see the water as it was
+    /// before the step (consistent: the step writes only next volumes and flows), and anything that changes water
+    /// (<see cref="Add"/>, <see cref="Move"/>, springs, the world) joins first. The result is exactly the same as
+    /// a synchronous step.
+    /// </summary>
+    public void BeginStep(bool async)
     {
+        Join();
         DevHooks.Stepping?.Invoke();
         Steps++;
+        _tr = Sw();
+        _rebuilt = _dirty.Count;
         if (_dirty.Count > 0)
         {
             foreach (int bi in _dirty)
@@ -355,7 +382,9 @@ public sealed class Water
             }
             _dirty.Clear();
         }
+        _tp = Sw();
         if (_fullBlocks.Count > 0 || _confined.Count > 0) Pressurize();
+        _tq = Sw();
         if (_awake.Count == 0)
         {
             LastStepCells = 0;
@@ -363,7 +392,7 @@ public sealed class Water
             return;
         }
 
-        double t0 = Sw();
+        _t0 = Sw();
         _awake.Sort((a, b) => a.Index.CompareTo(b.Index));
         _prepared.Clear();
         foreach (var b in _awake) Prepare(b);
@@ -379,16 +408,40 @@ public sealed class Water
             if (b.Out is null || b.Out.Length < b.Spans * Slots) b.Out = new int[Math.Max(b.Spans, 1) * Slots];
         foreach (var b in _prepared)
             if (!b.LinksValid) BuildLinks(b);
+        _t1 = Sw();
+        if (async) _stepping = Task.Run(Compute);
+        else
+        {
+            Compute();
+            Finish();
+        }
+    }
 
-        double t1 = Sw();
+    /// <summary>Waits for a step started with async (if any) and applies it. Cheap when none is running.</summary>
+    public void Join()
+    {
+        if (_stepping is not { } running) return;
+        _stepping = null;
+        running.GetAwaiter().GetResult();
+        Finish();
+    }
+
+    /// <summary>The parallel part of a step: writes only each block's next volumes, outflows, flows and flags.</summary>
+    private void Compute()
+    {
         const int parallelThreshold = 8;
         if (_awake.Count < parallelThreshold) foreach (var b in _awake) Outflows(b);
         else Parallel.For(0, _awake.Count, k => Outflows(_awake[k]));
-        double t2 = Sw();
+        _t2 = Sw();
         if (_prepared.Count < parallelThreshold) foreach (var b in _prepared) Apply(b);
         else Parallel.For(0, _prepared.Count, k => Apply(_prepared[k]));
-        double t3 = Sw();
+        _t3 = Sw();
+    }
 
+    /// <summary>The new volumes take over; wet/awake/full sets and versions update; springs add their water.</summary>
+    private void Finish()
+    {
+        double tf = Sw();
         int visited = 0;
         var next = new List<Block>(_awake.Count);
         foreach (var b in _prepared)
@@ -419,7 +472,8 @@ public sealed class Water
         }
         _awake = next;
         LastStepCells = visited;
-        Timings = $"prep {t1 - t0:0.00} out {t2 - t1:0.00} apply {t3 - t2:0.00} finish {Sw() - t3:0.00} ms ({_prepared.Count} prepared)";
+        Timings = $"rebuild {_tp - _tr:0.00} ({_rebuilt}) pressure {_tq - _tp:0.00} ({_fullBlocks.Count} full blocks, {_confined.Count} confined) " +
+                  $"prep {_t1 - _t0:0.00} out {_t2 - _t1:0.00} apply {_t3 - _t2:0.00} finish {Sw() - tf:0.00} ms ({_prepared.Count} prepared)";
         AddSprings();
     }
 

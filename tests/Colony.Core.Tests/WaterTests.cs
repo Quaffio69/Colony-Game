@@ -409,6 +409,39 @@ public class WaterTests
     }
 
     [Fact]
+    public void AsyncWater_GivesExactlyTheSameWater_EvenWithDigsWhileAStepIsInFlight()
+    {
+        ColonySim Build(bool async)
+        {
+            var sim = Channel();
+            sim.AsyncWater = async;
+            sim.Water.AddSpring(new TilePos(24, 16, 3), head: 5);
+            Fill(sim, 12, 16, 3, 12, 16, 6, TileType.Wall); // a dam, dug away bit by bit below
+            return sim;
+        }
+        var sync = Build(false);
+        var async = Build(true);
+        for (int tick = 1; tick <= 4000; tick++)
+        {
+            sync.Step();
+            async.Step(); // with async, a water step may still be computing now...
+            if (tick % 500 == 0)
+            {
+                int z = 6 - tick / 1000; // ...when the world changes under it (as the player's debug digs can)
+                sync.World.Set(12, 16, z, TileType.Air);
+                async.World.Set(12, 16, z, TileType.Air);
+            }
+        }
+        async.Water.Join();
+        Assert.Equal(sync.Water.Total(), async.Water.Total());
+        Assert.Equal(sync.Water.Drained, async.Water.Drained);
+        for (int x = 0; x < 26; x++)
+        for (int z = 3; z <= 10; z++)
+            Assert.Equal(sync.Water.MassAt(x, 16, z), async.Water.MassAt(x, 16, z));
+        Assert.True(sync.Water.MassAt(5, 16, 3) > 0, "the dug-through dam lets the water down the channel");
+    }
+
+    [Fact]
     public void IrrigatedFarms_GrowTwiceAsFast()
     {
         var sim = Flat();

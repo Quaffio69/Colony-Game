@@ -68,8 +68,12 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   sleeps once its water is still; flowing rivers never are). Two passes per step (outflows, then volumes), each
   writing only its own block, so blocks run in parallel deterministically; pipes are precomputed per span
   (`BuildLinks`), rebuilt when a block or its neighbours change shape. Steps every `WaterInterval` (4) ticks. Cost
-  ~1 ms/step at 1024, ~6 ms/step at 2048 (every river flows): ~2.5 ms/tick average at 2048 with 20 colonists.
-  Next lever if needed: the water step off the main thread. Bench: `-- water [size] [steps]` (phase timings),
+  ~1 ms/step at 1024, ~7 ms/step at 2048 (every river flows; `Apply` is the bulk). **Off the main thread:** the step
+  begins at the end of a tick and joins at the start of the next (`ColonySim.AsyncWater`, set by the game; tests and
+  tools step synchronously): readers meanwhile see the pre-step water, writers (`Add`, `Move`, springs, `ChunkChanged`)
+  `Join` first, and the result is bit-identical to a sync step (tested). Rebuild, `Pressurize` and prep stay sync.
+  Bench: `-- water [size] [steps]` (phase timings incl. rebuild and pressure), `-- upipe [size] [steps]` (a U-pipe
+  dug under a real lake a cell at a time),
   `-- flood [size] [ticks]` (water on land and the water books; run 100k ticks at 1024: ~17 flooded columns,
   steady; the 512 test world never overfills a lake, so only this long run catches slow accumulation),
   `-- terrain` (hydrology checks), `-- far`.
@@ -206,8 +210,10 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - **Water rendering:** sections of 2x2 water blocks (32x32 columns, all levels). Each wet span gets a surface at
   its height with corners averaged with neighbouring columns within half a level (smooth sloping rivers), and
   side faces where the water beside is lower (falls; foamy). A block's version only bumps when a span's water
-  moves a sixteenth of a level from what was last drawn (hysteresis); unbuilt sections build first, changed ones
-  take turns within a 3 ms/frame budget. UV carries the flow (`Water.FlowAt`, exaggerated for the eye) so ripples
+  moves a sixteenth of a level from what was last drawn (hysteresis). Meshing runs on worker threads from main-thread
+  span snapshots (`Capture`: a section plus a border column; every open cell is in some span, so solidity comes from
+  spans); unbuilt sections first, then changed ones nearest the camera (changes beyond 256 tiles wait 3 s); uploads
+  within 1.5 ms/frame (2048: ~1 ms/frame for water, was 4). UV carries the flow (`Water.FlowAt`, exaggerated for the eye) so ripples
   stream along it. No draw distance. (Remote Desktop caps rendering at ~30 fps: frame times of ~31 ms there
   are not the game.) The slice hides water above the cut, so a **water cap** (`water_cap.gdshader`, like the
   terrain cap) draws the cross-section at the cut from a map-sized R8 texture (water above the cut per column, 1/16
@@ -274,7 +280,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       deterministic two-pass steps on awake blocks, generated rivers/lakes settled at load, springs by catchment,
       `WaterView` smooth sloping surfaces with flow-streamed ripples; walls (dams, canals), water wheels, pumps,
       colony power pool, irrigation.
-- [ ] Next for water: the step off the main thread (2048 cost), siphons, wading/swimming
+- [ ] Next for water: siphons, wading/swimming
       and drowning (water blocking deep cells), axles and separate power networks, powered workshops,
       floodgates/sluices, aquifers, freezing, wells, meandering river courses (they follow the 4-tile drainage).
 - [x] Flora: ~130k trees (oak, birch, pine, spruce, willow) and ~100k surface plants (shrubs, berry bushes,

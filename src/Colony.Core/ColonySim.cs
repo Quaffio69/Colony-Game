@@ -447,12 +447,8 @@ public sealed class ColonySim
         WaitForWater();
         Tick++;
         _tickNodeStart = Pathfinder.NodesExpanded;
+        if (_waterworksDue) RunWaterworks(); // the step begun at the end of the last tick lands first
         Farms.Tick(Tick, Flora, Designations, Water);
-        if (Tick % WaterInterval == 0)
-        {
-            Water.Step();
-            Waterworks.Tick(Water, World);
-        }
         CheckEvents();
         if (_arriving.Count > 0)
         {
@@ -478,6 +474,30 @@ public sealed class ColonySim
         {
             _stepping = false;
         }
+
+        // Water steps last in the tick, after everything that changes the world. With AsyncWater it computes on
+        // worker threads until the next tick begins (the game draws a frame meanwhile); the outcome is the same.
+        if (Tick % WaterInterval == 0)
+        {
+            Water.BeginStep(AsyncWater);
+            _waterworksDue = true;
+            if (!AsyncWater) RunWaterworks();
+        }
+    }
+
+    /// <summary>
+    /// Let the water step run in the background between ticks (the game sets this; tests and tools step
+    /// synchronously so they can read the water right after <see cref="Step"/>). Either way the results are identical.
+    /// </summary>
+    public bool AsyncWater { get; set; }
+
+    private bool _waterworksDue;
+
+    private void RunWaterworks()
+    {
+        Water.Join();
+        Waterworks.Tick(Water, World);
+        _waterworksDue = false;
     }
 
     /// <summary>Standable surface tiles nearest to (x, y), spiralling outwards, one per column.</summary>

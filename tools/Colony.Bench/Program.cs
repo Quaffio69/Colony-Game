@@ -7,6 +7,7 @@ using System.Diagnostics;
 using Colony.Core;
 using Colony.Core.Navigation;
 using Colony.Core.Procedural;
+using Colony.Core.World;
 
 if (args.Length > 0 && args[0] == "flood")
 {
@@ -334,6 +335,52 @@ if (args.Length > 0 && args[0] == "far")
             Console.WriteLine($"tick {t}: avg {ptotal / t:0.00} ms; digs left {ps.Designations.Count}; colonists {string.Join(" ", c.Select(k => $"{k.State}:{Math.Abs(bx - k.Position.X) + Math.Abs(by - k.Position.Y)}"))}");
         }
     }
+    return;
+}
+
+if (args.Length > 0 && args[0] == "upipe")
+{
+    // A U-pipe under the deepest lake near the centre, dug a cell every 2 steps like colonists would: a shaft from the
+    // lake bed down 30 levels, a 30-tile tunnel, a shaft back up to the land. dotnet run ... -- upipe [size] [steps]
+    int usize = args.Length > 1 ? int.Parse(args[1]) : 1024, steps = args.Length > 2 ? int.Parse(args[2]) : 1200;
+    var us = ColonySim.Generate(new WorldGenSettings(12345, usize, usize, 384), 0);
+    var t = us.Terrain!;
+    int best = -1;
+    double bestScore = double.MinValue;
+    for (int i = 0; i < t.Kind.Length; i++)
+    {
+        if (t.Kind[i] != Colony.Core.Procedural.SurfaceKind.LakeBed || t.Water[i] < 3) continue;
+        int x = i % usize, y = i / usize;
+        if (x + 40 >= usize) continue;
+        double score = t.Water[i] * 4 - Math.Abs(x - usize / 2) / 50.0 - Math.Abs(y - usize / 2) / 50.0;
+        if (score > bestScore) (best, bestScore) = (i, score);
+    }
+    int lx = best % usize, ly = best / usize, bed = us.World.SurfaceLevel(lx, ly), bottom = bed - 30;
+    Console.WriteLine($"world {usize}: {us.StartupReport}\nlake at ({lx},{ly}) bed {bed}, water {t.Water[best]} deep; tunnel at z={bottom}");
+    var cells = new List<TilePos>();
+    for (int z = bed; z >= bottom; z--) cells.Add(new(lx, ly, z));
+    for (int x = lx + 1; x <= lx + 30; x++) cells.Add(new(x, ly, bottom));
+    for (int z = bottom + 1; z <= us.World.SurfaceLevel(lx + 30, ly); z++) cells.Add(new(lx + 30, ly, z));
+    cells.Reverse(); // dig from the far end, the lake's bed last (as a careful player would)
+    var clock = new Stopwatch();
+    double sum = 0, worst = 0;
+    var water = us.Water;
+    for (int s = 1; s <= steps; s++)
+    {
+        if (s % 2 == 0 && cells.Count > 0)
+        {
+            us.World.Set(cells[^1].X, cells[^1].Y, cells[^1].Z, TileType.Air);
+            cells.RemoveAt(cells.Count - 1);
+        }
+        clock.Restart();
+        water.Step();
+        double ms = clock.Elapsed.TotalMilliseconds;
+        sum += ms;
+        worst = Math.Max(worst, ms);
+        if (s % 50 == 0)
+            Console.WriteLine($"  step {s}: {ms:0.00} ms [{water.Timings}], far shaft surface {water.SurfaceAt(lx + 30, ly, bottom + 1):0.0}, {water.AwakeChunks} awake");
+    }
+    Console.WriteLine($"upipe: avg {sum / steps:0.00} ms/step, worst {worst:0.00} ms");
     return;
 }
 

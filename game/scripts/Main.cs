@@ -76,6 +76,7 @@ public partial class Main : Node3D
             GD.Print($"World {WorldWidth}x{WorldDepth}x{WorldHeight} built in {Time.GetTicksMsec() - start} ms: {_sim.StartupReport}");
         }
 
+        _sim.AsyncWater = true; // the water step computes on worker threads while a frame draws
         _world = GetNode<WorldView>("WorldView");
         _world.Initialize(_sim);
 
@@ -226,6 +227,7 @@ public partial class Main : Node3D
             }
             if (budget <= 0) _tickAccumulator = 0;
             _simMsThisFrame = clock.Elapsed.TotalMilliseconds;
+            _simMsTotal += _simMsThisFrame;
             _maxSimMs = System.Math.Max(_maxSimMs, _simMsThisFrame);
         }
 
@@ -377,7 +379,7 @@ public partial class Main : Node3D
     private bool _benchActive;
     private ulong _meshedAtMs;
     private readonly List<double> _frameMs = new();
-    private double _maxSimMs, _simMsThisFrame;
+    private double _maxSimMs, _simMsThisFrame, _simMsTotal;
 
     public override void _EnterTree()
     {
@@ -460,6 +462,9 @@ public partial class Main : Node3D
             {
                 _meshedAtMs = Time.GetTicksMsec();
                 _maxSimMs = 0;
+                _waterView.MeshMs = _waterView.CapMs = 0;
+                _waterView.Frames = _waterView.SectionsBuilt = 0;
+                _simMsTotal = 0;
             }
             return;
         }
@@ -475,6 +480,8 @@ public partial class Main : Node3D
         GD.Print($"[bench] fully meshed {_meshedAtMs - _startMs} ms after start; {_world.SectionCount} sections, {_world.VisibleQuads} quads " +
                  $"(main thread: snapshots {_world.SnapshotMs:0} ms, uploads {_world.UploadMs:0} ms; workers: meshing {_world.WorkerMs:0} ms; first frame at {_firstFrameMs - _startMs} ms)");
         GD.Print($"[bench] frame ms over {BenchFrames} frames: avg {avg:0.00}, p95 {_frameMs[(int)(_frameMs.Count * 0.95)]:0.00}, max {_frameMs[^1]:0.00}; max sim step batch {_maxSimMs:0.00} ms");
+        int wf = Math.Max(1, _waterView.Frames);
+        GD.Print($"[bench] per frame: sim {_simMsTotal / _frameMs.Count:0.00} ms, water meshing {_waterView.MeshMs / wf:0.00} ms ({_waterView.SectionsBuilt} sections built, backlog {_waterView.Backlog}), water cap {_waterView.CapMs / wf:0.00} ms; world view {_world.SnapshotMs:0} ms snapshots total");
         GD.Print($"[bench] draw calls {Performance.GetMonitor(Performance.Monitor.RenderTotalDrawCallsInFrame)}, " +
                  $"video mem {Performance.GetMonitor(Performance.Monitor.RenderVideoMemUsed) / 1048576:0} MB, " +
                  $"static mem {OS.GetStaticMemoryUsage() / 1048576} MB, managed {System.GC.GetTotalMemory(false) / 1048576} MB");

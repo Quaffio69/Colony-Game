@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
+using System.Threading.Tasks;
 using Colony.Core;
 using Colony.Core.Fluids;
 using Colony.Core.Orders;
@@ -23,18 +25,25 @@ namespace ColonyGame;
 /// </summary>
 public partial class WaterView : Node3D
 {
-    private const double BuildBudgetMs = 3;
+    // Meshing runs on worker threads from main-thread snapshots (Capture); finished meshes upload within a budget.
+    private const double UploadBudgetMs = 1.5, CaptureBudgetMs = 1.0;
+    private const float FarTiles = 256f;              // beyond this from the camera, changed sections wait...
+    private const double FarRefreshSeconds = 3.0;     // ...this long between rebuilds
+    private static readonly int MaxInFlight = Math.Max(2, System.Environment.ProcessorCount - 2);
 
     private ColonySim _sim = null!;
     private WorldView _worldView = null!;
     private ShaderMaterial _water = null!;
     private Shader _flora = null!;
     private readonly List<ShaderMaterial> _sliced = new();
-    private readonly Dictionary<(int X, int Y, int Z), (MeshInstance3D Node, long Signature)> _sections = new();
+    private readonly Dictionary<(int X, int Y, int Z), (MeshInstance3D Node, long Signature, double BuiltAt)> _sections = new();
     private readonly Dictionary<(int X, int Y, int Z), long> _wanted = new();
     private readonly Dictionary<(int X, int Y, int Z), long> _border = new();
-    private readonly List<(int X, int Y, int Z)> _todo = new();
-    private int _turn;
+    private readonly List<((int X, int Y, int Z) Key, float Priority)> _todo = new();
+    private readonly HashSet<(int X, int Y, int Z)> _inFlight = new();
+    private readonly System.Collections.Concurrent.ConcurrentQueue<((int X, int Y, int Z) Key, long Signature, Faces? Mesh)> _done = new();
+    private readonly List<((int X, int Y, int Z) Key, long Signature, Faces? Mesh)> _ready = new();
+    private double _now;
     private Node3D _structures = null!;
     private readonly List<(WaterWheel Wheel, Node3D Rotor)> _wheels = new();
     private int _drawnWorks = -1, _drawnSites = -1, _cutLevel = int.MinValue;
@@ -179,9 +188,14 @@ public partial class WaterView : Node3D
     /// <summary>Water sections still waiting to be meshed (for loading progress).</summary>
     public int PendingSections { get; private set; }
 
+    /// <summary>Main-thread time spent on water (meshing, cap) since the last reset, and frames counted (bench).</summary>
+    public double MeshMs, CapMs;
+    public int Frames, SectionsBuilt, Backlog;
+
     public override void _Process(double delta)
     {
         if (_sim == null) return;
+        _now += delta;
         int level = _worldView.ViewLevel;
         if (level != _cutLevel)
         {
@@ -191,8 +205,13 @@ public partial class WaterView : Node3D
         }
         if (_sim.WaterReady) // nothing to mesh until the generated water has settled
         {
+            var watch = Stopwatch.StartNew();
             UpdateWater();
+            MeshMs += watch.Elapsed.TotalMilliseconds;
+            watch.Restart();
             UpdateCap(delta);
+            CapMs += watch.Elapsed.TotalMilliseconds;
+            Frames++;
         }
         if (_sim.Waterworks.Version != _drawnWorks || _sim.Constructions.Version != _drawnSites) RebuildStructures();
         foreach (var (wheel, rotor) in _wheels)
@@ -230,7 +249,7 @@ public partial class WaterView : Node3D
         foreach (var (key, extra) in _border) _wanted[key] = _wanted[key] * 41 + extra;
         // Dried-out sections go.
         var gone = new List<(int, int, int)>();
-        foreach (var (key, (node, _)) in _sections)
+        foreach (var (key, (node, _, _)) in _sections)
             if (!_wanted.ContainsKey(key))
             {
                 node.QueueFree();
@@ -238,45 +257,142 @@ public partial class WaterView : Node3D
             }
         foreach (var key in gone) _sections.Remove(key);
 
-        // Sections never drawn first, then changed ones taking turns (a busy river can't starve the rest).
-        _todo.Clear();
-        foreach (var (key, sig) in _wanted)
-            if (!_sections.TryGetValue(key, out var have) || have.Signature != sig) _todo.Add(key);
-        _todo.Sort((a, b) =>
-        {
-            bool na = !_sections.ContainsKey(a), nb = !_sections.ContainsKey(b);
-            if (na != nb) return na ? -1 : 1;
-            return a.CompareTo(b);
-        });
-        int unbuilt = 0;
-        while (unbuilt < _todo.Count && !_sections.ContainsKey(_todo[unbuilt])) unbuilt++;
-        if (unbuilt == 0 && _todo.Count > 0)
-        {
-            int start = _turn++ % _todo.Count;
-            _todo.AddRange(_todo.GetRange(0, start));
-            _todo.RemoveRange(0, start);
-        }
+        // Finished meshes from the workers go up within a budget (a mesh made for an older state still beats none).
+        while (_done.TryDequeue(out var job)) _ready.Add(job);
         var clock = Stopwatch.StartNew();
-        int pending = 0;
-        foreach (var key in _todo)
+        int applied = 0;
+        for (; applied < _ready.Count && (applied == 0 || clock.Elapsed.TotalMilliseconds < UploadBudgetMs); applied++)
         {
-            long sig = _wanted[key];
-            _sections.TryGetValue(key, out var have);
-            if (clock.Elapsed.TotalMilliseconds > BuildBudgetMs)
-            {
-                pending++;
-                continue;
-            }
-            var mesh = BuildSection(key.X, key.Y);
+            var job = _ready[applied];
+            _inFlight.Remove(job.Key);
+            if (!_wanted.ContainsKey(job.Key)) continue; // dried out meanwhile
+            _sections.TryGetValue(job.Key, out var have);
             if (have.Node is null)
             {
                 have.Node = new MeshInstance3D { CastShadow = GeometryInstance3D.ShadowCastingSetting.Off };
                 AddChild(have.Node);
             }
-            have.Node.Mesh = mesh;
-            _sections[key] = (have.Node, sig);
+            have.Node.Mesh = job.Mesh?.ToMesh(_water);
+            _sections[job.Key] = (have.Node, job.Signature, _now);
+            SectionsBuilt++;
         }
-        PendingSections = pending;
+        _ready.RemoveRange(0, applied);
+
+        // What to (re)build: sections never drawn first, then changed ones, nearest the camera first; changes far
+        // from it wait a while (at that distance a sixteenth of a level can't be seen), and waiting raises a
+        // section's turn so none starves.
+        var eye = GetViewport().GetCamera3D()?.GlobalPosition ?? Vector3.Zero;
+        _todo.Clear();
+        int unbuilt = 0;
+        foreach (var (key, sig) in _wanted)
+        {
+            if (_inFlight.Contains(key)) continue;
+            float dist = new Vector2(key.X * 32 + 16 - eye.X, key.Y * 32 + 16 - eye.Z).Length();
+            if (!_sections.TryGetValue(key, out var have))
+            {
+                unbuilt++;
+                _todo.Add((key, dist - 1e6f));
+                continue;
+            }
+            if (have.Signature == sig) continue;
+            double age = _now - have.BuiltAt;
+            if (dist > FarTiles && age < FarRefreshSeconds) continue;
+            _todo.Add((key, dist - (float)age * 100f));
+        }
+        _todo.Sort((a, b) => a.Priority.CompareTo(b.Priority));
+        Backlog = _todo.Count;
+        PendingSections = unbuilt + _inFlight.Count(k => !_sections.ContainsKey(k));
+        clock.Restart();
+        foreach (var (key, _) in _todo)
+        {
+            if (_inFlight.Count >= MaxInFlight || clock.Elapsed.TotalMilliseconds > CaptureBudgetMs) break;
+            var snap = Capture(key.X, key.Y);
+            long sig = _wanted[key];
+            _inFlight.Add(key);
+            Task.Run(() => _done.Enqueue((key, sig, BuildSection(snap))));
+        }
+    }
+
+    // ---- Section meshing (worker threads) ------------------------------------------------------------------
+
+    /// <summary>
+    /// The spans of a section's columns plus a one-column border, copied on the main thread so a worker can mesh
+    /// them while the water steps on. Every open cell lies in some span, so "is this cell solid" is "is it in no
+    /// span". Columns whose block has no spans yet are read from the world over the section's wet height range.
+    /// </summary>
+    private sealed class WaterSnap
+    {
+        public const int N = 34;
+        public int X0, Y0, Width, Depth;
+        public readonly int[] Start = new int[N * N + 1];
+        public readonly List<int> Floor = new(), Ceil = new();
+        public readonly List<float> Surface = new(), FlowX = new(), FlowY = new(); // surface NaN: dry
+
+        public bool InBounds(int x, int y) => x >= 0 && y >= 0 && x < Width && y < Depth;
+
+        public int Find(int x, int y, int z)
+        {
+            int c = (y - Y0) * N + (x - X0);
+            for (int s = Start[c]; s < Start[c + 1]; s++)
+                if (Floor[s] <= z && z < Ceil[s]) return s;
+            return -1;
+        }
+
+        public bool IsSolid(int x, int y, int z) => Find(x, y, z) < 0;
+
+        public float? SurfaceAt(int x, int y, int z) => Find(x, y, z) is var s and >= 0 && !float.IsNaN(Surface[s]) ? Surface[s] : null;
+    }
+
+    private WaterSnap Capture(int sx, int sy)
+    {
+        var world = _sim.World;
+        var water = _sim.Water;
+        var snap = new WaterSnap { X0 = sx * 32 - 1, Y0 = sy * 32 - 1, Width = world.Width, Depth = world.Depth };
+        // The section's wet height range (for columns read from the world).
+        int zLo = int.MaxValue, zHi = int.MinValue;
+        for (int y = sy * 32; y < Math.Min(sy * 32 + 32, world.Depth); y++)
+        for (int x = sx * 32; x < Math.Min(sx * 32 + 32, world.Width); x++)
+            for (int k = 0, n = water.SpanCount(x, y); k < n; k++)
+                if (water.Span(x, y, k) is (var f, _, { } h))
+                {
+                    zLo = Math.Min(zLo, f);
+                    zHi = Math.Max(zHi, (int)MathF.Ceiling(h));
+                }
+        for (int j = 0; j < WaterSnap.N; j++)
+        for (int i = 0; i < WaterSnap.N; i++)
+        {
+            int x = snap.X0 + i, y = snap.Y0 + j;
+            snap.Start[j * WaterSnap.N + i] = snap.Floor.Count;
+            if (!snap.InBounds(x, y)) continue;
+            int spans = water.SpanCount(x, y);
+            bool inner = i > 0 && j > 0 && i < WaterSnap.N - 1 && j < WaterSnap.N - 1;
+            for (int k = 0; k < spans; k++)
+            {
+                var (floor, ceil, surface) = water.Span(x, y, k);
+                snap.Floor.Add(floor);
+                snap.Ceil.Add(ceil);
+                snap.Surface.Add(surface ?? float.NaN);
+                var (fx, fy) = inner && surface != null ? water.FlowAt(x, y, floor) : (0f, 0f);
+                snap.FlowX.Add(fx);
+                snap.FlowY.Add(fy);
+            }
+            if (spans > 0 || zLo > zHi) continue;
+            // No spans here (a dry block never built, or just dug): open runs straight from the world.
+            int top = Math.Min(zHi + 1, world.Height - 1);
+            for (int z = Math.Max(0, zLo - 2); z <= top; z++)
+            {
+                if (world.IsSolid(x, y, z)) continue;
+                int start = z;
+                while (z + 1 <= top && !world.IsSolid(x, y, z + 1)) z++;
+                snap.Floor.Add(start);
+                snap.Ceil.Add(z + 1);
+                snap.Surface.Add(float.NaN);
+                snap.FlowX.Add(0);
+                snap.FlowY.Add(0);
+            }
+        }
+        snap.Start[WaterSnap.N * WaterSnap.N] = snap.Floor.Count;
+        return snap;
     }
 
     /// <summary>
@@ -284,61 +400,59 @@ public partial class WaterView : Node3D
     /// space around that height, if it's wet and within half a level (closer is the same sheet of water; further
     /// is a fall or a pool below, which shouldn't be smoothed into this one).
     /// </summary>
-    private float? NearSurface(int x, int y, float h)
+    private static float? NearSurface(WaterSnap w, int x, int y, float h)
     {
-        if (!_sim.World.InBounds(x, y, 0)) return null;
+        if (!w.InBounds(x, y)) return null;
         int z = Math.Max(0, (int)MathF.Floor(h - 0.01f));
-        var s = _sim.Water.SurfaceAt(x, y, z) ?? (z > 0 ? _sim.Water.SurfaceAt(x, y, z - 1) : null);
+        var s = w.SurfaceAt(x, y, z) ?? (z > 0 ? w.SurfaceAt(x, y, z - 1) : null);
         return s is { } v && MathF.Abs(v - h) < 0.5f ? v : null;
     }
 
     /// <summary>
-    /// A section's water: for every wet open space in each column, a surface at its water height whose corners are
-    /// averaged with the neighbouring columns' surfaces nearby (so a river's surface slopes smoothly instead of in
-    /// steps), and side faces where the water beside it is lower or there is none (falls, the edge of a pour).
-    /// Darker where deeper; foamy on falls and where water pours over them; UV carries the flow for the shader.
+    /// A section's water (worker thread): for every wet open space in each column, a surface at its water height
+    /// whose corners are averaged with the neighbouring columns' surfaces nearby (so a river's surface slopes
+    /// smoothly instead of in steps), and side faces where the water beside it is lower or there is none (falls, the
+    /// edge of a pour). Darker where deeper; foamy on falls and where water pours over them; UV carries the flow.
     /// </summary>
-    private ArrayMesh? BuildSection(int sx, int sy)
+    private static Faces? BuildSection(WaterSnap w)
     {
-        var world = _sim.World;
-        var water = _sim.Water;
         var faces = new Faces();
-        int x0 = sx * 32, y0 = sy * 32;
-        for (int y = y0; y < Math.Min(y0 + 32, world.Depth); y++)
-        for (int x = x0; x < Math.Min(x0 + 32, world.Width); x++)
+        int x0 = w.X0 + 1, y0 = w.Y0 + 1;
+        for (int y = y0; y < Math.Min(y0 + 32, w.Depth); y++)
+        for (int x = x0; x < Math.Min(x0 + 32, w.Width); x++)
         {
-            int spans = water.SpanCount(x, y);
-            for (int k = 0; k < spans; k++)
+            int c = (y - w.Y0) * WaterSnap.N + (x - w.X0);
+            for (int s = w.Start[c]; s < w.Start[c + 1]; s++)
             {
-                var (floor, ceil, surface) = water.Span(x, y, k);
-                if (surface is not { } h) continue;
+                int floor = w.Floor[s], ceil = w.Ceil[s];
+                float h = w.Surface[s];
+                if (float.IsNaN(h)) continue;
                 float depth = h - floor;
                 if (depth < 0.02f) continue;
-                var (fx, fy) = water.FlowAt(x, y, floor);
-                var flow = new Vector2(fx, fy);
+                var flow = new Vector2(w.FlowX[s], w.FlowY[s]);
                 // Sides first: where the water beside is lower (or absent), and whether it pours over the edge.
                 bool pours = false;
                 for (int d = 0; d < 4; d++)
                 {
                     int nx = x + (d == 0 ? 1 : d == 1 ? -1 : 0), ny = y + (d == 2 ? 1 : d == 3 ? -1 : 0);
-                    if (!world.InBounds(nx, ny, 0)) continue;
+                    if (!w.InBounds(nx, ny)) continue;
                     int zTop = Math.Max(floor, (int)MathF.Floor(h - 0.01f));
-                    if (TileInfo.IsSolid(world.Get(nx, ny, zTop))) continue; // a bank: the ground shows through
+                    if (w.IsSolid(nx, ny, zTop)) continue; // a bank: the ground shows through
                     // The neighbour's water (or its floor) at the top of ours.
                     float lo;
-                    if (water.SurfaceAt(nx, ny, zTop) is { } hn) lo = hn;
+                    if (w.SurfaceAt(nx, ny, zTop) is { } hn) lo = hn;
                     else
                     {
                         int fz = zTop;
-                        while (fz > floor && !TileInfo.IsSolid(world.Get(nx, ny, fz - 1)) && water.SurfaceAt(nx, ny, fz - 1) is null) fz--;
-                        lo = water.SurfaceAt(nx, ny, fz - 1) is { } below && fz > floor ? below : fz;
+                        while (fz > floor && !w.IsSolid(nx, ny, fz - 1) && w.SurfaceAt(nx, ny, fz - 1) is null) fz--;
+                        lo = w.SurfaceAt(nx, ny, fz - 1) is { } below && fz > floor ? below : fz;
                     }
                     lo = MathF.Max(lo, floor);
                     if (lo >= h - 0.03f) continue;
                     bool fall = h - lo > 0.35f;
                     pours |= fall;
-                    var c = new Color(Shallow(h - lo), 0, 0, fall ? 0.7f : 0.15f);
-                    Side(faces, x, y, d, lo, h, c, new Vector2(0, -1.2f)); // falling water streams down
+                    var col = new Color(Shallow(h - lo), 0, 0, fall ? 0.7f : 0.15f);
+                    Side(faces, x, y, d, lo, h, col, new Vector2(0, -1.2f)); // falling water streams down
                 }
                 // Surface, smoothed at the corners towards neighbours on the same sheet of water.
                 if (h >= ceil - 0.01f) continue; // a flooded tunnel: no open surface
@@ -351,9 +465,9 @@ public partial class WaterView : Node3D
                     {
                         int nx = cx + dx, ny = cy + dy;
                         if (nx == x && ny == y) continue;
-                        if (NearSurface(nx, ny, h) is { } s)
+                        if (NearSurface(w, nx, ny, h) is { } v)
                         {
-                            sum += s;
+                            sum += v;
                             n++;
                         }
                     }
@@ -365,11 +479,7 @@ public partial class WaterView : Node3D
                     Vector3.Up, color, flow);
             }
         }
-        if (faces.Count == 0) return null;
-        var mesh = new ArrayMesh();
-        faces.AddTo(mesh);
-        mesh.SurfaceSetMaterial(0, _water);
-        return mesh;
+        return faces.Count == 0 ? null : faces;
     }
 
     /// <summary>Vertex colour red: 1 for shallow water, falling towards 0 (deep blue) by about four levels down.</summary>
@@ -421,6 +531,15 @@ public partial class WaterView : Node3D
             }
             arrays[(int)Mesh.ArrayType.Index] = indices;
             mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        }
+
+        /// <summary>The quads as a one-surface mesh (main thread).</summary>
+        public ArrayMesh ToMesh(Material material)
+        {
+            var mesh = new ArrayMesh();
+            AddTo(mesh);
+            mesh.SurfaceSetMaterial(0, material);
+            return mesh;
         }
     }
 
