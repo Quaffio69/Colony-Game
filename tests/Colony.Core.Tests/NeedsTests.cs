@@ -153,6 +153,36 @@ public class NeedsTests
     }
 
     [Fact]
+    public void EveryColonist_HasItsOwnLikes_TheSameEveryTime()
+    {
+        var people = Enumerable.Range(0, 40).Select(i => new Colonist(i, $"C{i}", new TilePos(0, 0, 0))).ToList();
+        Assert.True(people.Select(c => c.FavoriteFood).Distinct().Count() >= 2);
+        Assert.True(people.Select(c => c.LikedMaterial).Distinct().Count() >= 4);
+        Assert.True(people.Select(c => c.LikedArt).Distinct().Count() >= 2);
+        Assert.Equal(3, people.Select(c => c.PreferredWork).Distinct().Count());
+        var again = new Colonist(7, "Again", new TilePos(1, 1, 1));
+        Assert.Equal((people[7].FavoriteFood, people[7].LikedMaterial, people[7].LikedArt, people[7].PreferredWork),
+            (again.FavoriteFood, again.LikedMaterial, again.LikedArt, again.PreferredWork));
+        Assert.Equal(people[7].PreferredWork, people[7].Labors[0]); // its preferred work is what it looks for first
+    }
+
+    [Fact]
+    public void AColonist_WalksAFewStepsFurtherForItsFavouriteFood_AndEnjoysIt()
+    {
+        var sim = FlatSim();
+        var c = sim.AddColonist("Gourmet", new TilePos(2, 2, 4));
+        var other = Catalog.Items.First(i => i.Nutrition > 0 && i.Type != c.FavoriteFood).Type;
+        c.Satiety = Needs.Hungry - 1;
+        sim.Items.Drop(new TilePos(4, 2, 4), other, 5);              // nearest
+        sim.Items.Drop(new TilePos(9, 2, 4), c.FavoriteFood, 5);     // a few steps further
+        Run(sim, 400);
+        Assert.Equal(5, Count(sim, other));
+        Assert.True(Count(sim, c.FavoriteFood) < 5);
+        Assert.True(c.LikesMet(sim.Tick).Treat);
+        Assert.True(c.LikesBonus(sim.Tick) > 0);
+    }
+
+    [Fact]
     public void TheLivingStandard_ComesFromGoodsUsedUpEachDay()
     {
         var sim = FlatSim(32);

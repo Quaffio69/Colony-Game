@@ -87,13 +87,13 @@ public sealed class Colonist
     public int CarryingCount { get; private set; }
 
     /// <summary>
-    /// Work kinds in preference order. Rotates by id so a third of the colony leans to each kind, and everyone
-    /// falls back on the others; real job priorities will replace this.
+    /// Work kinds in preference order: its <see cref="PreferredWork"/> first, then the others (everyone falls back on
+    /// them); real job priorities will build on this.
     /// </summary>
-    public Labor[] Labors => (Id % 3) switch
+    public Labor[] Labors => PreferredWork switch
     {
-        0 => [Labor.Designations, Labor.Hauling, Labor.Industry],
-        1 => [Labor.Industry, Labor.Designations, Labor.Hauling],
+        Labor.Designations => [Labor.Designations, Labor.Hauling, Labor.Industry],
+        Labor.Industry => [Labor.Industry, Labor.Designations, Labor.Hauling],
         _ => [Labor.Hauling, Labor.Industry, Labor.Designations],
     };
 
@@ -114,6 +114,10 @@ public sealed class Colonist
         Education = education;
         Satiety = Needs.FullSatiety - id * 977 % (Needs.Day / 2); // staggered, so the colony doesn't all eat at once
         Rest = Needs.FullRest - id * 1531 % (Needs.Day / 2); // ...or sleep at once
+        FavoriteFood = Pick(Catalog.Items.Where(i => i.Nutrition > 0).Select(i => i.Type).ToList(), id, 1);
+        LikedMaterial = Pick(Materials, id, 2);
+        LikedArt = Pick(Catalog.Fixtures["decor"].Where(i => i.Def.FixtureTier >= 2).ToList(), id, 3);
+        PreferredWork = (id % 3) switch { 0 => Labor.Designations, 1 => Labor.Industry, _ => Labor.Hauling };
     }
 
     // ---- Hunger ------------------------------------------------------------------------------------------
@@ -157,7 +161,9 @@ public sealed class Colonist
         }
         if (options.Count == 0) return false;
         if (Task != ColonistTask.None) Abandon(sim); // the work waits (its claims released, any load dropped)
-        options.Sort((a, b) => a.Dist != b.Dist ? a.Dist.CompareTo(b.Dist) : CompareCells(a.Cell, b.Cell));
+        // Its favourite is worth a few extra steps.
+        int Cost((TilePos Cell, ItemPile Pile, int Dist) o) => o.Dist - (o.Pile.Type == FavoriteFood ? 8 : 0);
+        options.Sort((a, b) => Cost(a) != Cost(b) ? Cost(a).CompareTo(Cost(b)) : CompareCells(a.Cell, b.Cell));
         foreach (var (cell, pile, _) in options.Take(CandidatesPerSearch))
         {
             var path = Route(sim, ReachableAround(sim, cell, component), cell);
@@ -180,12 +186,62 @@ public sealed class Colonist
     {
         int eaten = sim.Items.TakeReserved(_meal.Cell, _meal.Units);
         Satiety += eaten * Needs.MealTicks * Needs.Nutrition(_meal.Type); // a loaf more than fills it: it lasts longer, nothing wasted
+        if (eaten > 0 && _meal.Type == FavoriteFood) LastTreat = sim.Tick;
         if (Satiety > 0) StarvingTicks = 0;
         Finish();
     }
 
     /// <summary>Leaves the colony: lets go of every claim and drops what it carries.</summary>
     internal void Leave(ColonySim sim) => Abandon(sim);
+
+    // ---- Likes ----------------------------------------------------------------------------------------------
+    // Fixed for each colonist (from its id): small pleasures on top of its needs. Meeting one lifts its mood a little;
+    // missing one costs nothing.
+
+    public static readonly string[] Materials = ["wood", "stone", "metal", "glass", "cloth", "clay"];
+
+    /// <summary>The food it walks a little further for; a treat lifts its mood for a day.</summary>
+    public ItemType FavoriteFood { get; }
+    /// <summary>The material it likes to see in its home (a fixture made of it).</summary>
+    public string LikedMaterial { get; }
+    /// <summary>The art it likes in its home: tapestries, paintings or sculptures.</summary>
+    public ItemType LikedArt { get; }
+    /// <summary>The work it would rather do: tried first, and doing it most of the day pleases it.</summary>
+    public Labor PreferredWork { get; }
+    internal long LastTreat = long.MinValue / 2;
+    internal int WorkTicks, PreferredTicks; // today's work, and how much of it was the preferred kind
+
+    private static T Pick<T>(IReadOnlyList<T> options, int id, int salt) =>
+        options[(int)(Procedural.Noise.Hash(id, salt, 91, 4243) * (options.Count - 1e-3f))];
+
+    private static Labor LaborOf(ColonistTask task) => task switch
+    {
+        ColonistTask.Designation or ColonistTask.Build => Labor.Designations,
+        ColonistTask.CraftFetch or ColonistTask.CraftWork or ColonistTask.CraftStore => Labor.Industry,
+        _ => Labor.Hauling,
+    };
+
+    /// <summary>Which of its likes were met lately: a recent treat, its material and art at home, its kind of work.</summary>
+    public (bool Treat, bool Material, bool Art, bool Work) LikesMet(long tick) => (
+        tick - LastTreat < Needs.Day,
+        Home?.Fixtures.Any(f => f.Item.Def.Material == LikedMaterial) ?? false,
+        Home?.Fixtures.Any(f => f.Item == LikedArt) ?? false,
+        WorkTicks >= 200 && PreferredTicks * 2 >= WorkTicks);
+
+    /// <summary>Mood from likes met: up to +0.15 (each of four counts a quarter).</summary>
+    public float LikesBonus(long tick)
+    {
+        var (a, b, c, d) = LikesMet(tick);
+        return 0.0375f * ((a ? 1 : 0) + (b ? 1 : 0) + (c ? 1 : 0) + (d ? 1 : 0));
+    }
+
+    /// <summary>"bread, wood, paintings, hauling", the met ones marked with +.</summary>
+    public string DescribeLikes(long tick)
+    {
+        var (a, b, c, d) = LikesMet(tick);
+        static string M(string s, bool met) => met ? s + "+" : s;
+        return $"{M(FavoriteFood.Name.ToLowerInvariant(), a)}, {M(LikedMaterial, b)}, {M(LikedArt.Name.ToLowerInvariant(), c)}, {M(PreferredWork.ToString().ToLowerInvariant(), d)}";
+    }
 
     // ---- Home, rest and mood -----------------------------------------------------------------------------
 
@@ -420,6 +476,11 @@ public sealed class Colonist
                 break;
 
             case ColonistState.Working:
+                if (Task is not (ColonistTask.Sleep or ColonistTask.Eat))
+                {
+                    WorkTicks++;
+                    if (LaborOf(Task) == PreferredWork) PreferredTicks++;
+                }
                 if (Task == ColonistTask.Sleep)
                 {
                     Rest = Math.Min(Needs.FullRest, Rest + _sleepRate);

@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using Colony.Core;
-using Colony.Core.Agents;
 using Colony.Core.Items;
 using Colony.Core.World;
 using Godot;
@@ -29,8 +28,7 @@ public partial class ItemView : Node3D
     private bool[] _growsTall = [];
     private readonly List<ShaderMaterial> _materials = new();
     private MultiMeshInstance3D _zones = null!, _farms = null!;
-    private int _drawnLayout = -1, _drawnZones = -1, _drawnFarms = -1, _drawnLevel = int.MinValue, _drawnHomes = -1;
-    private MultiMeshInstance3D[] _fixtures = [];
+    private int _drawnLayout = -1, _drawnZones = -1, _drawnFarms = -1, _drawnLevel = int.MinValue;
     private Material _wood = null!, _dark = null!, _metal = null!, _cloth = null!, _glass = null!, _paper = null!;
 
     public void Initialize(ColonySim sim, WorldView world)
@@ -66,17 +64,6 @@ public partial class ItemView : Node3D
             AddChild(_piles[t]);
         }
 
-        // Installed home fixtures: the same models, laid out by slot (see RedrawFixtures).
-        _fixtures = new MultiMeshInstance3D[n];
-        for (int t = 0; t < n; t++)
-        {
-            _fixtures[t] = new MultiMeshInstance3D
-            {
-                Multimesh = new MultiMesh { TransformFormat = MultiMesh.TransformFormatEnum.Transform3D, UseCustomData = true, Mesh = _piles[t].Multimesh.Mesh },
-                CastShadow = GeometryInstance3D.ShadowCastingSetting.On,
-            };
-            AddChild(_fixtures[t]);
-        }
 
         _zones = Plates(StockpileColor);
         _farms = Plates(FarmColor);
@@ -115,7 +102,6 @@ public partial class ItemView : Node3D
             foreach (var m in _materials) m.SetShaderParameter("cut_height", (float)(level + 1));
 
         if (_sim.Items.LayoutVersion != _drawnLayout) RedrawPiles();
-        if (_sim.Housing.Version != _drawnHomes) RedrawFixtures();
         if (_sim.Stockpiles.Version != _drawnZones || level != _drawnLevel)
         {
             _drawnZones = _sim.Stockpiles.Version;
@@ -150,44 +136,6 @@ public partial class ItemView : Node3D
                 var scale = _growsTall[t] ? new Vector3(1, 0.25f + 0.75f * fill, 1) : Vector3.One * (0.6f + 0.4f * Mathf.Min(fill, 1f));
                 float turn = (p.X * 7 + p.Y * 13) % 4 * Mathf.Pi / 2; // neighbouring piles don't look stamped
                 mm.SetInstanceTransform(i, new Transform3D(new Basis(Vector3.Up, turn).Scaled(scale), new Vector3(p.X + 0.5f, p.Z, p.Y + 0.5f)));
-                mm.SetInstanceCustomData(i, new Color(1, 1, 1));
-            }
-        }
-    }
-
-    /// <summary>
-    /// Installed fixtures, laid out by slot: beds and furniture stand on their cells, tableware sits on the furniture,
-    /// lamps and decor along the room (lamps raised in a corner, decor in the opposite one), several per cell spread out.
-    /// </summary>
-    private void RedrawFixtures()
-    {
-        _drawnHomes = _sim.Housing.Version;
-        var byType = new List<Transform3D>[ItemInfo.TypeCount];
-        for (int t = 0; t < byType.Length; t++) byType[t] = new List<Transform3D>();
-        var perCell = new Dictionary<(TilePos, int), int>();
-        foreach (var home in _sim.Housing.All)
-            foreach (var f in home.Fixtures)
-            {
-                int k = perCell.GetValueOrDefault((f.Cell, f.Slot));
-                perCell[(f.Cell, f.Slot)] = k + 1;
-                var at = new Vector3(f.Cell.X + 0.5f, f.Cell.Z, f.Cell.Y + 0.5f);
-                float turn = (f.Cell.X * 7 + f.Cell.Y * 13) % 4 * Mathf.Pi / 2;
-                var (offset, scale) = f.Slot switch
-                {
-                    Housing.Bed or Housing.Furniture => (Vector3.Zero, 1f),
-                    Housing.Tableware => (new Vector3(-0.15f + 0.15f * (k % 3), 0.47f, -0.1f + 0.2f * (k / 3 % 2)), 0.35f),
-                    Housing.Lighting => (new Vector3(0.32f, 0.55f + 0.1f * (k % 2), 0.32f - 0.2f * (k / 2 % 3)), 0.6f),
-                    _ => (new Vector3(-0.3f, 0, -0.3f + 0.25f * (k % 3)), 0.55f),
-                };
-                byType[f.Item.Index].Add(new Transform3D(new Basis(Vector3.Up, turn).Scaled(Vector3.One * scale), at + offset));
-            }
-        for (int t = 0; t < byType.Length; t++)
-        {
-            var mm = _fixtures[t].Multimesh;
-            mm.InstanceCount = byType[t].Count;
-            for (int i = 0; i < byType[t].Count; i++)
-            {
-                mm.SetInstanceTransform(i, byType[t][i]);
                 mm.SetInstanceCustomData(i, new Color(1, 1, 1));
             }
         }

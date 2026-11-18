@@ -100,6 +100,8 @@ public static class Catalog
                 Fixture = Opt(e, "fixture"),
                 FixtureTier = Int(e, "tier") ?? 0,
                 Wear = Int(e, "wear") ?? 0,
+                Place = Opt(e, "place"),
+                Material = Opt(e, "material"),
             });
             if ((d.Items[^1].Fixture != null) != (d.Items[^1].FixtureTier > 0 && d.Items[^1].Wear > 0))
                 throw Bad($"item '{id}': a fixture needs 'fixture', 'tier' and 'wear' together");

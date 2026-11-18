@@ -258,9 +258,20 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   quality, then room id). **Rest:** `Colonist.Rest` (a day awake); tired -> sleeps in its own bed (rate by bed tier:
   humble 3.2, comfortable 4, fine 4.8 per tick) or on the floor (2); exhausted -> drops where it stands. **Quality:**
   per slot, coverage (pieces per resident vs want) x tier vs expectation (education + 1: Unskilled humble, Literate
-  comfortable, Scholar+ fine), weighted bed .3 furniture .2 tableware .15 lighting .15 decor .2. `ItemView` draws
-  installed fixtures by slot; `--homes-demo` builds and furnishes one home per policy. Scale-up path: `Demands`
-  and fixture counts are linear scans per home.
+  comfortable, Scholar+ fine), weighted bed .3 furniture .2 tableware .15 lighting .15 decor .2. **Layout**
+  (`HomeLayout.Arrange`, redone when a home's fixtures or floor change, `Home.Layout` of `Placement`s): seeded by the
+  room, so identical homes differ but each is stable. Walls = sides where the floor ends; doorways = sides leading to
+  floor outside (kept clear with the cell inside). Beds head-to-wall over two cells, deep from the door, spread apart
+  (rows only when crowded); furniture becomes tables (one per four sleepers, near the door, chairs facing them), then
+  chests by beds and shelves on walls; tableware on tables at the chairs, overflow on shelves/chests; items' `place`
+  hint puts lights on tables (rushlights), walls (lanterns, spread) or corners (standing lamps), decor under tables /
+  beside beds (rugs), on free wall (tapestries, paintings) or in corners (statues). `HomeView` draws a model per role
+  and tier (pallet / framed / canopy bed, stool / chair ...). `--homes-demo` builds one walled home per policy.
+  Scale-up path: `Demands` and fixture counts are linear scans per home.
+- **Likes (`Colonist`):** fixed per colonist from its id: `FavoriteFood` (walks up to 8 tiles further for it; a treat
+  counts for a day), `LikedMaterial` (fixture `material` in its home: wood, stone, metal, glass, cloth, clay),
+  `LikedArt` (tapestry/painting/sculpture at home), `PreferredWork` (its `Labors` order; met when most of a day's
+  work was that kind). Each met like adds 0.0375 mood (max 0.15); missing one costs nothing.
 - **Cave-ins (DF-style):** a solid tile is supported if face-adjacent solid tiles connect it to z=0. After a
   dig (`ColonySim.CompleteDesignation` -> `World.CaveIns`), each unsupported neighbouring mass falls as one
   rigid piece until it lands; designations on it are cancelled; colonists ride it down or pop out on top.
@@ -343,8 +354,9 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - [ ] Geology: several stone types in layered/warped strata (palette now has room).
 - [~] M5: Needs and homes. Done: hunger, eating, starving leaves; daily goods standard (clothing, tinctures); homes
       (sized rooms, housing policies, tiered fixtures with wear, salvage, auto layout), rest in beds, residents by
-      education, mood -> work speed, gentle departures, settlers by food, mood and free beds. Next: wants and likes
-      (favourite food, liked material/art, preferred work), shell quality (walls, floors, windows), births and
+      education, mood -> work speed, gentle departures, settlers by food, mood and free beds; procedural home
+      layouts; likes (food, material, art, work). Next: building quality (thin walls, doors, windows, floors as the
+      home's shell, a more capable structure tool), births and
       households, job priorities, health beyond consumption.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.

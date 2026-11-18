@@ -93,6 +93,10 @@ public sealed class ItemDef
     public int FixtureTier { get; init; }
     /// <summary>Days a fixture lasts in a home before it wears out and is replaced (upkeep).</summary>
     public int Wear { get; init; }
+    /// <summary>Where a light or decor piece goes in a home: "table", "wall", "floor" or "corner" (null: by slot).</summary>
+    public string? Place { get; init; }
+    /// <summary>What a fixture is mostly made of: wood, stone, metal, glass, cloth or clay (colonists may like one).</summary>
+    public string? Material { get; init; }
     /// <summary>1 + the highest tier among the inputs of the recipe that makes it (raw = 0).</summary>
     public int Tier { get; internal set; }
     public bool IsRaw => Category == "raw";

@@ -88,6 +88,10 @@ public partial class Main : Node3D
         AddChild(_items);
         _items.Initialize(_sim, _world);
 
+        var homes = new HomeView { Name = "HomeView" };
+        AddChild(homes);
+        homes.Initialize(_sim, _world);
+
         var rooms = new RoomView { Name = "RoomView" };
         AddChild(rooms);
         rooms.Initialize(_sim, _world);
@@ -293,7 +297,7 @@ public partial class Main : Node3D
         const int listed = 14;
         foreach (var c in _sim.Colonists.Take(listed))
             sb.AppendLine($"  {c.Name,-12} {c.EducationName,-9} {c.Describe()}" + (c.Starving ? "  [STARVING]" : c.Hungry ? "  [hungry]" : "") +
-                          (c.IsAutomaton ? "" : $"  ({(c.Home is { } ch ? ch.Name : "homeless")}, mood {c.Happiness:P0}{(c.Tired ? ", tired" : "")})"));
+                          (c.IsAutomaton ? "" : $"  ({(c.Home is { } ch ? ch.Name : "homeless")}, mood {c.Happiness:P0}{(c.Tired ? ", tired" : "")}; likes {c.DescribeLikes(_sim.Tick)})"));
         if (_sim.Colonists.Count > listed) sb.AppendLine($"  ... and {_sim.Colonists.Count - listed} more");
         sb.AppendLine();
         sb.AppendLine("Tab/Shift+Tab: orders and zones (dig, stairs, chop, gather, stockpile, farms)   B: build menu (workshop rooms and parts; R rotate, [ ] size)");
@@ -340,7 +344,7 @@ public partial class Main : Node3D
         }
         if (home.Residents.Count > 0)
             sb.AppendLine("   Living here: " + string.Join(", ", home.Residents.Select(c =>
-                $"{c.Name} ({c.EducationName}, home {Colony.Core.Agents.Housing.Score(home, c):P0})")));
+                $"{c.Name} ({c.EducationName}, home {Colony.Core.Agents.Housing.Score(home, c):P0}, likes {c.DescribeLikes(_sim.Tick)})")));
     }
 
     /// <summary>Builder info panel for the room under the cursor.</summary>

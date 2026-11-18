@@ -50,6 +50,10 @@ public sealed class Home
 
     /// <summary>Average tier of what is installed (0 when bare): which homes the most educated get first.</summary>
     public float Quality => Fixtures.Count == 0 ? 0 : (float)Fixtures.Average(f => f.Tier);
+
+    /// <summary>How its fixtures are arranged (see <see cref="HomeLayout"/>): redone whenever they or the room change.</summary>
+    public IReadOnlyList<Placement> Layout { get; internal set; } = [];
+    internal bool LayoutDirty = true;
 }
 
 /// <summary>
@@ -252,44 +256,24 @@ public sealed class Housing
                 if (old == null) break; // the slot is full of the right pieces already
                 Remove(sim, home, old, salvage: true);
             }
-            home.Fixtures.Add(new Fixture { Item = item, Slot = slot, Cell = Layout(home, slot), WearLeft = item.Def.Wear * Needs.Day });
+            home.Fixtures.Add(new Fixture { Item = item, Slot = slot, Cell = home.Room.Cells.First(), WearLeft = item.Def.Wear * Needs.Day });
+            home.LayoutDirty = true;
             installed++;
         }
         if (installed > 0) Version++;
+        ArrangeDirty(sim);
         if (installed > 0 && slot == Bed) AssignResidents(sim); // a new bed takes in someone at once
         return installed;
     }
 
     public static int SlotOf(ItemType item) => item.Def.Fixture is { } f ? Array.IndexOf(Slots, f) : -1;
 
-    /// <summary>
-    /// Where a new piece goes: beds and furniture on floor cells nobody else's bed or furniture stands on (beds
-    /// first in the room's order, furniture after); tableware on the furniture; lighting and decor along the room.
-    /// </summary>
-    private static TilePos Layout(Home home, int slot)
-    {
-        var cells = home.Room.Cells.OrderBy(p => (p.Z, p.Y, p.X)).ToList();
-        if (slot is Bed or Furniture)
-        {
-            var taken = home.Fixtures.Where(f => f.Slot is Bed or Furniture).Select(f => f.Cell).ToHashSet();
-            var order = slot == Bed ? cells : Enumerable.Reverse(cells);
-            foreach (var c in order)
-                if (!taken.Contains(c)) return c;
-            return cells[0];
-        }
-        if (slot == Tableware && home.Fixtures.FirstOrDefault(f => f.Slot == Furniture) is { } table)
-        {
-            var tables = home.Fixtures.Where(f => f.Slot == Furniture).ToList();
-            return tables[home.Count(Tableware) % tables.Count].Cell;
-        }
-        int k = home.Count(slot) * 2 + (slot == Decor ? 1 : 0);
-        return cells[k % cells.Count];
-    }
 
     /// <summary>Takes a piece out: broken down for some of its materials (more when little worn), or simply gone if worn out.</summary>
     private void Remove(ColonySim sim, Home? home, Fixture f, bool salvage)
     {
         home?.Fixtures.Remove(f);
+        if (home != null) home.LayoutDirty = true;
         if (!salvage || Catalog.RecipeFor(f.Item) is not { } recipe) return;
         float keep = 0.5f * Math.Clamp(f.Condition, 0, 1) / Math.Max(1, recipe.OutCount);
         foreach (var input in recipe.Inputs)
@@ -317,18 +301,33 @@ public sealed class Housing
             TrimToPlans(sim);
             AssignResidents(sim);
         }
-        if (sim.Tick % Needs.Day != 0) return;
+        if (sim.Tick % Needs.Day == 0)
+        {
+            foreach (var home in _homes)
+                for (int i = home.Fixtures.Count - 1; i >= 0; i--)
+                {
+                    var f = home.Fixtures[i];
+                    f.WearLeft -= Needs.Day;
+                    if (f.WearLeft > 0) continue;
+                    Remove(sim, home, f, salvage: false);
+                    WornOut++;
+                    Version++;
+                }
+            AssignResidents(sim);
+        }
+        ArrangeDirty(sim);
+    }
+
+    /// <summary>Re-arranges homes whose fixtures or floor changed (<see cref="HomeLayout"/>).</summary>
+    private void ArrangeDirty(ColonySim sim)
+    {
         foreach (var home in _homes)
-            for (int i = home.Fixtures.Count - 1; i >= 0; i--)
-            {
-                var f = home.Fixtures[i];
-                f.WearLeft -= Needs.Day;
-                if (f.WearLeft > 0) continue;
-                Remove(sim, home, f, salvage: false);
-                WornOut++;
-                Version++;
-            }
-        AssignResidents(sim);
+        {
+            if (!home.LayoutDirty) continue;
+            home.LayoutDirty = false;
+            home.Layout = HomeLayout.Arrange(home, sim.World);
+            Version++;
+        }
     }
 
     /// <summary>
@@ -352,6 +351,7 @@ public sealed class Housing
                 home = new Home { Room = room, Policy = from?.Policy ?? DefaultPolicy };
             }
             home.Fixtures.Clear();
+            home.LayoutDirty = true; // its floor may have changed
             _homes.Add(home);
         }
         foreach (var (_, f) in fixtures)

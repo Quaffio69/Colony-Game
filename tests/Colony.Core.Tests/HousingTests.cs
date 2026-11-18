@@ -140,6 +140,81 @@ public class HousingTests
         Assert.Equal(6, sim.Housing.Salvaged);
     }
 
+    /// <summary>A walled 6x5 home with a doorway in its south wall, furnished as a house.</summary>
+    private static Home WalledHouse(ColonySim sim, int x0, int y0)
+    {
+        for (int x = x0 - 1; x <= x0 + 6; x++)
+        for (int y = y0 - 1; y <= y0 + 5; y++)
+        {
+            bool edge = x == x0 - 1 || x == x0 + 6 || y == y0 - 1 || y == y0 + 5;
+            if (edge && !(y == y0 - 1 && x == x0 + 2)) sim.World.Set(x, y, 4, TileType.Wall);
+        }
+        var home = PaintHome(sim, x0, y0, x0 + 5, y0 + 4);
+        sim.Housing.SetPolicy(home, Policy(sim, "House"));
+        sim.Step();
+        var plan = Housing.Plan(home);
+        for (int s = 0; s < Housing.SlotCount; s++)
+            if (plan.Count[s] > 0)
+                sim.Housing.Install(sim, home, Catalog.Fixtures[Housing.Slots[s]].First(i => i.Def.FixtureTier == plan.Tier[s]), plan.Count[s]);
+        sim.Step();
+        return home;
+    }
+
+    [Fact]
+    public void AHomesLayout_PutsBedsToWalls_TablesWithChairs_ThingsOnTables_AndKeepsTheDoorClear()
+    {
+        var sim = FlatSim();
+        var home = WalledHouse(sim, 4, 4);
+        var layout = home.Layout;
+        var door = new TilePos(6, 4, 4); // the cell inside the doorway
+        (int X, int Y)[] dir = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+
+        // Every bed: its head against a wall (the side opposite its foot is solid), its foot on the home's floor.
+        var beds = layout.Where(p => p.Role == FixtureRole.Bed).ToList();
+        Assert.Equal(home.Beds, beds.Count);
+        foreach (var b in beds)
+        {
+            var behind = new TilePos(b.Cell.X - dir[b.Facing].X, b.Cell.Y - dir[b.Facing].Y, 4);
+            Assert.True(sim.World.IsSolid(behind.X, behind.Y, behind.Z) || !home.Room.Cells.Contains(behind), $"bed at {b.Cell} has no wall behind it");
+            Assert.Contains(new TilePos(b.Cell.X + dir[b.Facing].X, b.Cell.Y + dir[b.Facing].Y, 4), home.Room.Cells);
+        }
+        // Floor pieces never share a cell (a bed covers its foot cell too), and the way in stays clear.
+        var floor = new List<TilePos>();
+        foreach (var p in layout.Where(p => p.Role is FixtureRole.Bed or FixtureRole.Table or FixtureRole.Chair or FixtureRole.Chest or FixtureRole.Shelf or FixtureRole.Statue or FixtureRole.FloorLamp))
+        {
+            floor.Add(p.Cell);
+            if (p.Role == FixtureRole.Bed) floor.Add(new TilePos(p.Cell.X + dir[p.Facing].X, p.Cell.Y + dir[p.Facing].Y, 4));
+        }
+        Assert.Equal(floor.Count, floor.Distinct().Count());
+        Assert.DoesNotContain(door, floor);
+        // A table with chairs facing it, and the plates are on the table, not on chairs or beds.
+        var tables = layout.Where(p => p.Role == FixtureRole.Table).Select(p => p.Cell).ToHashSet();
+        Assert.NotEmpty(tables);
+        foreach (var chair in layout.Where(p => p.Role == FixtureRole.Chair))
+            Assert.Contains(new TilePos(chair.Cell.X + dir[chair.Facing].X, chair.Cell.Y + dir[chair.Facing].Y, 4), tables);
+        var surfaces = layout.Where(p => p.Role is FixtureRole.Table or FixtureRole.Shelf or FixtureRole.Chest).Select(p => p.Cell).ToHashSet();
+        Assert.All(layout.Where(p => p.Role == FixtureRole.Tableware), p => Assert.Contains(p.Cell, surfaces));
+        // Comfortable lanterns hang on walls, apart from each other.
+        var lamps = layout.Where(p => p.Role == FixtureRole.WallLamp).ToList();
+        Assert.Equal(home.Count(Housing.Lighting), lamps.Count);
+        for (int i = 0; i < lamps.Count; i++)
+        for (int j = i + 1; j < lamps.Count; j++)
+            Assert.True(Math.Abs(lamps[i].Cell.X - lamps[j].Cell.X) + Math.Abs(lamps[i].Cell.Y - lamps[j].Cell.Y) >= 2, "lamps bunched together");
+        // The residents sleep in the beds.
+        Assert.All(home.Fixtures.Where(f => f.Slot == Housing.Bed), f => Assert.Contains(f.Cell, beds.Select(b => b.Cell)));
+    }
+
+    [Fact]
+    public void IdenticalHomes_AreArrangedDifferently_ButEachTheSameWayEveryTime()
+    {
+        var sim = FlatSim();
+        var a = WalledHouse(sim, 2, 2);
+        var b = WalledHouse(sim, 2, 14);
+        static IEnumerable<string> Shape(Home h, int y0) => h.Layout.Select(p => $"{p.Role}@{p.Cell.X},{p.Cell.Y - y0},{p.Facing}").Order();
+        Assert.NotEqual(Shape(a, 2), Shape(b, 14));
+        Assert.Equal(Shape(a, 2), HomeLayout.Arrange(a, sim.World).Select(p => $"{p.Role}@{p.Cell.X},{p.Cell.Y - 2},{p.Facing}").Order());
+    }
+
     [Fact]
     public void ABetterHome_DrawsTheMostEducatedOutOfTheDormitory()
     {
