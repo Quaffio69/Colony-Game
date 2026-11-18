@@ -161,11 +161,12 @@ public sealed class JobBoard
     /// proceeds top-down.
     /// </summary>
     public List<Job> Candidates(int component, TilePos from, Designations designations, int max,
-        IReadOnlySet<TilePos>? exclude = null)
+        IReadOnlySet<TilePos>? exclude = null, int kinds = -1)
     {
         var best = new List<(long Key, Job Job)>(max + 1);
         foreach (var job in _jobs)
         {
+            if ((kinds & (1 << (int)job.Kind)) == 0) continue; // a kind of work this colonist isn't looking for now
             if (Array.IndexOf(job.Components, component) < 0) continue;
             if (!designations.Contains(job.Target) || designations.IsClaimed(job.Target)) continue; // board may lag a tick
             if (exclude != null && exclude.Contains(job.Target)) continue;

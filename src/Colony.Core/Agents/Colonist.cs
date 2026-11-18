@@ -11,8 +11,16 @@ public enum ColonistState { Idle, Moving, Working }
 /// <summary>What a colonist is doing beyond walking: a designation, one leg of a haul trip, factory work, or a meal.</summary>
 public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver }
 
-/// <summary>Kinds of work, in the order a colonist prefers them (see <see cref="Colonist.Labors"/>).</summary>
+/// <summary>Broad kinds of work a colonist may prefer (see <see cref="Colonist.Labors"/>); each covers some <see cref="Work"/> types.</summary>
 public enum Labor { Designations, Hauling, Industry }
+
+/// <summary>
+/// Work types a colonist can be set to (see <see cref="Colonist.Priority"/>), in the column order of the work grid.
+/// Mining = dig and stairs; Woodcutting = felling; Farming = sowing and harvesting plots and gathering wild plants;
+/// Construction = building blueprints (parts, walls, floors, roofs, wheels); Hauling = stockpiles, factory crates,
+/// building materials and home fixtures; Industry = running factory machines (and the Academy).
+/// </summary>
+public enum Work : byte { Mining, Woodcutting, Farming, Construction, Hauling, Industry }
 
 /// <summary>
 /// A colony member. When idle it looks for work in its own connectivity component (so unreachable work never
@@ -87,8 +95,8 @@ public sealed class Colonist
     public int CarryingCount { get; private set; }
 
     /// <summary>
-    /// Work kinds in preference order: its <see cref="PreferredWork"/> first, then the others (everyone falls back on
-    /// them); real job priorities will build on this.
+    /// Broad work kinds in preference order: its <see cref="PreferredWork"/> first, then the others. Breaks ties between
+    /// work types set to the same <see cref="Priority"/>.
     /// </summary>
     public Labor[] Labors => PreferredWork switch
     {
@@ -119,7 +127,59 @@ public sealed class Colonist
         LikedMaterial = Pick(Materials, id, 2);
         LikedArt = Pick(Catalog.Fixtures["decor"].Where(i => i.Def.FixtureTier >= 2).ToList(), id, 3);
         PreferredWork = (id % 3) switch { 0 => Labor.Designations, 1 => Labor.Industry, _ => Labor.Hauling };
+        for (int w = 0; w < WorkTypes; w++) _priority[w] = LaborOf((Work)w) == PreferredWork ? (byte)2 : (byte)3;
     }
+
+    // ---- Work priorities ----------------------------------------------------------------------------------
+    // RimWorld/DF-style: each work type is off (0) or 1 (first) to 4 (last). An idle colonist looks for work of
+    // priority 1, then 2...; work types of the same priority are tried in its Labors order, and the designation
+    // kinds among them (dig, chop, farm) are searched together, nearest first. New colonists get 2 for the kind
+    // of work they prefer and 3 for the rest. Children don't work whatever is set.
+
+    public const int WorkTypes = 6;
+    public const int LowestPriority = 4;
+    public static readonly string[] WorkNames = ["Mining", "Woodcutting", "Farming", "Construction", "Hauling", "Industry"];
+    private readonly byte[] _priority = new byte[WorkTypes];
+
+    /// <summary>0 = never does it; 1 = does it first ... 4 = last.</summary>
+    public int Priority(Work work) => _priority[(int)work];
+
+    /// <summary>Sets a work type's priority (clamped to 0..4). Takes effect at its next search for work; the job in hand is finished.</summary>
+    public void SetPriority(Work work, int priority)
+    {
+        _priority[(int)work] = (byte)Math.Clamp(priority, 0, LowestPriority);
+        _searchedDesignations = -1; // look again with the new priorities
+        _retryDelay = 0;
+    }
+
+    /// <summary>Whether it will do this work at all.</summary>
+    public bool Does(Work work) => _priority[(int)work] > 0 && !IsChild;
+
+    public static Labor LaborOf(Work work) => work switch
+    {
+        Work.Hauling => Labor.Hauling,
+        Work.Industry => Labor.Industry,
+        _ => Labor.Designations,
+    };
+
+    /// <summary>The work type a designation kind belongs to.</summary>
+    public static Work WorkOf(DesignationKind kind) => kind switch
+    {
+        DesignationKind.Chop => Work.Woodcutting,
+        DesignationKind.Gather or DesignationKind.Sow => Work.Farming,
+        _ => Work.Mining,
+    };
+
+    /// <summary>The work type of what it is doing now (null when idle, eating or sleeping).</summary>
+    public Work? CurrentWork => Task switch
+    {
+        ColonistTask.Designation => WorkOf(_jobKind),
+        ColonistTask.Build => Work.Construction,
+        ColonistTask.CraftFetch or ColonistTask.CraftWork or ColonistTask.CraftStore => Work.Industry,
+        ColonistTask.HaulPickup or ColonistTask.HaulDeliver or ColonistTask.FurnishPickup or ColonistTask.FurnishDeliver => Work.Hauling,
+        _ => null,
+    };
+    private DesignationKind _jobKind;
 
     // ---- Hunger ------------------------------------------------------------------------------------------
 
@@ -578,14 +638,27 @@ public sealed class Colonist
         int component = sim.Connectivity.ComponentOf(Position);
         if (component < 0) return;
 
+        for (int priority = 1; priority <= LowestPriority && !_deferred; priority++)
         foreach (var labor in Labors)
         {
-            bool found = labor switch
+            bool found = false;
+            switch (labor)
             {
-                Labor.Designations => TryTakeJob(sim, component) || (!_deferred && TryBuild(sim, component)),
-                Labor.Hauling => TryHaul(sim, component) || (!_deferred && TryFurnish(sim, component)),
-                _ => TryCraft(sim, component),
-            };
+                case Labor.Designations:
+                    int kinds = 0; // designation kinds at this priority, searched together nearest first
+                    for (int k = 0; k <= (int)DesignationKind.Sow; k++)
+                        if (_priority[(int)WorkOf((DesignationKind)k)] == priority) kinds |= 1 << k;
+                    found = kinds != 0 && TryTakeJob(sim, component, kinds);
+                    if (!found && !_deferred && _priority[(int)Work.Construction] == priority) found = TryBuild(sim, component);
+                    break;
+                case Labor.Hauling:
+                    if (_priority[(int)Work.Hauling] == priority)
+                        found = TryHaul(sim, component) || (!_deferred && TryFurnish(sim, component));
+                    break;
+                default:
+                    if (_priority[(int)Work.Industry] == priority) found = TryCraft(sim, component);
+                    break;
+            }
             if (found) return;
             if (_deferred) break;
         }
@@ -600,10 +673,10 @@ public sealed class Colonist
         _retryDelay = 5;
     }
 
-    private bool TryTakeJob(ColonySim sim, int component)
+    private bool TryTakeJob(ColonySim sim, int component, int kinds)
     {
         var orders = sim.Designations;
-        foreach (var job in sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed))
+        foreach (var job in sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed, kinds))
         {
             if (sim.PathBudgetExhausted)
             {
@@ -622,6 +695,7 @@ public sealed class Colonist
             }
             if (!orders.Claim(job.Target, Id)) continue;
 
+            _jobKind = job.Kind;
             Begin(ColonistTask.Designation, job.Target, path);
             return true;
         }

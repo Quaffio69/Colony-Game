@@ -127,6 +127,9 @@ public partial class Main : Node3D
         _housingMenu = new HousingMenu { Name = "HousingMenu" };
         ui.AddChild(_housingMenu);
         _housingMenu.Initialize(_sim);
+        _workMenu = new WorkMenu { Name = "WorkMenu" };
+        ui.AddChild(_workMenu);
+        _workMenu.Initialize(_sim);
         _testMenu = new TestMenu { Name = "TestMenu" };
         ui.AddChild(_testMenu);
         _testMenu.Initialize(this);
@@ -143,6 +146,7 @@ public partial class Main : Node3D
     private TestResult? _test; // the test whose world this is, if any
     private TestMenu _testMenu = null!;
     private HousingMenu _housingMenu = null!;
+    private WorkMenu _workMenu = null!;
 
     public bool InTestWorld => _test != null;
     public bool CanRunDemos => _test == null && _sim.Colonists.Count > 0 && _sim.Terrain != null;
@@ -210,6 +214,8 @@ public partial class Main : Node3D
             case Key.C when !key.Echo: if (_test != null) FocusOnTestWorld(); else FocusOnColony(); break;
             case Key.T when !key.Echo: _testMenu.Toggle(); break;
             case Key.H when !key.Echo: _housingMenu.Toggle(); break;
+            case Key.J when !key.Echo: _workMenu.Toggle(); break;
+            case Key.Escape when _workMenu.Visible: _workMenu.Toggle(); GetViewport().SetInputAsHandled(); break;
             case Key.Escape when _housingMenu.Visible: _housingMenu.Toggle(); GetViewport().SetInputAsHandled(); break;
             case Key.Escape when _testMenu.Visible: _testMenu.Toggle(); GetViewport().SetInputAsHandled(); break;
         }
@@ -313,7 +319,7 @@ public partial class Main : Node3D
         sb.AppendLine("F/Shift+F over a machine: change its recipe   LMB: start/confirm box or place   RMB: remove box");
         sb.AppendLine("Z/X while selecting: span levels");
         sb.AppendLine("Z/X: level down/up   Space: pause   1/2/3: speed   Enter: (debug) complete all");
-        sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists   H: housing   T: tests and demos");
+        sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists   H: housing   J: work   T: tests and demos");
         // StringBuilder uses \r\n on Windows, which Label renders as an extra blank line.
         _hud.Text = sb.ToString().Replace("\r", "").TrimEnd();
     }
@@ -467,7 +473,9 @@ public partial class Main : Node3D
         {
             _firstFrameMs = Time.GetTicksMsec();
             if (int.TryParse(Arg("--level"), out int level)) _world.ViewLevel = level;
-            if (Arg("--test-menu") != null) _testMenu.Toggle();            // World-editing flags apply once, to the first world (not again when the test menu reloads the scene).
+            if (Arg("--test-menu") != null) _testMenu.Toggle();
+            if (Arg("--work-menu") != null) _workMenu.Toggle();
+            // World-editing flags apply once, to the first world (not again when the test menu reloads the scene).
             if (!s_devArgsDone)
             {
                 s_devArgsDone = true;

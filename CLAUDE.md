@@ -106,7 +106,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   leaves logs scaled by tree size (`ColonySim.MiningYield`/`LogYield`). Piles re-settle when their ground changes (digs,
   cave-ins). `Stockpiles` are zoned floor cells (all types for now); `Hauling.Plans` pairs the nearest loose
   piles with the nearest stockpile cell with room (linear scans; spatial index is the scale-up path).
-  Colonists with `Id % 3 == 2` prefer hauling until job priorities exist.
+  Who hauls is set by work priorities (see Work priorities).
 - **Production tree is data (`data/tech-tree.json`, embedded in Core, loaded by `Industry.Catalog`):** items
   (stack/carry sizes, pile model, colour), 12 broad DF-style workshops (`RoomType`), their 32 stations
   (`PartType`s with role Machine; build material by size) and 71 recipes (multi-input `Ingredient`s, output
@@ -143,7 +143,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   `BuildTicks`, consumes them. Station costs come from the catalog by size (size 1 is always buildable
   before that station exists: logs or stone for the first ones); tools/lanterns/crates cost logs then planks. Cancelled blueprints leave their materials as loose piles. `Rooms.InstantBuild`
   is the sandbox/test switch. Internals are deliberately not an optimisation puzzle. Parts don't block movement.
-  Labor preference rotates by colonist id (designations / industry / hauling first) until job priorities.
+  Who builds and who runs machines is set by work priorities (see Work priorities).
 - **Movement:** agents are 1 tile tall and occupy an open cell; standable = solid floor below, or the cell is
   itself a stair. Walk 8-way (no corner cutting); climb/drop exactly one level onto an orthogonal neighbour
   through plain air above the lower end (raw climbs slow, cheap if either end is a stair cell). Legality
@@ -311,6 +311,14 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   families stay together. Settlers outpace home growth (40-day bench: ~50 settlers vs ~18 births, 5 weddings);
   `Society.SettlersCome` switches settlers off (tests). Installed fixtures' lifespans vary ±20% so they don't all
   wear out on one day. Bench: `-- families [days]`.
+- **Work priorities (`Colonist.Priority`/`SetPriority`, `Work`):** six work types (Mining = dig/stairs, Woodcutting,
+  Farming = sow/harvest/gather, Construction, Hauling incl. furnishing, Industry incl. the Academy), each off (0) or
+  1 (first) to 4 (last), RimWorld-style. `FindWork` tries priority 1, then 2...; at one priority the broad `Labors`
+  order (its `PreferredWork` first) breaks ties, and designation kinds of that priority are one nearest-first
+  `JobBoard.Candidates` search (kind mask). Defaults: 2 for work in its preferred `Labor`, 3 otherwise (same order as
+  before priorities existed). Changing one takes effect at the next search; the job in hand is finished.
+  `CurrentWork` names what it is doing. UI: J opens the grid (`WorkMenu`; left click 1-2-3-4-off, right click back,
+  headings set a column). Later: job-indicative clothing and titles by proficiency once colonist pages/skills exist.
 - **Likes (`Colonist`):** fixed per colonist from its id: `FavoriteFood` (walks up to 8 tiles further for it; a treat
   counts for a day), `LikedMaterial` (fixture `material` in its home: wood, stone, metal, glass, cloth, clay),
   `LikedArt` (tapestry/painting/sculpture at home), `PreferredWork` (its `Labors` order; met when most of a day's
@@ -337,6 +345,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   food and settlers over game days with no player)
   (prints per-phase totals, slow-tick breakdowns and GC counts; the render bench prints a startup breakdown).
 - VS Code: F5 "Play Game" or "Open Godot Editor" (see `.vscode/launch.json`).
+- **Work grid (J):** `--work-menu` opens it at start (for screenshots).
 - **In-game test menu (T):** every xUnit test, run inside the game (`TestRunner`: the test DLL from
   `tests/Colony.Core.Tests/bin/Debug` loaded from bytes into its own load context sharing the game's Colony.Core;
   "Reload tests" picks up a rebuild). "Run" opens the first `ColonySim` the test built, at its end; "Watch" stops it
@@ -365,7 +374,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       `ColonySim.Terrain`) record intended water depth per column for the water milestone. Ore is
       clustered deposits, richer with depth. Spawn prefers flat land near the centre with high ground and
       a river nearby.
-- [ ] Ideas: job priorities; cave-in damage/injury once health exists; material-strength spans
+- [ ] Ideas: cave-in damage/injury once health exists; material-strength spans
       (overhang limits per material) as a later twist on pure connectivity support.
 - [x] Water: shallow-water flow over column spans (smooth surfaces, caves and tunnels too), parallel
       deterministic two-pass steps on awake blocks, generated rivers/lakes settled at load, springs by catchment,
@@ -400,6 +409,6 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       education, mood -> work speed, gentle departures, settlers by food, mood and free beds; procedural home
       layouts; likes (food, material, art, work); thin walls, doors, windows, floors, roofs (materials, dams, shell
       quality, wall lines); families (weddings, births, children, homes per family). Next:
-      job priorities, schooling children, health beyond consumption, settler couples, old age.
+      schooling children, health beyond consumption, settler couples, old age.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.
