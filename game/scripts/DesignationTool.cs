@@ -36,7 +36,7 @@ public partial class DesignationTool : Node3D
         // Orders
         Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, Wall,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
-        Room, Part, Structure, Outline, Edge,
+        Room, Part, Structure, Outline, Edge, WallLine, Floor, Roof,
     }
 
     private const ToolMode LastOrder = ToolMode.Wall;
@@ -88,6 +88,10 @@ public partial class DesignationTool : Node3D
     public StructureKind EdgePiece { get; private set; } = StructureKind.EdgeWall;
     public int WallMaterial { get; private set; } = 2;
     private (TilePos Cell, int Side)? _hoverEdge;
+    private (TilePos Cell, int Side) _lineStart, _lineEnd; // a wall line being dragged (WallLine)
+    /// <summary>Floor and roof material for the Floor and Roof box tools.</summary>
+    public int FloorMaterial { get; private set; } = 1;
+    public int RoofMaterial { get; private set; } = 1;
     private readonly List<Button> _materialButtons = new();
     public TilePos? Hovered { get; private set; }
     public string? LastAction { get; private set; }
@@ -107,6 +111,9 @@ public partial class DesignationTool : Node3D
         string mat = WallMaterials.All[WallMaterial].Name.ToLowerInvariant();
         if (m == ToolMode.Outline) return $"Build: {mat} walls round a box (drag over the floor; RMB box clears walls)";
         if (m == ToolMode.Edge) return $"Build: {Constructions.Name(EdgePiece).ToLowerInvariant()} ({mat}) on the cell edge under the cursor; RMB removes";
+        if (m == ToolMode.WallLine) return $"Build: a line of {Constructions.Name(EdgePiece).ToLowerInvariant()}s ({mat}): click an edge, drag along it, click; RMB drag removes";
+        if (m == ToolMode.Floor) return $"Build: {FloorMaterials.All[FloorMaterial].Name.ToLowerInvariant()} over a box of floor (RMB box takes floors up)";
+        if (m == ToolMode.Roof) return $"Build: {RoofMaterials.All[RoofMaterial].Name.ToLowerInvariant()} roof over a box of floor (RMB box takes roofs down)";
         return m == ToolMode.Room ? $"Build: {Workshop.Name} room" : BaseModeName(m);
     }
 
@@ -309,7 +316,7 @@ public partial class DesignationTool : Node3D
         box.AddChild(edgeTools);
         void EdgeButton(string text, string tip, Action pick)
         {
-            var b = new Button { Text = text, TooltipText = tip, CustomMinimumSize = new Vector2(86, 0) };
+            var b = new Button { Text = text, TooltipText = tip, CustomMinimumSize = new Vector2(70, 0) };
             b.Pressed += pick;
             edgeTools.AddChild(b);
         }
@@ -330,6 +337,36 @@ public partial class DesignationTool : Node3D
             _materialButtons.Add(b);
         }
         SelectWallMaterial(WallMaterial);
+        EdgeButton("Line", "A line of walls (or doors or windows: the last piece picked): click an edge, drag along it, click", () => SelectEdgeTool(ToolMode.WallLine, EdgePiece));
+
+        // Floors and roofs: each button picks the box tool with that material.
+        HBoxContainer CoverRow(string title)
+        {
+            var row = new HBoxContainer();
+            row.AddChild(new Label { Text = title, CustomMinimumSize = new Vector2(52, 0) });
+            box.AddChild(row);
+            return row;
+        }
+        var floorRow = CoverRow("Floors");
+        for (int i = 1; i < FloorMaterials.Count; i++)
+        {
+            int m = i;
+            var (name, item, tier, color) = FloorMaterials.All[i];
+            var b = new Button { Text = name.Replace(" floor", ""), TooltipText = $"{name}: 1 {Catalog.Item(item).Name.ToLowerInvariant()} a cell, {Catalog.FixtureTiers[tier]} (drag a box over the floor)" };
+            b.AddThemeColorOverride("font_color", Rgb(color).Lightened(0.3f));
+            b.Pressed += () => { FloorMaterial = m; Mode = ToolMode.Floor; EndSelection(); };
+            floorRow.AddChild(b);
+        }
+        var roofRow = CoverRow("Roofs");
+        for (int i = 1; i < RoofMaterials.Count; i++)
+        {
+            int m = i;
+            var (name, item, tier, color) = RoofMaterials.All[i];
+            var b = new Button { Text = name, TooltipText = $"{name} roof: 1 {Catalog.Item(item).Name.ToLowerInvariant()} a cell, {Catalog.FixtureTiers[tier]} (drag a box over the floor it covers)" };
+            b.AddThemeColorOverride("font_color", Rgb(color).Lightened(0.35f));
+            b.Pressed += () => { RoofMaterial = m; Mode = ToolMode.Roof; EndSelection(); };
+            roofRow.AddChild(b);
+        }
         SelectWorkshop(Workshop, enterMode: false);
     }
 
@@ -366,6 +403,44 @@ public partial class DesignationTool : Node3D
         LastAction = bp is not null
             ? $"Planned a {name}: needs {bp.Cost.Count} {bp.Cost.Material.Name.ToLowerInvariant()} and a builder"
             : $"Can't place a {name}: {_sim.Constructions.CanPlaceEdge(EdgePiece, edge.Cell, edge.Side)}";
+    }
+
+    /// <summary>The edges of the wall line being dragged: along the start edge's direction, to where the mouse is.</summary>
+    private IEnumerable<(TilePos Cell, int Side)> LineEdges()
+    {
+        var (start, side) = _lineStart;
+        if (side == EdgeInfo.East)
+            for (int y = Math.Min(start.Y, _cornerY); y <= Math.Max(start.Y, _cornerY); y++) yield return (start with { Y = y }, side);
+        else
+            for (int x = Math.Min(start.X, _cornerX); x <= Math.Max(start.X, _cornerX); x++) yield return (start with { X = x }, side);
+    }
+
+    /// <summary>Shows the wall line being dragged as a thin box along its edges.</summary>
+    private void UpdateLine()
+    {
+        var (start, side) = _lineStart;
+        int lo = side == EdgeInfo.East ? Math.Min(start.Y, _cornerY) : Math.Min(start.X, _cornerX);
+        int hi = side == EdgeInfo.East ? Math.Max(start.Y, _cornerY) : Math.Max(start.X, _cornerX);
+        float len = hi - lo + 1, mid = (lo + hi + 1) / 2f;
+        _box.Position = side == EdgeInfo.East ? new Vector3(start.X + 1, start.Z + 0.5f, mid) : new Vector3(mid, start.Z + 0.5f, start.Y + 1);
+        _box.Scale = side == EdgeInfo.East ? new Vector3(0.2f, 1.05f, len) : new Vector3(len, 1.05f, 0.2f);
+        _box.MaterialOverride = _selection == Selection.Cancel ? _cancelMat : _ghostOk;
+        _box.Visible = true;
+    }
+
+    private void ApplyLine()
+    {
+        int done = 0;
+        foreach (var edge in LineEdges().ToList())
+        {
+            if (_selection == Selection.Cancel)
+            {
+                if (_sim.Constructions.CancelEdge(edge.Cell, edge.Side) || _sim.Constructions.Demolish(edge.Cell, edge.Side, _sim.Items)) done++;
+            }
+            else if (_sim.Constructions.PlaceEdge(EdgePiece, edge.Cell, edge.Side, WallMaterial) is not null) done++;
+        }
+        string name = Constructions.Name(EdgePiece).ToLowerInvariant();
+        LastAction = _selection == Selection.Cancel ? $"Removed {done} wall pieces along the line" : $"Planned {done} {name}s along the line";
     }
 
     /// <summary>Cancels planned and takes down built walls, doors and windows on every edge in or round the box.</summary>
@@ -490,7 +565,7 @@ public partial class DesignationTool : Node3D
         if (Hovered is { } h)
             _cursor.Position = SimSpace.TileCenter(IsAreaTool(Mode) && SurfaceAt(h.X, h.Y) is >= 0 and var s ? h with { Z = s } : h);
         UpdateGhost(placing);
-        _hoverEdge = Mode == ToolMode.Edge && _selection == Selection.None ? EdgeUnderMouse(origin, dir) : null;
+        _hoverEdge = Mode is ToolMode.Edge or ToolMode.WallLine && _selection == Selection.None ? EdgeUnderMouse(origin, dir) : null;
         if (_hoverEdge is { } he)
         {
             var (cell, side) = he;
@@ -532,6 +607,19 @@ public partial class DesignationTool : Node3D
 
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right } when _selection == Selection.Designate:
                 EndSelection();
+                Handled();
+                break;
+
+            // A wall line: click an edge to start it; then the free end follows the mouse along it (see UpdateLine).
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left or MouseButton.Right } lb when Mode == ToolMode.WallLine && _selection == Selection.None:
+                if (_hoverEdge is { } first)
+                {
+                    _selection = lb.ButtonIndex == MouseButton.Left ? Selection.Designate : Selection.Cancel;
+                    _lineStart = _lineEnd = first;
+                    _anchor = first.Cell.Offset(0, 0, -1);
+                    (_cornerX, _cornerY, _cornerZ) = (_anchor.X, _anchor.Y, _anchor.Z);
+                    UpdateBox();
+                }
                 Handled();
                 break;
 
@@ -690,6 +778,23 @@ public partial class DesignationTool : Node3D
     {
         var d = _sim.Designations;
         var (a, b) = Corners();
+        if (Mode == ToolMode.WallLine)
+        {
+            ApplyLine();
+            EndSelection();
+            return;
+        }
+        if (Mode is ToolMode.Floor or ToolMode.Roof)
+        {
+            var kind = Mode == ToolMode.Floor ? StructureKind.Floor : StructureKind.Roof;
+            int material = Mode == ToolMode.Floor ? FloorMaterial : RoofMaterial;
+            string what = Mode == ToolMode.Floor ? FloorMaterials.All[material].Name.ToLowerInvariant() : RoofMaterials.All[material].Name.ToLowerInvariant() + " roof";
+            LastAction = _selection == Selection.Cancel
+                ? $"Took up {_sim.Constructions.ClearCoverBox(kind, a, b, _sim.Items)} {(Mode == ToolMode.Floor ? "floor" : "roof")} cells"
+                : $"Planned {_sim.Constructions.PlaceCoverBox(kind, a, b, material)} cells of {what} ({Constructions.Cost(kind, material).Count} {Constructions.Cost(kind, material).Material.Name.ToLowerInvariant()} each)";
+            EndSelection();
+            return;
+        }
         if (_selection == Selection.Cancel)
         {
             if (Mode == ToolMode.Outline)
@@ -812,6 +917,11 @@ public partial class DesignationTool : Node3D
 
     private void UpdateBox()
     {
+        if (Mode == ToolMode.WallLine)
+        {
+            UpdateLine();
+            return;
+        }
         if (IsAreaTool(Mode))
         {
             UpdateDrape();

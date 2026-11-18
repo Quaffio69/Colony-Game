@@ -120,9 +120,9 @@ public partial class HomeView : Node3D
                 if (tier >= 3)
                 {
                     foreach (var (x, z) in new[] { (-0.42f, -0.42f), (0.42f, -0.42f), (-0.42f, 1.42f), (0.42f, 1.42f) })
-                        p.Add(Cyl(0.035f, 1.6f, 6), x, 0.8f, z, wood);
-                    p.Add(Box(0.92f, 0.03f, 1.92f), 0, 1.6f, 0.5f, c);               // canopy
-                    p.Add(Box(0.92f, 0.5f, 0.02f), 0, 1.35f, -0.45f, c);
+                        p.Add(Cyl(0.035f, 0.92f, 6), x, 0.46f, z, wood); // under the ceiling: a level is one tile
+                    p.Add(Box(0.92f, 0.03f, 1.92f), 0, 0.93f, 0.5f, c);              // canopy
+                    p.Add(Box(0.92f, 0.3f, 0.02f), 0, 0.78f, -0.45f, c);
                 }
                 break;
             case FixtureRole.Table:
@@ -150,9 +150,9 @@ public partial class HomeView : Node3D
                 p.Add(Box(0.08f, 0.1f, 0.02f), 0, 0.3f, -0.03f, _metal);
                 break;
             case FixtureRole.Shelf:
-                foreach (float x in new[] { -0.38f, 0.38f }) p.Add(Box(0.05f, 1.3f, 0.3f), x, 0.65f, -0.33f, wood);
-                for (int i = 0; i < 4; i++) p.Add(Box(0.8f, 0.04f, 0.3f), 0, 0.05f + i * 0.4f, -0.33f, wood);
-                for (int i = 0; i < 5; i++) p.Add(Box(0.07f, 0.24f, 0.2f), -0.25f + i * 0.09f, 0.57f, -0.35f, i % 2 == 0 ? c : _paper);
+                foreach (float x in new[] { -0.38f, 0.38f }) p.Add(Box(0.05f, 0.94f, 0.3f), x, 0.47f, -0.33f, wood);
+                for (int i = 0; i < 4; i++) p.Add(Box(0.8f, 0.04f, 0.3f), 0, 0.05f + i * 0.29f, -0.33f, wood);
+                for (int i = 0; i < 5; i++) p.Add(Box(0.07f, 0.22f, 0.2f), -0.25f + i * 0.09f, 0.45f, -0.35f, i % 2 == 0 ? c : _paper);
                 break;
             case FixtureRole.Tableware:
                 if (tier <= 1)
@@ -175,8 +175,8 @@ public partial class HomeView : Node3D
                 break;
             case FixtureRole.FloorLamp:
                 p.Add(Cyl(0.13f, 0.04f, 10), 0, 0.02f, 0, c);
-                p.Add(Cyl(0.025f, 1.2f, 6), 0, 0.62f, 0, _brass);
-                p.Add(Ball(0.11f), 0, 1.3f, 0, Mat(Rgb(item.Def.Color), 1.4f));
+                p.Add(Cyl(0.025f, 0.78f, 6), 0, 0.41f, 0, _brass);
+                p.Add(Ball(0.1f), 0, 0.86f, 0, Mat(Rgb(item.Def.Color), 1.4f));
                 break;
             case FixtureRole.Rug:
                 p.Add(Box(0.95f, 0.012f, 1.35f), 0, 0.006f, 0, c);

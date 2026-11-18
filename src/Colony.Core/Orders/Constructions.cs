@@ -20,6 +20,10 @@ public enum StructureKind : byte
     Door,
     /// <summary>A window on a cell edge: lets in light, stops walkers and water.</summary>
     Window,
+    /// <summary>A floor laid over a cell's ground (plank, flagstone, tiles).</summary>
+    Floor,
+    /// <summary>A roof over a cell (thatch, shingle, slate, clay tile).</summary>
+    Roof,
 }
 
 /// <summary>A structure waiting for its material and a builder.</summary>
@@ -37,6 +41,7 @@ public sealed class Blueprint
     /// <summary>Wall material (<see cref="WallMaterials"/>) of an edge piece: what a wall costs, how any piece looks.</summary>
     public int Material { get; init; }
     public bool IsEdge => Side >= 0;
+    public bool IsCover => Kind is StructureKind.Floor or StructureKind.Roof;
     /// <summary>Colonist building it (-1 = nobody).</summary>
     public int BuilderId { get; internal set; } = -1;
     public bool Removed { get; internal set; }
@@ -71,13 +76,17 @@ public sealed class Constructions
         StructureKind.Pump => new BuildCost(ItemType.Plank, 8),
         StructureKind.EdgeWall => new BuildCost(Catalog.Item(WallMaterials.All[WallMaterials.Clamp(material)].Item), 1),
         StructureKind.Door => new BuildCost(ItemType.Plank, 2),
-        _ => new BuildCost(Catalog.Item("glass"), 1),
+        StructureKind.Window => new BuildCost(Catalog.Item("glass"), 1),
+        StructureKind.Floor => new BuildCost(Catalog.Item(FloorMaterials.All[Math.Clamp(material, 1, FloorMaterials.Count - 1)].Item), 1),
+        _ => new BuildCost(Catalog.Item(RoofMaterials.All[Math.Clamp(material, 1, RoofMaterials.Count - 1)].Item), 1),
     };
 
     public static int BuildTicks(StructureKind kind) => kind switch
     {
         StructureKind.Wall => 50,
         StructureKind.EdgeWall => 40,
+        StructureKind.Floor => 30,
+        StructureKind.Roof => 45,
         StructureKind.Door or StructureKind.Window => 80,
         _ => 120,
     };
@@ -89,6 +98,8 @@ public sealed class Constructions
         StructureKind.Pump => "Pump",
         StructureKind.EdgeWall => "Thin wall",
         StructureKind.Door => "Door",
+        StructureKind.Floor => "Floor",
+        StructureKind.Roof => "Roof",
         _ => "Window",
     };
 
@@ -138,6 +149,7 @@ public sealed class Constructions
         if (CanPlaceEdge(kind, cell, side) is not null) return null;
         var bp = new Blueprint { Cell = SiteOf(cell, side)!.Value, Kind = kind, EdgeCell = cell, Side = side, Material = WallMaterials.Clamp(material) };
         _byEdge[(cell, side)] = bp;
+        AddSite(bp);
         _order.Add(bp);
         Version++;
         return bp;
@@ -161,6 +173,84 @@ public sealed class Constructions
             if (PlaceEdge(kind, new TilePos(x0 - 1, y, z), EdgeInfo.East, material) is not null) n++;  // west side
             if (PlaceEdge(kind, new TilePos(x1, y, z), EdgeInfo.East, material) is not null) n++;      // east side
         }
+        return n;
+    }
+
+    // ---- Floors and roofs ------------------------------------------------------------------------------
+
+    private readonly Dictionary<(TilePos, bool Roof), Blueprint> _byCover = new();
+    /// <summary>Edge and cover pieces by the cell their materials are brought to (several may share one).</summary>
+    private readonly Dictionary<TilePos, List<Blueprint>> _bySite = new();
+
+    private void AddSite(Blueprint bp)
+    {
+        if (!_bySite.TryGetValue(bp.Cell, out var list)) _bySite[bp.Cell] = list = new List<Blueprint>();
+        list.Add(bp);
+    }
+
+    public Blueprint? CoverAt(TilePos cell, bool roof) => _byCover.GetValueOrDefault((cell, roof));
+
+    /// <summary>Why a floor or roof of this material can't go on this cell, or null if it can.</summary>
+    public string? CanPlaceCover(StructureKind kind, TilePos cell, int material)
+    {
+        bool roof = kind == StructureKind.Roof;
+        if (kind is not (StructureKind.Floor or StructureKind.Roof)) return "not a floor or roof";
+        if (material < 1 || material >= (roof ? RoofMaterials.Count : FloorMaterials.Count)) return "no such material";
+        if (!_world.InBounds(cell) || cell.Z <= 0) return "outside the world";
+        if (!Movement.IsStandable(_world, cell)) return "needs floor to stand on";
+        if (!roof && TileInfo.IsStair(_world.Get(cell))) return "there are stairs here";
+        if (roof && (!_world.InBounds(cell.Offset(0, 0, 1)) || TileInfo.IsSolid(_world.Get(cell.Offset(0, 0, 1))))) return "already under rock";
+        if (_byCover.ContainsKey((cell, roof))) return "already planned";
+        if ((roof ? _world.RoofAt(cell) : _world.FloorAt(cell)) == material) return roof ? "already roofed so" : "already floored so";
+        return null;
+    }
+
+    public Blueprint? PlaceCover(StructureKind kind, TilePos cell, int material)
+    {
+        if (CanPlaceCover(kind, cell, material) is not null) return null;
+        var bp = new Blueprint { Cell = cell, Kind = kind, Material = material };
+        _byCover[(cell, kind == StructureKind.Roof)] = bp;
+        AddSite(bp);
+        _order.Add(bp);
+        Version++;
+        return bp;
+    }
+
+    /// <summary>Floors (or roofs) over every floor cell in a box between ground tiles, like painting a room. Returns how many.</summary>
+    public int PlaceCoverBox(StructureKind kind, TilePos a, TilePos b, int material)
+    {
+        int n = 0;
+        for (int z = Math.Min(a.Z, b.Z) + 1; z <= Math.Max(a.Z, b.Z) + 1; z++)
+        for (int y = Math.Min(a.Y, b.Y); y <= Math.Max(a.Y, b.Y); y++)
+        for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
+            if (PlaceCover(kind, new TilePos(x, y, z), material) is not null) n++;
+        return n;
+    }
+
+    /// <summary>Takes up floors or roofs (planned or built) on the floor cells of a box, refunding built ones. Returns how many.</summary>
+    public int ClearCoverBox(StructureKind kind, TilePos a, TilePos b, ItemPiles items)
+    {
+        bool roof = kind == StructureKind.Roof;
+        int n = 0;
+        for (int z = Math.Min(a.Z, b.Z) + 1; z <= Math.Max(a.Z, b.Z) + 1; z++)
+        for (int y = Math.Min(a.Y, b.Y); y <= Math.Max(a.Y, b.Y); y++)
+        for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
+        {
+            var c = new TilePos(x, y, z);
+            if (CoverAt(c, roof) is { } bp)
+            {
+                Remove(bp);
+                n++;
+            }
+            int built = roof ? _world.RoofAt(c) : _world.FloorAt(c);
+            if (built == 0) continue;
+            if (roof) _world.SetRoof(c, 0);
+            else _world.SetFloor(c, 0);
+            var (mat, count) = Cost(kind, built);
+            items.Drop(c, mat, count);
+            n++;
+        }
+        if (n > 0) Version++;
         return n;
     }
 
@@ -249,7 +339,13 @@ public sealed class Constructions
         bp.Removed = true;
         bp.BuilderId = -1;
         if (bp.IsEdge) _byEdge.Remove((bp.EdgeCell, bp.Side));
+        else if (bp.IsCover) _byCover.Remove((bp.Cell, bp.Kind == StructureKind.Roof));
         else _byCell.Remove(bp.Cell);
+        if (_bySite.TryGetValue(bp.Cell, out var site))
+        {
+            site.Remove(bp);
+            if (site.Count == 0) _bySite.Remove(bp.Cell);
+        }
         _order.Remove(bp);
         Version++;
     }
@@ -257,7 +353,7 @@ public sealed class Constructions
     /// <summary>Units of the blueprint's material lying in its cell (<paramref name="available"/>: unreserved only).</summary>
     /// <summary>Whether a pile of <paramref name="type"/> here is materials for a blueprint (a structure, or an edge piece sited here).</summary>
     public bool IsSite(TilePos p, ItemType type) =>
-        (At(p) is { } site && site.Cost.Material == type) || _order.Any(bp => bp.IsEdge && bp.Cell == p && bp.Cost.Material == type);
+        (At(p) is { } site && site.Cost.Material == type) || (_bySite.TryGetValue(p, out var here) && here.Exists(bp => bp.Cost.Material == type));
 
     public static int MaterialsOnSite(Blueprint bp, ItemPiles items, bool available = false) =>
         items.TryGet(bp.Cell, out var pile) && pile.Type == bp.Cost.Material ? (available ? pile.Available : pile.Count) : 0;

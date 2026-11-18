@@ -16,9 +16,17 @@ public enum FixtureRole : byte { Bed, Table, Chair, Chest, Shelf, Tableware, Tab
 public readonly record struct Placement(FixtureRole Role, ItemType Item, int Tier, TilePos Cell, int Facing, float X, float Y, float Height);
 
 /// <summary>A home's walls (see <see cref="HomeLayout.Survey"/>): share of its outline closed, average tier, windows, wall materials.</summary>
-public readonly record struct HomeShell(float Enclosure, float Tier, int Windows, IReadOnlyCollection<string> Materials)
+public readonly record struct HomeShell(float Enclosure, float Tier, int Windows, IReadOnlyCollection<string> Materials,
+    float Floored = 0, float FloorTier = 0, float Covered = 0, float RoofTier = 0)
 {
     public static readonly HomeShell None = new(0, 0, 0, Array.Empty<string>());
+
+    /// <summary>How well it serves someone expecting <paramref name="expected"/> (1..3): walls .45, floor .25, roof .2, windows .1.</summary>
+    public float Score(float expected)
+    {
+        float Part(float share, float tier) => tier <= 0 ? 0 : share * Math.Min(1f, tier / expected);
+        return 0.45f * Part(Enclosure, Tier) + 0.25f * Part(Floored, FloorTier) + 0.2f * Part(Covered, RoofTier) + (Windows > 0 ? 0.1f : 0);
+    }
 }
 
 /// <summary>
@@ -327,7 +335,23 @@ public static class HomeLayout
                     materials.Add("stone");
                 }
             }
-        return new HomeShell(sides == 0 ? 1 : closed / (float)sides, tierCount == 0 ? 0 : tiers / tierCount, windows, materials);
+        // Floors and roofs: a laid floor or bare rock underfoot (bare earth counts for nothing), a roof or rock overhead.
+        int floored = 0, covered = 0;
+        float floorTiers = 0, roofTiers = 0;
+        foreach (var c in inside)
+        {
+            int floor = world.FloorAt(c);
+            int ft = floor > 0 ? FloorMaterials.All[Math.Min(floor, FloorMaterials.Count - 1)].Tier
+                : TileInfo.IsEarth(world.Get(c.X, c.Y, c.Z - 1)) || !world.IsSolid(c.X, c.Y, c.Z - 1) ? 0 : 1;
+            if (ft > 0) { floored++; floorTiers += ft; }
+            int roof = world.RoofAt(c);
+            int rt = roof > 0 ? RoofMaterials.All[Math.Min(roof, RoofMaterials.Count - 1)].Tier : world.IsSolid(c.X, c.Y, c.Z + 1) ? 1 : 0;
+            if (rt > 0) { covered++; roofTiers += rt; }
+            if (floor > 0) materials.Add(FloorMaterials.All[Math.Min(floor, FloorMaterials.Count - 1)].Item == "planks" ? "wood" : "stone");
+        }
+        int cellCount = Math.Max(1, inside.Count);
+        return new HomeShell(sides == 0 ? 1 : closed / (float)sides, tierCount == 0 ? 0 : tiers / tierCount, windows, materials,
+            floored / (float)cellCount, floored == 0 ? 0 : floorTiers / floored, covered / (float)cellCount, covered == 0 ? 0 : roofTiers / covered);
     }
 
     /// <summary>8-neighbours on the same level.</summary>

@@ -98,7 +98,7 @@ public sealed class Housing
 
     private readonly List<Home> _homes = new();
     private int _seenRooms = -1, _seenEver = -1, _seenCount = -1;
-    private long _seenEdges = -1;
+    private long _seenEdges = -1, _seenCovers = -1;
     private bool _plansChanged; // a policy or a home's policy changed: trim surplus pieces next tick
 
     public Housing()
@@ -198,9 +198,9 @@ public sealed class Housing
             float quality = Math.Min(1.25f, tiers / (float)n / expected); // better than expected pleases a little more
             score += Weight[s] * coverage * quality;
         }
-        // The shell: closed all round, of walls at the tier expected, with a window or two for light.
+        // The shell: walls all round, a laid floor, a roof, all at the tier expected, and a window or two for light.
         var shell = home.Shell;
-        float walls = (shell.Tier <= 0 ? 0 : 0.85f * shell.Enclosure * Math.Min(1f, shell.Tier / expected)) + (shell.Windows > 0 ? 0.15f : 0);
+        float walls = shell.Score(expected);
         return Math.Clamp(0.8f * score + 0.2f * Math.Min(1f, walls), 0, 1);
     }
 
@@ -296,9 +296,9 @@ public sealed class Housing
     internal void Tick(ColonySim sim)
     {
         if (sim.Rooms.Version != _seenRooms) Sync(sim);
-        if (sim.World.EdgeRevision != _seenEdges) // walls, doors or windows changed: re-survey and re-arrange homes
+        if (sim.World.EdgeRevision != _seenEdges || sim.World.CoverRevision != _seenCovers) // walls, floors or roofs changed: re-survey homes
         {
-            _seenEdges = sim.World.EdgeRevision;
+            (_seenEdges, _seenCovers) = (sim.World.EdgeRevision, sim.World.CoverRevision);
             foreach (var h in _homes) h.LayoutDirty = true;
         }
         if (sim.ColonistsEver != _seenEver || sim.Colonists.Count != _seenCount) // someone came or went: house them now

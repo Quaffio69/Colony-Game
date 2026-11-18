@@ -74,6 +74,22 @@ public sealed class Chunk
     /// <summary>Cells with any edge set.</summary>
     internal int EdgeCells;
 
+    /// <summary>Floor and roof coverings per cell (see <see cref="CoverInfo"/>); null until the first one.</summary>
+    internal byte[]? Covers;
+    internal int CoverCells;
+
+    internal bool SetCover(int lx, int ly, int lz, byte value)
+    {
+        Covers ??= new byte[Volume];
+        int i = Index(lx, ly, lz);
+        if (Covers[i] == value) return false;
+        if (Covers[i] == 0) CoverCells++;
+        else if (value == 0) CoverCells--;
+        Covers[i] = value;
+        Version++;
+        return true;
+    }
+
     internal bool SetEdges(int lx, int ly, int lz, ushort value)
     {
         Edges ??= new ushort[Volume];

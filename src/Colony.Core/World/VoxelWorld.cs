@@ -64,6 +64,14 @@ public sealed class VoxelWorld : ITileReader
         if (!ChunkAt(x, y, z).Set(x & Chunk.Mask, y & Chunk.Mask, z & Chunk.Mask, type)) return;
         Revision++;
         Changed(x, y, z);
+        if (_coverCells > 0)
+        {
+            // A cell filled in loses its coverings; a floor whose ground is dug away goes with it.
+            var p = new TilePos(x, y, z);
+            if (TileInfo.IsSolid(type) && CoverAt(p) != 0) SetCover(p, 0);
+            var above = new TilePos(x, y, z + 1);
+            if (!TileInfo.IsSolid(type) && InBounds(above) && FloorAt(above) != 0) SetFloor(above, 0);
+        }
     }
 
     /// <summary>Notifies the chunk holding (x, y, z) and the neighbouring chunks a change there can affect.</summary>
@@ -143,6 +151,50 @@ public sealed class VoxelWorld : ITileReader
         Changed(cell.X, cell.Y, cell.Z);
         var other = side == EdgeInfo.East ? cell.Offset(1, 0, 0) : cell.Offset(0, 1, 0);
         if (InBounds(other)) Changed(other.X, other.Y, other.Z);
+    }
+
+    // ---- Floors and roofs (see CoverInfo) --------------------------------------------------------------------
+
+    private int _coverCells;
+
+    /// <summary>Increments whenever a floor or roof changes (for views and homes).</summary>
+    public long CoverRevision { get; private set; }
+
+    public byte CoverAt(TilePos p)
+    {
+        if (_coverCells == 0 || !InBounds(p)) return 0;
+        var covers = ChunkAt(p.X, p.Y, p.Z).Covers;
+        return covers is null ? (byte)0 : covers[Chunk.Index(p.X & Chunk.Mask, p.Y & Chunk.Mask, p.Z & Chunk.Mask)];
+    }
+
+    public int FloorAt(TilePos p) => CoverInfo.Floor(CoverAt(p));
+    public int RoofAt(TilePos p) => CoverInfo.Roof(CoverAt(p));
+
+    public void SetFloor(TilePos p, int floor) => SetCover(p, CoverInfo.WithFloor(CoverAt(p), floor));
+    public void SetRoof(TilePos p, int roof) => SetCover(p, CoverInfo.WithRoof(CoverAt(p), roof));
+
+    private void SetCover(TilePos p, byte value)
+    {
+        if (!InBounds(p)) throw new ArgumentOutOfRangeException(nameof(p), $"{p} is outside the world.");
+        var chunk = ChunkAt(p.X, p.Y, p.Z);
+        int before = chunk.CoverCells;
+        if (!chunk.SetCover(p.X & Chunk.Mask, p.Y & Chunk.Mask, p.Z & Chunk.Mask, value)) return;
+        _coverCells += chunk.CoverCells - before;
+        CoverRevision++;
+    }
+
+    /// <summary>Every covered cell (floor or roof): (cell, cover byte). Scans only chunks that have covers.</summary>
+    public IEnumerable<(TilePos Cell, byte Cover)> AllCovers()
+    {
+        if (_coverCells == 0) yield break;
+        foreach (var chunk in _chunks)
+        {
+            if (chunk.Covers is not { } covers || chunk.CoverCells == 0) continue;
+            var o = chunk.Origin;
+            for (int i = 0; i < covers.Length; i++)
+                if (covers[i] != 0)
+                    yield return (new TilePos(o.X + (i & Chunk.Mask), o.Y + ((i >> Chunk.Shift) & Chunk.Mask), o.Z + (i >> (2 * Chunk.Shift))), covers[i]);
+        }
     }
 
     /// <summary>Every edge with something on it: (cell, side, info). Scans only chunks that have edges.</summary>

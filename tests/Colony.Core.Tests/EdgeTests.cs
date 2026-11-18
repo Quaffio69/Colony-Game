@@ -178,6 +178,36 @@ public class EdgeTests
     }
 
     [Fact]
+    public void Colonists_LayFloorsAndRoofs_AndAFloorGoesWithItsGround()
+    {
+        var sim = new ColonySim(Flat()) { NeedsEnabled = false };
+        sim.Items.Drop(new TilePos(25, 25, 4), Items.ItemType.Plank, 30);
+        sim.Items.Drop(new TilePos(25, 20, 4), Items.ItemType.Fiber, 20);
+        for (int i = 0; i < 3; i++) sim.AddColonist($"B{i}", new TilePos(2 + i, 2, 4));
+        Assert.Equal(9, sim.Constructions.PlaceCoverBox(Orders.StructureKind.Floor, new TilePos(10, 10, 3), new TilePos(12, 12, 3), material: 1)); // planks
+        Assert.Equal(9, sim.Constructions.PlaceCoverBox(Orders.StructureKind.Roof, new TilePos(10, 10, 3), new TilePos(12, 12, 3), material: 1));  // thatch
+        Assert.Null(sim.Constructions.PlaceCover(Orders.StructureKind.Floor, new TilePos(11, 11, 4), 1)); // already planned
+        for (int i = 0; i < 8000 && sim.Constructions.Count > 0; i++) sim.Step();
+        Assert.Equal(0, sim.Constructions.Count);
+        for (int y = 10; y <= 12; y++)
+        for (int x = 10; x <= 12; x++)
+        {
+            Assert.Equal(1, sim.World.FloorAt(new TilePos(x, y, 4)));
+            Assert.Equal(1, sim.World.RoofAt(new TilePos(x, y, 4)));
+        }
+        Assert.Equal(30 - 9, sim.Items.Totals()[Items.ItemType.Plank.Index]);
+        Assert.Equal(20 - 9, sim.Items.Totals()[Items.ItemType.Fiber.Index]);
+
+        sim.World.Set(11, 11, 3, TileType.Air); // the ground under one floor tile dug away
+        Assert.Equal(0, sim.World.FloorAt(new TilePos(11, 11, 4)));
+        Assert.Equal(1, sim.World.RoofAt(new TilePos(11, 11, 4)));
+
+        Assert.Equal(8 + 9, sim.Constructions.ClearCoverBox(Orders.StructureKind.Floor, new TilePos(10, 10, 3), new TilePos(12, 12, 3), sim.Items)
+                         + sim.Constructions.ClearCoverBox(Orders.StructureKind.Roof, new TilePos(10, 10, 3), new TilePos(12, 12, 3), sim.Items));
+        Assert.Empty(sim.World.AllCovers());
+    }
+
+    [Fact]
     public void Colonists_WalkRoundWalls_ThroughTheDoor()
     {
         var sim = new ColonySim(Flat()) { NeedsEnabled = false };

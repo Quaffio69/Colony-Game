@@ -164,6 +164,12 @@ public sealed class ColonySim
     {
         if (bp.Removed) return;
         Constructions.Remove(bp);
+        if (bp.IsCover)
+        {
+            if (bp.Kind == StructureKind.Roof) World.SetRoof(bp.Cell, bp.Material);
+            else World.SetFloor(bp.Cell, bp.Material);
+            return;
+        }
         if (bp.IsEdge)
         {
             // A door or window cut into a built wall gives back the wall's material.

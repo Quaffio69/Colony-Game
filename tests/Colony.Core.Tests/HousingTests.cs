@@ -235,6 +235,18 @@ public class HousingTests
         float lightened = Housing.Score(home, lit);
         Assert.True(bare < logs && logs < stone && stone < lightened, $"{bare} < {logs} < {stone} < {lightened}");
         Assert.Contains("stone", home.Shell.Materials);
+
+        // A laid floor and a roof finish it off.
+        for (int y = 4; y <= 6; y++)
+        for (int x = 4; x <= 7; x++)
+        {
+            sim.World.SetFloor(new TilePos(x, y, 4), 1);
+            sim.World.SetRoof(new TilePos(x, y, 4), 2);
+        }
+        sim.Step();
+        Assert.Equal(1f, home.Shell.Floored);
+        Assert.Equal(1f, home.Shell.Covered);
+        Assert.True(Housing.Score(home, lit) > lightened + 0.05f);
     }
 
     [Fact]

@@ -96,6 +96,10 @@ public partial class Main : Node3D
         AddChild(edges);
         edges.Initialize(_sim, _world);
 
+        var covers = new CoverView { Name = "CoverView" };
+        AddChild(covers);
+        covers.Initialize(_sim, _world);
+
         var rooms = new RoomView { Name = "RoomView" };
         AddChild(rooms);
         rooms.Initialize(_sim, _world);
@@ -712,7 +716,7 @@ public partial class Main : Node3D
         int g = c.Z - 1, x = c.X + 6, y0 = c.Y - 4;
         LevelPad(x - 2, y0 - 2, x + 44, y0 + 10, g);
         var housing = _sim.Housing;
-        foreach (var (name, w, d, material) in new[] { ("Dormitory", 7, 5, 0), ("Cottage", 4, 3, 2), ("House", 6, 4, 3), ("Manor", 8, 6, 4) })
+        foreach (var (name, w, d, material, floor, roof) in new[] { ("Dormitory", 7, 5, 0, 0, 1), ("Cottage", 4, 3, 2, 1, 2), ("House", 6, 4, 3, 2, 3), ("Manor", 8, 6, 4, 3, 4) })
         {
             // Thin walls round the floor: a door in the middle of the south wall, windows along the north and sides.
             byte wall = EdgeInfo.Make(EdgeKind.Wall, material), window = EdgeInfo.Make(EdgeKind.Window, material);
@@ -726,6 +730,12 @@ public partial class Main : Node3D
             {
                 _sim.World.SetEdge(new TilePos(x - 1, y0 + j, z), EdgeInfo.East, j == d / 2 && d > 3 ? window : wall);
                 _sim.World.SetEdge(new TilePos(x + w - 1, y0 + j, z), EdgeInfo.East, j == d / 2 ? window : wall);
+            }
+            for (int i = 0; i < w; i++)
+            for (int j = 0; j < d; j++)
+            {
+                if (floor > 0) _sim.World.SetFloor(new TilePos(x + i, y0 + j, z), floor);
+                _sim.World.SetRoof(new TilePos(x + i, y0 + j, z), roof);
             }
             _sim.Rooms.Paint(Colony.Core.Industry.Catalog.Home, new TilePos(x, y0, g), new TilePos(x + w - 1, y0 + d - 1, g));
             _sim.Step(); // housing picks the room up
@@ -742,7 +752,7 @@ public partial class Main : Node3D
             x += w + 2;
         }
         _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 20, y0 + 2, g + 1)), 22f, yaw: 190f, pitch: -62f);
-        GD.Print($"Homes demo: {housing.All.Count} homes, {housing.All.Sum(h => h.Beds)} beds, {housing.All.Sum(h => h.Fixtures.Count)} fixtures");
+        GD.Print($"Homes demo: {housing.All.Count} homes, {housing.All.Sum(h => h.Beds)} beds, {housing.All.Sum(h => h.Fixtures.Count)} fixtures, floor level {g + 1} (Z/X to look inside)");
     }
 
     /// <summary>Dev only: flattens a pad of grass over soil at ground level g (edits tiles directly).</summary>

@@ -242,6 +242,16 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   (`HomeLayout.Survey`: outline closed by walls/doors/windows/rock, their tier vs expectation, windows) is a fifth of
   `Housing.Score`; wall materials count for liked materials. The old full-cell `TileType.Wall` (Tab order) stays
   for dams and embankments.
+- **Floors and roofs (`World.CoverInfo`, `FloorMaterials`, `RoofMaterials`):** a byte per cell (`Chunk.Covers`): floor
+  (plank, flagstone, tiles) low nibble, roof (thatch, shingle, slate, clay tile) high nibble; no effect on movement or
+  water. A cell filled solid loses both; a floor whose ground is dug away goes. `Constructions.PlaceCover`/
+  `PlaceCoverBox`/`ClearCoverBox` (refunds); built by builders from 1 item a cell. Tools: Floors and Roofs rows in
+  the build menu (box), and Line (click an edge, drag along it: walls, doors or windows). `CoverView`: patterned floor
+  plates; roofs a height field per level (vertex height = pitch x distance in from the roof's edge: hip roofs and
+  ridges for any outline), drawn above their cell with `roof.gdshader` (sliced exactly at the cut, courses and
+  staggered joints from world position) so a home's own level shows its interior. Furniture stays under one level.
+  Home shell = walls .45 + floor .25 + roof .2 + windows .1 (`HomeShell.Score`); bare rock underfoot or overhead is
+  humble, bare earth and open sky nothing.
 - **Waterworks:** `Orders.Constructions` holds single-cell blueprints (walls from 1 stone; water wheels and
   pumps from planks) built like room parts (haulers deliver, Designations-labor builders build;
   `ColonySim.CompleteConstruction`). Walls stack on wall blueprints, so dams rise level by level; a wall is
@@ -375,8 +385,8 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - [~] M5: Needs and homes. Done: hunger, eating, starving leaves; daily goods standard (clothing, tinctures); homes
       (sized rooms, housing policies, tiered fixtures with wear, salvage, auto layout), rest in beds, residents by
       education, mood -> work speed, gentle departures, settlers by food, mood and free beds; procedural home
-      layouts; likes (food, material, art, work); thin walls, doors, windows (materials, dams, shell quality). Next:
-      floors (planks, flagstone, tiles) and roofs as part of the shell, dragged wall lines, births and
+      layouts; likes (food, material, art, work); thin walls, doors, windows, floors, roofs (materials, dams, shell
+      quality, wall lines). Next: births and
       households, job priorities, health beyond consumption.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.
