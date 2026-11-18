@@ -92,7 +92,6 @@ public partial class DesignationTool : Node3D
     /// <summary>Floor and roof material for the Floor and Roof box tools.</summary>
     public int FloorMaterial { get; private set; } = 1;
     public int RoofMaterial { get; private set; } = 1;
-    private readonly List<Button> _materialButtons = new();
     public TilePos? Hovered { get; private set; }
     public string? LastAction { get; private set; }
     /// <summary>Why the part under the cursor can't be placed (null if it can, or not placing).</summary>
@@ -254,134 +253,81 @@ public partial class DesignationTool : Node3D
             Visible = false,
         };
         AddChild(_drape);
-        BuildMenu();
     }
 
-    // ---- Build menu -------------------------------------------------------------------------------------
+    // ---- Tool selection (the Build window drives these; Tab cycles the orders) ---------------------------
 
-    private PanelContainer _menu = null!;
-    private VBoxContainer _partList = null!;
-    private Label _partsTitle = null!;
-    private readonly Dictionary<RoomType, Button> _workshopButtons = new();
-
-    /// <summary>The build menu: every workshop (paints its room), then the selected workshop's parts.</summary>
-    private void BuildMenu()
+    /// <summary>Picks an order or zone tool (dig, stairs, chop, gather, stockpile, farm plots, dam walls).</summary>
+    public void SelectOrder(ToolMode mode)
     {
-        var layer = new CanvasLayer { Layer = 2 };
-        AddChild(layer);
-        _menu = new PanelContainer { Visible = false };
-        _menu.SetAnchorsPreset(Control.LayoutPreset.TopRight);
-        _menu.OffsetLeft = -430;
-        _menu.OffsetTop = 10;
-        _menu.OffsetRight = -10;
-        layer.AddChild(_menu);
-        var box = new VBoxContainer();
-        box.AddThemeConstantOverride("separation", 4);
-        _menu.AddChild(box);
-        var homeButton = new Button { Text = "Home  (where colonists live)", ToggleMode = true, Alignment = HorizontalAlignment.Left, TooltipText = Catalog.Home.About };
-        homeButton.AddThemeColorOverride("font_color", RoomView.RoomColor(Catalog.Home) with { A = 1f });
-        homeButton.Pressed += () => SelectWorkshop(Catalog.Home);
-        box.AddChild(homeButton);
-        _workshopButtons[Catalog.Home] = homeButton;
-        box.AddChild(new Label { Text = "Workshops (click to paint a room; B closes)" });
-        var grid = new GridContainer { Columns = 2 };
-        box.AddChild(grid);
-        foreach (var w in Catalog.Workshops)
-        {
-            var b = new Button { Text = w.Name, ToggleMode = true, TooltipText = $"{w.About}\nMakes: {string.Join(", ", w.Recipes.Select(r => r.Name))}" };
-            b.AddThemeColorOverride("font_color", RoomView.RoomColor(w) with { A = 1f });
-            b.CustomMinimumSize = new Vector2(176, 0);
-            var ws = w;
-            b.Pressed += () => SelectWorkshop(ws);
-            grid.AddChild(b);
-            _workshopButtons[w] = b;
-        }
-        _partsTitle = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart, CustomMinimumSize = new Vector2(410, 0) };
-        box.AddChild(_partsTitle);
-        _partList = new VBoxContainer();
-        box.AddChild(_partList);
-        box.AddChild(new Label { Text = "Waterworks (anywhere; walls are a Tab order)" });
-        var works = new HBoxContainer();
-        box.AddChild(works);
-        foreach (var kind in new[] { StructureKind.WaterWheel, StructureKind.Pump })
-        {
-            var (mat, n) = Constructions.Cost(kind);
-            var b = new Button { Text = Constructions.Name(kind), CustomMinimumSize = new Vector2(176, 0), TooltipText = $"Costs {n} {mat.Name.ToLowerInvariant()}" };
-            var k = kind;
-            b.Pressed += () => SelectStructure(k);
-            works.AddChild(b);
-        }
-        box.AddChild(new Label { Text = "Walls & doors (on cell edges; material:)" });
-        var edgeTools = new HBoxContainer();
-        box.AddChild(edgeTools);
-        void EdgeButton(string text, string tip, Action pick)
-        {
-            var b = new Button { Text = text, TooltipText = tip, CustomMinimumSize = new Vector2(70, 0) };
-            b.Pressed += pick;
-            edgeTools.AddChild(b);
-        }
-        EdgeButton("Outline", "Walls all round a box of floor: drag from corner to corner", () => SelectEdgeTool(ToolMode.Outline, EdgePiece));
-        EdgeButton("Wall", "A thin wall on the edge under the cursor (click; RMB removes)", () => SelectEdgeTool(ToolMode.Edge, StructureKind.EdgeWall));
-        EdgeButton("Door", "A door (2 planks): walkers pass, water too. Can be cut into a wall", () => SelectEdgeTool(ToolMode.Edge, StructureKind.Door));
-        EdgeButton("Window", "A window (1 glass): light, no way through. Can be cut into a wall", () => SelectEdgeTool(ToolMode.Edge, StructureKind.Window));
-        var mats = new HBoxContainer();
-        box.AddChild(mats);
-        for (int i = 0; i < WallMaterials.Count; i++)
-        {
-            int m = i;
-            var (name, item, _, quality, color) = WallMaterials.All[i];
-            var b = new Button { Text = name, ToggleMode = true, CustomMinimumSize = new Vector2(68, 0), TooltipText = $"Built from {Catalog.Item(item).Name.ToLowerInvariant()} (1 a wall); quality {quality}" };
-            b.AddThemeColorOverride("font_color", Rgb(color).Lightened(0.25f));
-            b.Pressed += () => SelectWallMaterial(m);
-            mats.AddChild(b);
-            _materialButtons.Add(b);
-        }
-        SelectWallMaterial(WallMaterial);
-        EdgeButton("Line", "A line of walls (or doors or windows: the last piece picked): click an edge, drag along it, click", () => SelectEdgeTool(ToolMode.WallLine, EdgePiece));
-
-        // Floors and roofs: each button picks the box tool with that material.
-        HBoxContainer CoverRow(string title)
-        {
-            var row = new HBoxContainer();
-            row.AddChild(new Label { Text = title, CustomMinimumSize = new Vector2(52, 0) });
-            box.AddChild(row);
-            return row;
-        }
-        var floorRow = CoverRow("Floors");
-        for (int i = 1; i < FloorMaterials.Count; i++)
-        {
-            int m = i;
-            var (name, item, tier, color) = FloorMaterials.All[i];
-            var b = new Button { Text = name.Replace(" floor", ""), TooltipText = $"{name}: 1 {Catalog.Item(item).Name.ToLowerInvariant()} a cell, {Catalog.FixtureTiers[tier]} (drag a box over the floor)" };
-            b.AddThemeColorOverride("font_color", Rgb(color).Lightened(0.3f));
-            b.Pressed += () => { FloorMaterial = m; Mode = ToolMode.Floor; EndSelection(); };
-            floorRow.AddChild(b);
-        }
-        var roofRow = CoverRow("Roofs");
-        for (int i = 1; i < RoofMaterials.Count; i++)
-        {
-            int m = i;
-            var (name, item, tier, color) = RoofMaterials.All[i];
-            var b = new Button { Text = name, TooltipText = $"{name} roof: 1 {Catalog.Item(item).Name.ToLowerInvariant()} a cell, {Catalog.FixtureTiers[tier]} (drag a box over the floor it covers)" };
-            b.AddThemeColorOverride("font_color", Rgb(color).Lightened(0.35f));
-            b.Pressed += () => { RoofMaterial = m; Mode = ToolMode.Roof; EndSelection(); };
-            roofRow.AddChild(b);
-        }
-        SelectWorkshop(Workshop, enterMode: false);
+        Mode = mode;
+        EndSelection();
     }
 
-    private void SelectEdgeTool(ToolMode mode, StructureKind piece)
+    public void SelectEdgeTool(ToolMode mode, StructureKind piece)
     {
         Mode = mode;
         EdgePiece = piece;
         EndSelection();
     }
 
-    private void SelectWallMaterial(int material)
+    public void SelectWallMaterial(int material) => WallMaterial = WallMaterials.Clamp(material);
+
+    public void SelectFloor(int material)
     {
-        WallMaterial = WallMaterials.Clamp(material);
-        for (int i = 0; i < _materialButtons.Count; i++) _materialButtons[i].ButtonPressed = i == WallMaterial;
+        FloorMaterial = material;
+        Mode = ToolMode.Floor;
+        EndSelection();
     }
+
+    public void SelectRoof(int material)
+    {
+        RoofMaterial = material;
+        Mode = ToolMode.Roof;
+        EndSelection();
+    }
+
+    /// <summary>R: rotates the part (or turns the waterworks) being placed.</summary>
+    public void Rotate()
+    {
+        _rotated = !_rotated;
+        _facing = (_facing + 1) % 4;
+    }
+
+    public bool Rotated => _rotated;
+
+    /// <summary>[ and ]: the size of the part being placed.</summary>
+    public void ChangeSize(int step)
+    {
+        if (PartFor(Mode) is { } part && PartInfo.Sizes(part) > 1)
+            _sizes[part] = PartInfo.ClampSize(part, SizeFor(part) + step);
+    }
+
+    /// <summary>Esc: aborts a box or line in progress, else drops a build tool back to digging. False if neither applied.</summary>
+    public bool CancelPlacement()
+    {
+        if (_selection != Selection.None)
+        {
+            EndSelection();
+            return true;
+        }
+        if (IsBuild(Mode))
+        {
+            Mode = ToolMode.Dig;
+            EndSelection();
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Leaves any build tool (the Build window closed).</summary>
+    public void LeaveBuild()
+    {
+        if (IsBuild(Mode)) Mode = ToolMode.Dig;
+        EndSelection();
+    }
+
+    public bool Selecting => _selection != Selection.None;
 
     /// <summary>The cell edge nearest the mouse on the floor of the hovered tile (null over nothing).</summary>
     private (TilePos Cell, int Side)? EdgeUnderMouse(System.Numerics.Vector3 origin, System.Numerics.Vector3 dir)
@@ -472,46 +418,23 @@ public partial class DesignationTool : Node3D
         else LastAction = "Nothing on that edge";
     }
 
-    private void SelectWorkshop(RoomType w, bool enterMode = true)
+    /// <summary>Paints rooms of this workshop (or homes).</summary>
+    public void SelectWorkshop(RoomType w)
     {
         Workshop = w;
-        foreach (var (ws, b) in _workshopButtons) b.ButtonPressed = ws == w;
-        _partsTitle.Text = w.IsHome
-            ? $"Home: paint any size, on any levels (at least {Housing.MinCells} cells). Colonists furnish it by its\nhousing policy and move in, one per bed.   F over a home: next policy   H: edit policies"
-            : $"{w.Name}: parts\n[ ] size   R rotate   F: recipe of the machine under the cursor";
-        foreach (var child in _partList.GetChildren()) child.QueueFree();
-        foreach (var part in w.IsHome ? Enumerable.Empty<PartType>() : w.Stations.Concat(Catalog.GenericParts))
-        {
-            string makes = part.Recipes.Count > 0 ? "  -  " + string.Join(", ", part.Recipes.Select(r => r.Name.ToLowerInvariant())) : "";
-            var b = new Button { Text = part.Name + makes, Alignment = HorizontalAlignment.Left, ClipText = true, CustomMinimumSize = new Vector2(356, 0) };
-            b.TooltipText = string.Join("\n", part.Recipes.Select(r => $"{r.Describe()}   ({Catalog.EducationName(r.Education)})"));
-            var pt = part;
-            b.Pressed += () => SelectPart(pt);
-            _partList.AddChild(b);
-        }
-        if (enterMode)
-        {
-            Mode = ToolMode.Room;
-            EndSelection();
-        }
+        Mode = ToolMode.Room;
+        EndSelection();
     }
 
-    private void SelectPart(PartType part)
+    public void SelectPart(PartType part)
     {
         Part = part;
         Mode = ToolMode.Part;
         EndSelection();
     }
 
-    /// <summary>Opens the build menu on a workshop (dev aid; players press B).</summary>
-    public void OpenBuildMenu(string workshopId)
-    {
-        _menu.Visible = true;
-        SelectWorkshop(Catalog.Workshops.FirstOrDefault(w => w.Id == workshopId) ?? Workshop);
-    }
-
-    /// <summary>True while the mouse is over the build menu (so clicks there don't reach the world).</summary>
-    private bool OverMenu => _menu.Visible && _menu.GetGlobalRect().HasPoint(GetViewport().GetMousePosition());
+    /// <summary>True while the mouse is over the UI (so clicks and hovering there don't reach the world).</summary>
+    private bool OverMenu => UI.GlyphManager.Instance?.Blocks(GetViewport().GetMousePosition()) ?? false;
 
     // ---- Picking ----------------------------------------------------------------------------------------
 
@@ -656,11 +579,6 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
-            case InputEventKey { Pressed: true, Keycode: Key.Escape } when _selection != Selection.None:
-                EndSelection();
-                Handled();
-                break;
-
             // While selecting, Z/X move the free corner between levels and the view follows it (DF-style cursor).
             case InputEventKey { Pressed: true, Keycode: Key.Z or Key.X or Key.Pagedown or Key.Pageup } k
                 when _selection != Selection.None && !IsAreaTool(Mode):
@@ -670,30 +588,20 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
-            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Tab } tab:
+            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Tab, CtrlPressed: false } tab:
                 Mode = Cycle(Mode, ToolMode.Dig, LastOrder, tab.ShiftPressed);
-                _menu.Visible = false;
-                EndSelection();
-                Handled();
-                break;
-
-            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.B }:
-                _menu.Visible = !_menu.Visible;
-                if (_menu.Visible && !IsBuild(Mode)) Mode = ToolMode.Room;
-                else if (!_menu.Visible && IsBuild(Mode)) Mode = ToolMode.Dig;
                 EndSelection();
                 Handled();
                 break;
 
             case InputEventKey { Pressed: true, Echo: false, Keycode: Key.R } when PartFor(Mode) is not null || Mode == ToolMode.Structure:
-                _rotated = !_rotated;
-                _facing = (_facing + 1) % 4;
+                Rotate();
                 Handled();
                 break;
 
             case InputEventKey { Pressed: true, Keycode: Key.Bracketleft or Key.Bracketright } sk
                 when PartFor(Mode) is { } sized && PartInfo.Sizes(sized) > 1:
-                _sizes[sized] = PartInfo.ClampSize(sized, SizeFor(sized) + (sk.Keycode == Key.Bracketright ? 1 : -1));
+                ChangeSize(sk.Keycode == Key.Bracketright ? 1 : -1);
                 Handled();
                 break;
 
@@ -757,7 +665,7 @@ public partial class DesignationTool : Node3D
             : $"Can't place a {name}: {_sim.Constructions.CanPlace(Structure, cell)}";
     }
 
-    private void SelectStructure(StructureKind kind)
+    public void SelectStructure(StructureKind kind)
     {
         Structure = kind;
         Mode = ToolMode.Structure;

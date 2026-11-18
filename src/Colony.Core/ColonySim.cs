@@ -417,7 +417,7 @@ public sealed class ColonySim
     // ---- Events -----------------------------------------------------------------------------------------
 
     private readonly List<(long Tick, string Text)> _events = new();
-    private const int EventsKept = 12;
+    private const int EventsKept = 400;
 
     /// <summary>Recent colony events (graduations, arrivals), oldest first.</summary>
     public IReadOnlyList<(long Tick, string Text)> Events => _events;

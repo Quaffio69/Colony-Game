@@ -82,6 +82,40 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   hauling scans all piles and stockpile cells (spatial index); A* costs ~1-2 us/node; sim runs on the main
   thread.
 
+## UI (Glyph UI, `game/scripts/ui`)
+
+- **Spec:** `docs/ui/GLYPH_UI.md` (approved direction; `glyph_ui_reference.html` is the live reference, when they disagree
+  follow the reference). ASCII structure (a monospace cell grid, CP437 glyphs, `·` leaders, `▁▃▇` sparklines) with a
+  modern finish (frosted glass panels, pills, thin bars, switches). The only backdrop is the game itself.
+- **Core:** `GlyphTheme` (tokens from `game/ui/glyph_themes.json`, user options + window layout in `user://glyph_ui.json`,
+  fonts, `Cell` = advance of M x font size x density, the generated Godot `Theme`: Label tone variations `Dim`/`Faint`/
+  `Hi`/`Accent`/`Good`/`Warn`/`Bad`/`Info` and `...Bold`, Button variations default/`Primary`/`Ghost`); `GlyphDraw`
+  (5x7 bitmap glyphs from `glyph_glyphs.json` drawn as rects, never the font; chips; bars); `glass.gdshader` (blur via
+  screen mipmaps + panel colour, rounded mask, frame, title band; a `BackBufferCopy` before the UI so every panel blurs
+  the game). Fonts in `game/fonts` (OFL): JetBrains Mono (default, variable weight), IBM Plex Mono, Space Mono, VT323.
+- **Controls:** `GlyphPanel`, `GlyphWindow` (title row, − □ ×, drag/resize in whole cells, double-click maximise,
+  `Header`/`Content` (scrolls)/`Footer`, `Build()` on open and theme change, `Tick()` 4x a second while shown),
+  `GlyphManager` (z-order = child order, front = active, hotkeys, Esc order: placement, active window, main menu;
+  Ctrl+Tab; dock; status pill; layout saved), `GlyphChip`, `GlyphBar`, `GlyphSwitch`, `GlyphSegmented`, `GlyphSection`,
+  `GlyphKV`, `GlyphSparkline`, `GlyphRow`, `VRule`, factory `G` (labels in cell widths, pill buttons that never take
+  keyboard focus, so Space keeps pausing). Hover hints go to the status pill (`WithTip`), not tooltips.
+  A click that rebuilds its own window must `AcceptEvent()` first (the control may be freed); theme changes rebuild
+  deferred. Default window rects: negative X counts from the right edge, resolved on first layout.
+- **Game windows (`GameUi`):** HUD pill (colony, date, people, food days, logs, planks, stone, mood, beds/homeless with
+  daily ↑↓ from 8 samples a day, alert pill, view level, speed ‖ ► ►► ►►►), dock, status pill (hover hint, else the tool
+  and what is under the cursor; `LastAction` shows as a message). Windows and hotkeys: Colonists C (Overview/Needs/Family,
+  click to find), Stocks I, Build B (tabs Orders/Zones/Rooms/Walls/Floors/Water, category | items with costs, footer
+  with size/rotate/cancel; drives `DesignationTool`'s public selection API; closing it drops build tools), Chronicle L
+  (events + cave-ins, sticks to the bottom), Housing H, Work J, Inspect V (home/workshop under the cursor), Tests & demos
+  F1, Appearance F2 (theme, frame, corners, font, size, spacing, UI scale, glass/shadows/chips), Help F3 (keys, debug).
+  Home key looks at the colony. **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
+  map size; `Main.NewColony` reloads the scene), Multiplayer (disabled), Appearance, Tests, Quit; opened by Esc when
+  nothing is left to close (the game does not start on it yet); the sim waits while it is up.
+- **Multiplayer direction (not built):** freeform, each player a distinct colony (faction) in one world: cooperate
+  against NPC enemies, trade, compete or go to war, with no mechanics beyond distinct colonies. Path: player actions
+  as sim commands (deterministic lockstep fits the deterministic Core), a faction id on everything a colony owns, then
+  networking; war needs combat and health first.
+
 ## Game design decisions
 
 - **Industry over crafting (core direction):** gameplay starts dwarf-like (basic resource production) and
@@ -317,7 +351,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   order (its `PreferredWork` first) breaks ties, and designation kinds of that priority are one nearest-first
   `JobBoard.Candidates` search (kind mask). Defaults: 2 for work in its preferred `Labor`, 3 otherwise (same order as
   before priorities existed). Changing one takes effect at the next search; the job in hand is finished.
-  `CurrentWork` names what it is doing. UI: J opens the grid (`WorkMenu`; left click 1-2-3-4-off, right click back,
+  `CurrentWork` names what it is doing. UI: J opens the grid (`UI.WorkWindow`; left click 1-2-3-4-off, right click back,
   headings set a column). Later: job-indicative clothing and titles by proficiency once colonist pages/skills exist.
 - **Likes (`Colonist`):** fixed per colonist from its id: `FavoriteFood` (walks up to 8 tiles further for it; a treat
   counts for a day), `LikedMaterial` (fixture `material` in its home: wood, stone, metal, glass, cloth, clay),
@@ -345,8 +379,11 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   food and settlers over game days with no player)
   (prints per-phase totals, slow-tick breakdowns and GC counts; the render bench prints a startup breakdown).
 - VS Code: F5 "Play Game" or "Open Godot Editor" (see `.vscode/launch.json`).
-- **Work grid (J):** `--work-menu` opens it at start (for screenshots).
-- **In-game test menu (T):** every xUnit test, run inside the game (`TestRunner`: the test DLL from
+- **UI dev flags:** `--open=colonists,stocks,...` opens windows (ids: colonists stocks build chronicle housing work inspect
+  tests appearance help), `--main-menu` starts on the menu, `--work-menu`/`--test-menu` (old names), `--ui-selftest` drives
+  the window manager with real input events (hotkeys, Esc order, drag, resize, maximise, dock, tabs, menu, theme switch),
+  prints PASS/FAIL and quits (exit code 1 on failure). The bench prints the worst update time per open window.
+- **In-game test menu (F1, the Tests & demos window):** every xUnit test, run inside the game (`TestRunner`: the test DLL from
   `tests/Colony.Core.Tests/bin/Debug` loaded from bytes into its own load context sharing the game's Colony.Core;
   "Reload tests" picks up a rebuild). "Run" opens the first `ColonySim` the test built, at its end; "Watch" stops it
   at its first step (`DevHooks`, per-thread hooks in Core) and opens that world paused. The colony waits in a static
@@ -410,5 +447,9 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       layouts; likes (food, material, art, work); thin walls, doors, windows, floors, roofs (materials, dams, shell
       quality, wall lines); families (weddings, births, children, homes per family). Next:
       schooling children, health beyond consumption, settler couples, old age.
+- [x] UI: Glyph UI (theme, glass panels, window manager, HUD, dock, status pill), every menu migrated (Build, Housing,
+      Work, Tests) plus Colonists, Stocks, Chronicle, Inspect, Appearance, Help windows and a main menu; work priorities.
+- [ ] Next for UI / demo: colonist pages (job clothing, titles by proficiency once skills exist), player actions as sim
+      commands, factions per player, title art behind the main menu, save/load.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.

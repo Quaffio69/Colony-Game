@@ -5,6 +5,7 @@ using System.Text;
 using Colony.Core;
 using Colony.Core.Procedural;
 using Colony.Core.World;
+using ColonyGame.UI;
 using Godot;
 
 namespace ColonyGame;
@@ -30,7 +31,6 @@ public partial class Main : Node3D
     private ItemView _items = null!;
     private WaterView _waterView = null!;
     private DesignationTool _tool = null!;
-    private Label _hud = null!;
     private CameraRig _rig = null!;
 
     private int _speedIndex;
@@ -118,23 +118,44 @@ public partial class Main : Node3D
         if (_test != null) FocusOnTestWorld();
         else FocusOnColony();
 
-        var ui = new CanvasLayer();
-        _hud = new Label { Position = new Vector2(12, 10) };
-        _hud.AddThemeFontSizeOverride("font_size", 17);
-        _hud.AddThemeConstantOverride("outline_size", 4);
-        _hud.AddThemeColorOverride("font_outline_color", new Color(0, 0, 0, 0.6f));
-        ui.AddChild(_hud);
-        _housingMenu = new HousingMenu { Name = "HousingMenu" };
-        ui.AddChild(_housingMenu);
-        _housingMenu.Initialize(_sim);
-        _workMenu = new WorkMenu { Name = "WorkMenu" };
-        ui.AddChild(_workMenu);
-        _workMenu.Initialize(_sim);
-        _testMenu = new TestMenu { Name = "TestMenu" };
-        ui.AddChild(_testMenu);
-        _testMenu.Initialize(this);
-        AddChild(ui);
+        _ui = new GameUi(this) { Name = "GameUi" };
+        AddChild(_ui);
     }
+
+    // ---- What the UI reads and drives ----------------------------------------------------------------
+
+    public ColonySim Sim => _sim;
+    public DesignationTool Tool => _tool;
+    public WorldView View => _world;
+    public bool Paused { get => _paused; set => _paused = value; }
+    public static IReadOnlyList<int> SpeedSteps => Speeds;
+    public int SpeedIndex { get => _speedIndex; set => _speedIndex = Math.Clamp(value, 0, Speeds.Length - 1); }
+    public double SimMs => _simMsThisFrame;
+    public TestResult? Test => _test;
+    public int PendingSections => _world.PendingSections;
+
+    /// <summary>Looks at a tile from close up (keeps the camera's heading).</summary>
+    public void FocusOn(TilePos p) => _rig.Focus(SimSpace.TileCenter(p), 18f);
+
+    /// <summary>The colony, or the whole test world when one is open.</summary>
+    public void FocusHome()
+    {
+        if (_test != null) FocusOnTestWorld();
+        else FocusOnColony();
+    }
+
+    /// <summary>Starts a new colony: a fresh world from this seed and size (the scene reloads onto it).</summary>
+    public void NewColony(int seed, int size)
+    {
+        s_newWorld = (seed, size, size, WorldHeight);
+        s_home = null;
+        s_launch = null;
+        s_launchResult = null;
+        GetTree().ReloadCurrentScene();
+    }
+
+    private static (int Seed, int W, int D, int H)? s_newWorld;
+    private GameUi _ui = null!;
 
     // ---- Test menu ------------------------------------------------------------------------------
     // Opening a world (a test's, or the colony again) hands its sim to the next Main through these statics and
@@ -144,9 +165,6 @@ public partial class Main : Node3D
     private static TestResult? s_launchResult;
     private static bool s_devArgsDone;
     private TestResult? _test; // the test whose world this is, if any
-    private TestMenu _testMenu = null!;
-    private HousingMenu _housingMenu = null!;
-    private WorkMenu _workMenu = null!;
 
     public bool InTestWorld => _test != null;
     public bool CanRunDemos => _test == null && _sim.Colonists.Count > 0 && _sim.Terrain != null;
@@ -211,13 +229,7 @@ public partial class Main : Node3D
             case Key.Key1: _speedIndex = 0; _paused = false; break;
             case Key.Key2: _speedIndex = 1; _paused = false; break;
             case Key.Key3: _speedIndex = 2; _paused = false; break;
-            case Key.C when !key.Echo: if (_test != null) FocusOnTestWorld(); else FocusOnColony(); break;
-            case Key.T when !key.Echo: _testMenu.Toggle(); break;
-            case Key.H when !key.Echo: _housingMenu.Toggle(); break;
-            case Key.J when !key.Echo: _workMenu.Toggle(); break;
-            case Key.Escape when _workMenu.Visible: _workMenu.Toggle(); GetViewport().SetInputAsHandled(); break;
-            case Key.Escape when _housingMenu.Visible: _housingMenu.Toggle(); GetViewport().SetInputAsHandled(); break;
-            case Key.Escape when _testMenu.Visible: _testMenu.Toggle(); GetViewport().SetInputAsHandled(); break;
+            case Key.Home when !key.Echo: FocusHome(); break;
         }
     }
 
@@ -239,7 +251,7 @@ public partial class Main : Node3D
     {
         HandleDevArgs(delta);
 
-        if (!_paused && _sim.WaterReady) // the world starts once its water has settled
+        if (!_paused && !_ui.MenuOpen && _sim.WaterReady) // the world starts once its water has settled (and waits while the main menu is up)
         {
             // Fixed-rate simulation; cap catch-up so a long frame can't snowball.
             _tickAccumulator += delta * Speeds[_speedIndex];
@@ -256,72 +268,6 @@ public partial class Main : Node3D
             _maxSimMs = System.Math.Max(_maxSimMs, _simMsThisFrame);
         }
 
-        UpdateHud();
-    }
-
-    private void UpdateHud()
-    {
-        var sb = new StringBuilder();
-        string hover = _tool.Hovered is { } h
-            ? $"{TileInfo.Name(_sim.World.Get(h))} at {h}" + (_sim.Flora.TryGet(h.Offset(0, 0, 1), out var plant) ? $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" + (Colony.Core.Nature.PlantInfo.IsGatherable(plant) ? " (ripe)" : "") : "")
-            : "-";
-        if (_tool.Hovered is { } wh && _sim.Water.MassAt(wh.Offset(0, 0, 1)) is var wm and >= Colony.Core.Fluids.Water.MinMass)
-            hover += $", water {_sim.Water.Level(wh.Offset(0, 0, 1))}/7" + (_sim.Water.Pressure(wh.Offset(0, 0, 1)) is var pr and > 0.05f ? $" (pressed by {pr:0.0} levels)" : "");
-        if (_tool.Hovered is { } sh && _sim.Waterworks.At(sh.Offset(0, 0, 1)) is { } thing)
-            hover += thing switch
-            {
-                Colony.Core.Fluids.WaterWheel ww => $", water wheel making {ww.Power:0.#} power",
-                Colony.Core.Fluids.Pump pp => $", pump moving {pp.Pumped} water per step",
-                _ => "",
-            };
-        if (_tool.Hovered is { } fh && _sim.Farms.TryGet(fh.Offset(0, 0, 1), out var crop))
-            hover += $", farm plot ({Colony.Core.Nature.PlantInfo.Name(crop).ToLowerInvariant()})";
-        if (_tool.HoveredMachine() is { Recipe: { } making } hm)
-            hover += $", {hm.Name.ToLowerInvariant()} making {making.Name.ToLowerInvariant()} ({making.Describe(hm.Batch.Units)}, {Colony.Core.Industry.Catalog.EducationName(making.Education)}; F to change)";
-        string time = _paused ? "PAUSED" : $"{Speeds[_speedIndex]}x";
-        string tool = _tool.ModeName(_tool.Mode);
-        double seconds = _sim.Tick / (double)ColonySim.TicksPerSecond;
-
-        if (_test != null)
-            sb.AppendLine($"TEST WORLD: {_test.Case.FullName}: {_test.Message.Replace("\n", " ")}    (T: tests, back to the colony)");
-        sb.AppendLine($"Level {_world.ViewLevel} / {_sim.World.Height - 1}    Time {seconds:0}s [{time}]    " +
-                      $"{Engine.GetFramesPerSecond()} fps, sim {_simMsThisFrame:0.0} ms" +
-                      (_world.PendingSections > 0 ? $"    building terrain: {_world.PendingSections} sections left" : ""));
-        sb.AppendLine($"Tool: {tool}    Hover: {hover}");
-        sb.AppendLine($"Designations: {_sim.Designations.Count}    {_tool.SelectionInfo ?? _tool.LastAction}");
-        sb.AppendLine(StockLine());
-        if (_peopleLine == null || _frames % 15 == 0) _peopleLine = PeopleLine(); // scans every pile: a few times a second is plenty
-        sb.AppendLine(_peopleLine);
-        sb.AppendLine(WaterLine());
-        if (_tool.Hovered is { } hc && _sim.Rooms.RoomAt(hc.Offset(0, 0, 1)) is { } room)
-        {
-            if (room.Type.IsHome && _sim.Housing.HomeOf(room) is { } home) AppendHomePanel(sb, home);
-            else if (!room.Type.IsHome) AppendRoomPanel(sb, room);
-        }
-        if (_sim.RecentCaveIns.Count > 0)
-        {
-            var last = _sim.RecentCaveIns[^1];
-            double ago = (_sim.Tick - last.Tick) / (double)ColonySim.TicksPerSecond;
-            if (ago < 20)
-                sb.AppendLine($"CAVE-IN! {last.Tiles} tiles fell {last.Drop} levels near {last.Origin} ({ago:0}s ago)");
-        }
-        sb.AppendLine();
-        foreach (var e in _sim.Events)
-            if (_sim.Tick - e.Tick < 60 * ColonySim.TicksPerSecond) sb.AppendLine($"  * {e.Text}");
-        const int listed = 14;
-        foreach (var c in _sim.Colonists.Take(listed))
-            sb.AppendLine($"  {c.Name,-12} {(c.IsChild ? $"Child {(_sim.Tick - c.BornTick) / Colony.Core.Agents.Needs.Day}d" : c.EducationName),-9} {c.Describe()}" +
-                          (c.Spouse is { } spouse ? $"  [married to {spouse.Name}]" : "") + (c.Starving ? "  [STARVING]" : c.Hungry ? "  [hungry]" : "") +
-                          (c.IsAutomaton ? "" : $"  ({(c.Home is { } ch ? ch.Name : "homeless")}, mood {c.Happiness:P0}{(c.Tired ? ", tired" : "")}; likes {c.DescribeLikes(_sim.Tick)})"));
-        if (_sim.Colonists.Count > listed) sb.AppendLine($"  ... and {_sim.Colonists.Count - listed} more");
-        sb.AppendLine();
-        sb.AppendLine("Tab/Shift+Tab: orders and zones (dig, stairs, chop, gather, stockpile, farms)   B: build menu (workshop rooms and parts; R rotate, [ ] size)");
-        sb.AppendLine("F/Shift+F over a machine: change its recipe   LMB: start/confirm box or place   RMB: remove box");
-        sb.AppendLine("Z/X while selecting: span levels");
-        sb.AppendLine("Z/X: level down/up   Space: pause   1/2/3: speed   Enter: (debug) complete all");
-        sb.AppendLine("WASD: pan   Q/E: rotate   Wheel: zoom   Middle-drag: orbit   C: find colonists   H: housing   J: work   T: tests and demos");
-        // StringBuilder uses \r\n on Windows, which Label renders as an extra blank line.
-        _hud.Text = sb.ToString().Replace("\r", "").TrimEnd();
     }
 
     /// <summary>
@@ -339,91 +285,6 @@ public partial class Main : Node3D
         for (int z = top; z >= System.Math.Max(0, top - 128); z--)
             if (world.IsSolid(x, y, z)) return z + 1;
         return null;
-    }
-
-    /// <summary>Home panel: its policy, room, residents and what is installed per slot against what the policy wants.</summary>
-    private void AppendHomePanel(StringBuilder sb, Colony.Core.Agents.Home home)
-    {
-        var plan = Colony.Core.Agents.Housing.Plan(home);
-        sb.AppendLine($"[{home.Name}]  {home.Room.Cells.Count} cells, {home.Policy.Name.ToLowerInvariant()} (F: next policy, H: edit policies)    " +
-                      $"room for {plan.Residents}, {home.Beds} beds, {home.Residents.Count} living here" +
-                      (home.Family != 0 && home.Residents.FirstOrDefault(r => r.Spouse != null) is { } head
-                          ? $"    the family of {head.Name} & {head.Spouse!.Name}"
-                          : home.Policy.Shared ? "    shared lodging" : home.Residents.Count == 0 ? "    empty: settlers or a newly-wed couple may move in" : "    lodgers") +
-                      (home.Room.Cells.Count < Colony.Core.Agents.Housing.MinCells ? $"    TOO SMALL (needs {Colony.Core.Agents.Housing.MinCells} cells)" : ""));
-        for (int s = 0; s < Colony.Core.Agents.Housing.SlotCount; s++)
-        {
-            if (plan.Count[s] == 0 && home.Count(s) == 0) continue;
-            var have = home.Fixtures.Where(f => f.Slot == s).GroupBy(f => f.Item).Select(g => $"{g.Count()} {g.Key.Name.ToLowerInvariant()}");
-            string wanted = plan.Count[s] == 0 ? "none wanted" : $"wants {plan.Count[s]} {Colony.Core.Industry.Catalog.FixtureTiers[plan.Tier[s]]}";
-            float wear = home.Fixtures.Where(f => f.Slot == s).Select(f => f.Condition).DefaultIfEmpty(1).Min();
-            sb.AppendLine($"   {Colony.Core.Agents.Housing.Slots[s],-10} {string.Join(", ", have).PadRight(34)} {wanted}" +
-                          $"  ({Colony.Core.Agents.Housing.SlotEffects[s]}{(wear < 0.25f ? ", some nearly worn out" : "")})");
-        }
-        var shell = home.Shell;
-        sb.AppendLine(shell.Enclosure <= 0 ? "   walls      none (build thin walls round it: B, Walls & doors)"
-            : $"   walls      {shell.Enclosure:P0} closed, {Colony.Core.Industry.Catalog.FixtureTiers[Math.Clamp((int)MathF.Round(shell.Tier), 0, 3)]} ({string.Join(", ", shell.Materials)}), {shell.Windows} window{(shell.Windows == 1 ? "" : "s")}");
-        if (home.Residents.Count > 0)
-            sb.AppendLine("   Living here: " + string.Join(", ", home.Residents.Select(c =>
-                $"{c.Name} ({c.EducationName}, home {Colony.Core.Agents.Housing.Score(home, c):P0}, likes {c.DescribeLikes(_sim.Tick)})")));
-    }
-
-    /// <summary>Builder info panel for the room under the cursor.</summary>
-    private void AppendRoomPanel(StringBuilder sb, Colony.Core.Industry.Room room)
-    {
-        int levels = room.Cells.Select(c => c.Z).Distinct().Count();
-        static string In(Colony.Core.Items.ItemType t) => t.Name.ToLowerInvariant();
-        sb.AppendLine($"[{room.Name}]  {room.Cells.Count} cells on {levels} level{(levels == 1 ? "" : "s")}    " +
-                      $"Status: {Colony.Core.Industry.Rooms.Status(room, _sim)}    Efficiency {room.Efficiency:P0}");
-        var parts = room.Parts.Where(p => p.Built && p.Role != Colony.Core.Industry.PartRole.Machine)
-            .OrderBy(p => p.Type.Index).ThenByDescending(p => p.Size).GroupBy(p => p.Name)
-            .Select(g => $"{g.Count()} {g.Key.ToLowerInvariant()}");
-        if (parts.Any()) sb.AppendLine($"   Parts: {string.Join(", ", parts)}");
-        // Machines and what each makes, with the room's capacity per minute when every machine is manned
-        // (ignores fetching and storing walks).
-        foreach (var g in room.PartsWithRole(Colony.Core.Industry.PartRole.Machine).GroupBy(m => (m.Name, m.Recipe)).Take(6))
-        {
-            var (name, recipe) = g.Key;
-            var b = g.First().Batch;
-            double perMinute = g.Count() * b.OutCount * 60.0 * ColonySim.TicksPerSecond * room.Efficiency / b.WorkTicks;
-            sb.AppendLine($"   {g.Count()} {name.ToLowerInvariant()}: {recipe!.Describe()}  ({Colony.Core.Industry.Catalog.EducationName(recipe.Education)}), " +
-                          $"up to {perMinute:0.#}/min");
-        }
-        // Blueprints: what each still needs, so it's clear whether hauling or building is the bottleneck.
-        var blueprints = room.Blueprints.Select(p =>
-        {
-            int have = Colony.Core.Industry.Rooms.MaterialsOnSite(p, _sim.Items);
-            string state = p.BuilderId >= 0 ? "building" : have >= p.Cost.Count ? "waiting for a builder" : $"{have}/{p.Cost.Count} {In(p.Cost.Material)}";
-            return $"{p.Name.ToLowerInvariant()} ({state})";
-        }).ToList();
-        if (blueprints.Count > 0) sb.AppendLine($"   Under construction: {string.Join(", ", blueprints)}");
-        string Crates(Colony.Core.Industry.PartRole role)
-        {
-            var held = new List<string>();
-            foreach (var crate in room.PartsWithRole(role))
-                if (_sim.Items.TryGet(crate.Cells[0], out var pile) && pile.Count > 0) held.Add($"{pile.Count} {In(pile.Type)}");
-            return held.Count == 0 ? "empty" : string.Join(", ", held);
-        }
-        sb.AppendLine($"   Input crates: {Crates(Colony.Core.Industry.PartRole.Input)}    Output crates: {Crates(Colony.Core.Industry.PartRole.Output)}");
-    }
-
-    /// <summary>"Stock: Logs 40, Stone 12 (loose: Stone 30)": stored totals, then what still lies around.</summary>
-    private string StockLine()
-    {
-        var stored = _sim.Items.Totals(_sim.Stockpiles.Contains);
-        var loose = _sim.Items.Totals(p => !_sim.Stockpiles.Contains(p));
-        static string List(int[] totals)
-        {
-            var parts = new List<string>();
-            for (int t = 0; t < totals.Length; t++)
-                if (totals[t] > 0) parts.Add($"{new Colony.Core.Items.ItemType((ushort)t).Name} {totals[t]}");
-            if (parts.Count == 0) return "nothing";
-            // Many kinds of goods: wrap every dozen so the HUD stays on screen.
-            return string.Join(",\n         ", parts.Chunk(12).Select(c => string.Join(", ", c)));
-        }
-        string looseText = List(loose);
-        return $"Stock: {List(stored)}" + (looseText == "nothing" ? "" : $"    (loose: {looseText})") +
-               $"    Stockpile cells: {_sim.Stockpiles.Count}, farm plots: {_sim.Farms.Count}";
     }
 
     // ---- Dev aids -------------------------------------------------------------------------------
@@ -454,6 +315,12 @@ public partial class Main : Node3D
             }
             if (arg.StartsWith("--seed=") && int.TryParse(arg["--seed=".Length..], out int seed)) Seed = seed;
         }
+        if (s_newWorld is { } fresh) // the main menu's "New colony"
+        {
+            (Seed, WorldWidth, WorldDepth, WorldHeight) = fresh;
+            s_newWorld = null;
+            s_devArgsDone = true; // the demos and dev flags were for the first world
+        }
     }
 
     private static string? Arg(string name)
@@ -473,8 +340,11 @@ public partial class Main : Node3D
         {
             _firstFrameMs = Time.GetTicksMsec();
             if (int.TryParse(Arg("--level"), out int level)) _world.ViewLevel = level;
-            if (Arg("--test-menu") != null) _testMenu.Toggle();
-            if (Arg("--work-menu") != null) _workMenu.Toggle();
+            if (Arg("--test-menu") != null) _ui.OpenWindow("tests");
+            if (Arg("--work-menu") != null) _ui.OpenWindow("work");
+            if (Arg("--open") is { Length: > 0 } open) foreach (var id in open.Split(',')) _ui.OpenWindow(id);
+            if (Arg("--main-menu") != null) _ui.ShowMenu(true);
+            if (Arg("--ui-selftest") != null) AddChild(new UiSelfTest(_ui));
             // World-editing flags apply once, to the first world (not again when the test menu reloads the scene).
             if (!s_devArgsDone)
             {
@@ -488,7 +358,7 @@ public partial class Main : Node3D
                 if (Arg("--factory-demo") != null) FactoryDemo();
                 if (Arg("--parts-demo") != null) PartsDemo();
                 if (Arg("--showroom") is { } showroom) ShowroomDemo(showroom);
-                if (Arg("--build-menu") is { } menu) _tool.OpenBuildMenu(menu);
+                if (Arg("--build-menu") is { } menu) _ui.OpenBuild(menu);
                 if (Arg("--water-demo") != null) WaterDemo();
                 if (Arg("--homes-demo") != null) HomesDemo();
                 if (int.TryParse(Arg("--ticks"), out int ticks))
@@ -545,6 +415,7 @@ public partial class Main : Node3D
         GD.Print($"[bench] frame ms over {BenchFrames} frames: avg {avg:0.00}, p95 {_frameMs[(int)(_frameMs.Count * 0.95)]:0.00}, max {_frameMs[^1]:0.00}; max sim step batch {_maxSimMs:0.00} ms");
         int wf = Math.Max(1, _waterView.Frames);
         GD.Print($"[bench] per frame: sim {_simMsTotal / _frameMs.Count:0.00} ms, water meshing {_waterView.MeshMs / wf:0.00} ms ({_waterView.SectionsBuilt} sections built, backlog {_waterView.Backlog}), water cap {_waterView.CapMs / wf:0.00} ms; world view {_world.SnapshotMs:0} ms snapshots total");
+        if (GlyphManager.Instance is { } gm && gm.TickMs.Count > 0) GD.Print("[bench] worst UI window updates (ms): " + string.Join(", ", gm.TickMs.Select(kv => $"{kv.Key} {kv.Value:0.00}")));
         GD.Print($"[bench] draw calls {Performance.GetMonitor(Performance.Monitor.RenderTotalDrawCallsInFrame)}, " +
                  $"video mem {Performance.GetMonitor(Performance.Monitor.RenderVideoMemUsed) / 1048576:0} MB, " +
                  $"static mem {OS.GetStaticMemoryUsage() / 1048576} MB, managed {System.GC.GetTotalMemory(false) / 1048576} MB");
@@ -640,36 +511,6 @@ public partial class Main : Node3D
         rooms.InstantBuild = false;
         _rig.Focus(SimSpace.TileCenter(new TilePos((x0 + x1) / 2, (y0 + y1) / 2, f)), 17f, yaw: 200f, pitch: -58f);
         GD.Print($"Parts demo: {rooms.All.Sum(r => r.Parts.Count)} parts, efficiency {rooms.All[0].Efficiency:P0}");
-    }
-
-    /// <summary>"Water: 1200 spans moving in 30 blocks (40 wet)    Power: 12 made by 1 wheel, 5 wanted by 1 pump (100%)".</summary>
-    /// <summary>Food in store, the living standard and how the population is changing.</summary>
-    private string? _peopleLine;
-
-    private string PeopleLine()
-    {
-        var society = _sim.Society;
-        float days = Colony.Core.Agents.Society.FoodDays(_sim);
-        string food = float.IsInfinity(days) ? "-" : $"{days:0.0} days ({Colony.Core.Agents.Society.FoodInStore(_sim)} meals)";
-        var met = string.Join(", ", Colony.Core.Agents.Needs.Goods.Select((g, k) => $"{g.Need} {society.Met[k]:P0}"));
-        int hungry = _sim.Colonists.Count(c => c.Hungry), starving = _sim.Colonists.Count(c => c.Starving);
-        return $"Day {society.Days + 1}    Colonists {_sim.Colonists.Count}" + (starving > 0 ? $" ({starving} STARVING)" : hungry > 0 ? $" ({hungry} hungry)" : "") +
-               $"    Food: {food}    Mood {society.Happiness:P0}    Homes {_sim.Housing.All.Count} ({_sim.Colonists.Count(c => !c.IsAutomaton && c.Home == null)} homeless, {_sim.Housing.FreeBeds} free beds)" +
-               $"    Goods: {society.Standard:P0} ({met})" +
-               $"    Settlers {society.SettlersArrived}, left {society.Departed}, weddings {society.Marriages}, births {society.Births}" +
-               (days < Colony.Core.Agents.Needs.SettlerFoodDays ? $"  (settlers need {Colony.Core.Agents.Needs.SettlerFoodDays:0} days of food)" : "");
-    }
-
-    private string WaterLine()
-    {
-        var w = _sim.Water;
-        var works = _sim.Waterworks;
-        string power = works.Wheels.Count + works.Pumps.Count == 0 ? "" :
-            $"    Power: {works.Generated:0.#} made by {works.Wheels.Count} wheel{(works.Wheels.Count == 1 ? "" : "s")}, " +
-            $"{works.Demand:0.#} wanted by {works.Pumps.Count} pump{(works.Pumps.Count == 1 ? "" : "s")} ({works.Supply:P0})";
-        string sites = _sim.Constructions.Count > 0 ? $"    Blueprints: {_sim.Constructions.Count}" : "";
-        return $"Water: {w.LastStepCells} spans moving in {w.AwakeChunks} blocks " +
-               $"({w.WetChunks} wet){power}{sites}";
     }
 
     /// <summary>

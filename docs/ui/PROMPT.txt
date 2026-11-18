@@ -1,0 +1,7 @@
+Read docs/ui/GLYPH_UI.md. It is the approved visual direction for every menu in the game. Also open docs/ui/glyph_ui_reference.html in a browser: it is the live reference for the target look. The theme tokens and glyph data are in docs/ui/glyph_themes.json and docs/ui/glyph_glyphs.json.
+
+Step 1: Inventory every menu, window and popup scene in the project. For each one, list what it contains: windows, tabs, lists, bars, checkboxes, icons, buttons, numbers. Then propose a migration order. Stop and show me the inventory and the plan before changing anything.
+
+Step 2: Build the core from section 6 of the spec: GlyphTheme, GlyphMetrics, the generated Theme, the glass shader, and the custom controls GlyphWindow, GlyphManager, GlyphIcon/GlyphChip, GlyphBar, GlyphSwitch, GlyphSegmented, GlyphSection, GlyphKV, GlyphSparkline, plus the HUD and dock.
+
+Step 3: Migrate the menus one at a time. Keep every signal, data binding and gameplay behaviour unchanged; this is a visual migration only. After each menu, run through the section 7 checklist and tell me what changed.

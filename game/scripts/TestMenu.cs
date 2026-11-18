@@ -14,7 +14,7 @@ namespace ColonyGame;
 /// the dev demos into the current colony, and leads back to the colony from a test's world.
 /// Runs happen on a background thread; state is static so a run survives the scene reload that opens a world.
 /// </summary>
-public partial class TestMenu : PanelContainer
+public partial class TestMenu : VBoxContainer
 {
     private static readonly Dictionary<string, TestResult> Results = new();
     private static readonly Queue<TestCase> Queue = new();
@@ -29,7 +29,7 @@ public partial class TestMenu : PanelContainer
     private LineEdit _filterBox = null!;
     private Label _status = null!;
     private Button _run = null!, _watch = null!, _runAll = null!, _home = null!;
-    private HBoxContainer _demos = null!;
+    private HFlowContainer _demos = null!;
     private IReadOnlyList<TestCase> _cases = Array.Empty<TestCase>();
     private string _loadError = "";
 
@@ -39,31 +39,15 @@ public partial class TestMenu : PanelContainer
         ("Homes", "homes"), ("Showroom", "showroom"), ("Stairs", "stairs"), ("Dig", "dig"),
     ];
 
+    /// <summary>Called when a demo starts (the window closes so the world is in view).</summary>
+    public Action? DemoStarted;
+
     public void Initialize(Main main)
     {
         _main = main;
-        Visible = false;
-        AnchorLeft = AnchorRight = 1;
-        AnchorTop = 0;
-        AnchorBottom = 1;
-        OffsetLeft = -760;
-        OffsetRight = -12;
-        OffsetTop = 12;
-        OffsetBottom = -12;
-        AddThemeStyleboxOverride("panel", new StyleBoxFlat
-        {
-            BgColor = new Color(0.08f, 0.09f, 0.11f, 0.94f),
-            ContentMarginLeft = 12, ContentMarginRight = 12, ContentMarginTop = 10, ContentMarginBottom = 10,
-            CornerRadiusTopLeft = 6, CornerRadiusTopRight = 6, CornerRadiusBottomLeft = 6, CornerRadiusBottomRight = 6,
-        });
-
-        var box = new VBoxContainer();
-        box.AddThemeConstantOverride("separation", 8);
-        AddChild(box);
-
-        var title = new Label { Text = "Tests  (T or Esc to close)" };
-        title.AddThemeFontSizeOverride("font_size", 20);
-        box.AddChild(title);
+        var box = this;
+        SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        box.AddThemeConstantOverride("separation", (int)(UI.GlyphTheme.Ch / 3));
 
         var top = new HBoxContainer();
         _filterBox = new LineEdit { PlaceholderText = "Filter (e.g. water, tunnel, pressure)", Text = _filter, SizeFlagsHorizontal = SizeFlags.ExpandFill };
@@ -73,12 +57,10 @@ public partial class TestMenu : PanelContainer
             Populate();
         };
         top.AddChild(_filterBox);
-        var refresh = new Button { Text = "Reload tests", TooltipText = "Picks up a fresh build of the tests (dotnet build ColonyGame.sln)" };
-        refresh.Pressed += () => Load();
-        top.AddChild(refresh);
+        top.AddChild(UI.G.Button(" Reload tests ", Load, "Picks up a fresh build of the tests (dotnet build ColonyGame.sln)"));
         box.AddChild(top);
 
-        _tree = new Tree { HideRoot = true, SizeFlagsVertical = SizeFlags.ExpandFill, SelectMode = Tree.SelectModeEnum.Single };
+        _tree = new Tree { HideRoot = true, SelectMode = Tree.SelectModeEnum.Single, CustomMinimumSize = new Vector2(0, 14 * UI.GlyphTheme.Ch) };
         _tree.ItemSelected += () =>
         {
             _selected = SelectedCase()?.FullName;
@@ -87,55 +69,41 @@ public partial class TestMenu : PanelContainer
         _tree.ItemActivated += () => Start(watch: false); // double-click or Enter
         box.AddChild(_tree);
 
-        var buttons = new HBoxContainer();
-        _run = new Button { Text = "Run, then open its world", TooltipText = "Runs the selected test to the end and shows the world it built, still running" };
-        _run.Pressed += () => Start(watch: false);
-        _watch = new Button { Text = "Watch from the start", TooltipText = "Opens the selected test's world as it was set up, paused: press Space to watch it run" };
-        _watch.Pressed += () => Start(watch: true);
-        _runAll = new Button { Text = "Run all shown", TooltipText = "Runs every listed test and marks it pass/fail (no worlds opened)" };
-        _runAll.Pressed += RunAll;
+        var buttons = new HFlowContainer();
+        _run = UI.G.Button(" Run, then open its world ", () => Start(watch: false), "Runs the selected test to the end and shows the world it built, still running", "Primary");
+        _watch = UI.G.Button(" Watch from the start ", () => Start(watch: true), "Opens the selected test's world as it was set up, paused: press Space to watch it run");
+        _runAll = UI.G.Button(" Run all shown ", RunAll, "Runs every listed test and marks it pass/fail (no worlds opened)");
         buttons.AddChild(_run);
         buttons.AddChild(_watch);
         buttons.AddChild(_runAll);
         box.AddChild(buttons);
 
-        _status = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart, CustomMinimumSize = new Vector2(0, 90) };
+        _status = UI.G.Para("", "Dim");
+        _status.CustomMinimumSize = new Vector2(0, 3 * UI.GlyphTheme.Ch);
         box.AddChild(_status);
 
-        box.AddChild(new HSeparator());
-        var demoRow = new HBoxContainer();
-        demoRow.AddChild(new Label { Text = "Demos (built next to the colony):" });
-        _demos = new HBoxContainer();
+        box.AddChild(new UI.GlyphSection("Demos (built next to the colony)"));
+        _demos = new HFlowContainer();
         foreach (var (label, id) in Demos)
         {
-            var b = new Button { Text = label };
-            b.Pressed += () =>
+            _demos.AddChild(UI.G.Button($" {label} ", () =>
             {
                 _main.RunDemo(id);
-                Visible = false;
-            };
-            _demos.AddChild(b);
+                DemoStarted?.Invoke();
+            }));
         }
-        demoRow.AddChild(_demos);
-        box.AddChild(demoRow);
+        box.AddChild(_demos);
 
-        _home = new Button { Text = "Back to the colony" };
-        _home.Pressed += _main.ReturnHome;
+        _home = UI.G.Button(" Back to the colony ", _main.ReturnHome, "Leaves this test's world for the colony, as it was left");
         box.AddChild(_home);
     }
 
-    public void Toggle()
+    /// <summary>The window opened: reload the list.</summary>
+    public void Opened()
     {
-        Visible = !Visible;
-        if (!Visible)
-        {
-            _filterBox.ReleaseFocus();
-            return;
-        }
         Load();
         foreach (var child in _demos.GetChildren()) ((Button)child).Disabled = !_main.CanRunDemos;
         _home.Visible = _main.InTestWorld;
-        _filterBox.GrabFocus();
     }
 
     private void Load()
@@ -172,7 +140,7 @@ public partial class TestMenu : PanelContainer
             int failed = group.Count(c => Results.TryGetValue(c.FullName, out var r) && !r.Passed);
             cls.SetText(0, $"{group.Key}  ({group.Count()}" + (passed + failed > 0 ? $": {passed} passed, {failed} failed" : "") + ")");
             cls.SetSelectable(0, false);
-            if (failed > 0) cls.SetCustomColor(0, new Color(1f, 0.45f, 0.4f));
+            if (failed > 0) cls.SetCustomColor(0, UI.GlyphTheme.Tok("bad"));
             cls.Collapsed = !filtered && !group.Any(c => c.FullName == _selected);
             foreach (var test in group)
             {
@@ -183,7 +151,7 @@ public partial class TestMenu : PanelContainer
                 if (Results.TryGetValue(test.FullName, out var r))
                 {
                     mark = r.Stopped ? "  [watched]" : r.Passed ? $"  [pass, {r.Ms:0} ms]" : "  [FAIL]";
-                    item.SetCustomColor(0, r.Stopped ? new Color(0.9f, 0.85f, 0.5f) : r.Passed ? new Color(0.55f, 0.9f, 0.55f) : new Color(1f, 0.45f, 0.4f));
+                    item.SetCustomColor(0, UI.GlyphTheme.Tok(r.Stopped ? "warn" : r.Passed ? "good" : "bad"));
                 }
                 item.SetText(0, Humanize(test.Name) + mark);
                 if (test.FullName == _selected) item.Select(0);
@@ -231,7 +199,7 @@ public partial class TestMenu : PanelContainer
             }
         }
         else if (Queue.Count > 0) _running = TestRunner.Run(Queue.Dequeue(), watch: false);
-        if (Visible) Populate();
+        if (IsVisibleInTree()) Populate();
     }
 
     private void UpdateStatus()
