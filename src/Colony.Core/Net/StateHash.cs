@@ -33,7 +33,8 @@ public static class StateHash
     {
         ulong sum = Of(sim.Tick, sim.Colonists.Count, sim.Designations.Count, sim.Stockpiles.Count, sim.Rooms.All.Count, sim.Constructions.Count);
         foreach (var c in sim.Colonists)
-            sum += Of(1, c.Id, Pos(c.Position), (long)c.Task, (long)c.State, c.Satiety, (long)(c.Rest * 1000), c.Faction, c.CarryingCount, c.Education);
+            sum += Of(1, c.Id, Pos(c.Position), (long)c.Task, (long)c.State, c.Satiety, (long)(c.Rest * 1000), c.Faction, c.CarryingCount, c.Education,
+                c.Health, c.Downed ? 1 : 0, c.Drafted ? 1 : 0, c.Weapon?.Index ?? -1, c.Armour?.Index ?? -1, c.Shield?.Index ?? -1);
         foreach (var (p, pile) in sim.Items.All)
             sum += Of(2, Pos(p), pile.Type.Index, pile.Count, pile.Reserved);
         foreach (var (p, kind) in sim.Designations.All)
@@ -44,7 +45,11 @@ public static class StateHash
             sum += Of(5, r.Id, r.Cells.Count, r.Parts.Count, r.Faction);
         foreach (var bp in sim.Constructions.All)
             sum += Of(6, Pos(bp.Cell), (long)bp.Kind, bp.Faction);
-        sum += Of(7, sim.World.EdgeRevision, sim.World.CoverRevision);
+        sum += Of(7, sim.World.EdgeRevision, sim.World.CoverRevision, sim.Deaths, sim.Wildlife.Slain);
+        foreach (var n in sim.Wildlife.Nests)
+            sum += Of(8, n.Id, Pos(n.Entrance), n.Population, n.Out, n.Health, n.Crowded, n.Awake ? 1 : 0);
+        foreach (var c in sim.Wildlife.Creatures)
+            sum += Of(9, c.Id, Pos(c.Position), c.Health, (long)c.Mode, c.NestId, c.TargetId);
         return Mix(sum);
     }
 }

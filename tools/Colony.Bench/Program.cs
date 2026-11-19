@@ -36,6 +36,68 @@ if (args.Length > 0 && args[0] == "snapshot")
     return;
 }
 
+if (args.Length > 0 && args[0] == "ants")
+{
+    // Giant ants at scale: the generated nests, plus a ring of full nests round the colony; the colony's land meets
+    // them (raids), and a drafted squad marches on one. Reports sim and wildlife tick costs and the swarm sizes.
+    //   dotnet run -c Release --project tools/Colony.Bench -- ants [size=2048] [ticks=6000] [colonists=20]
+    int asize = args.Length > 1 ? int.Parse(args[1]) : 2048;
+    int aticks = args.Length > 2 ? int.Parse(args[2]) : 6000;
+    int acol = args.Length > 3 ? int.Parse(args[3]) : 20;
+    var clock = Stopwatch.StartNew();
+    var asim = ColonySim.Generate(new WorldGenSettings(777, asize, asize, 384), acol);
+    Console.WriteLine($"generate {clock.ElapsedMilliseconds} ms, {asim.Wildlife.Nests.Count} nests placed");
+    var ahome = asim.Colonists[0].Position;
+    for (int k = 0; k < 8; k++)
+    {
+        double ang = k * Math.PI / 4;
+        int r = 34 + k % 3 * 8;
+        int x = ahome.X + (int)(r * Math.Cos(ang)), y = ahome.Y + (int)(r * Math.Sin(ang));
+        var p = new TilePos(x, y, asim.World.SurfaceLevel(x, y) + 1);
+        if (Movement.IsStandable(asim.World, p)) asim.Wildlife.AddNest(asim, Colony.Core.Combat.CreatureKinds.GiantAnt, p, 40);
+    }
+    // The colony's land: stockpiles reaching out towards every side.
+    for (int k = 0; k < 4; k++)
+    {
+        int dx = k switch { 0 => 18, 1 => -18, _ => 0 }, dy = k switch { 2 => 18, 3 => -18, _ => 0 };
+        var c = ahome.Offset(dx, dy, -1);
+        asim.Commands.Execute(new Colony.Core.Commands.AddStockpile(c.Offset(-2, -2, -2), c.Offset(2, 2, 2)));
+    }
+    var spears = Colony.Core.Industry.Catalog.Item("spear");
+    foreach (var c in asim.Colonists.Take(acol / 2)) asim.Items.Drop(c.Position, spears, 1);
+    asim.Commands.Execute(new Colony.Core.Commands.DesignatePlants(Colony.Core.Orders.DesignationKind.Chop, ahome.X - 30, ahome.Y - 30, ahome.X + 30, ahome.Y + 30));
+    double aTotal = 0, worst = 0, wTotal = 0, wWorst = 0;
+    int peak = 0, peakFighting = 0;
+    long gc0 = GC.CollectionCount(2);
+    for (int i = 0; i < aticks; i++)
+    {
+        if (i == aticks / 3)
+        {
+            // A squad of the first half marches on the nearest nest.
+            foreach (var c in asim.Colonists.Take(acol / 2)) asim.Commands.Execute(new Colony.Core.Commands.SetDrafted(c.Id, true));
+            if (asim.Wildlife.NestNear(ahome, 80) is { } target) asim.Commands.Execute(new Colony.Core.Commands.SquadAttack(target.Id));
+        }
+        long t0 = Stopwatch.GetTimestamp(); long n0 = Pathfinder.NodesExpanded;
+        asim.Step();
+        double ms = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
+        aTotal += ms;
+        worst = Math.Max(worst, ms);
+        wTotal += asim.Wildlife.LastTickMs;
+        wWorst = Math.Max(wWorst, asim.Wildlife.LastTickMs);
+        if (asim.Wildlife.LastTickMs > 5) Console.WriteLine($"  slow wildlife tick {asim.Tick}: {asim.Wildlife.LastTickMs:F1} ms, {Pathfinder.NodesExpanded - n0} path nodes, {asim.Wildlife.Creatures.Count} out");
+        peak = Math.Max(peak, asim.Wildlife.Creatures.Count);
+        peakFighting = Math.Max(peakFighting, asim.Wildlife.Creatures.Count(c => c.Fighting));
+        if ((i + 1) % 1000 == 0)
+            Console.WriteLine($"tick {asim.Tick}: {asim.Wildlife.Creatures.Count} ants out ({asim.Wildlife.Creatures.Count(c => c.Fighting)} fighting), " +
+                              $"{asim.Wildlife.Nests.Count} nests, slain {asim.Wildlife.Slain}, colonists {asim.Colonists.Count} " +
+                              $"({asim.Colonists.Count(c => c.Downed)} down, {asim.Deaths} dead)");
+    }
+    Console.WriteLine($"step avg {aTotal / aticks:F3} ms, worst {worst:F1} ms; wildlife avg {wTotal / aticks:F3} ms, worst {wWorst:F1} ms; " +
+                      $"peak {peak} ants out, {peakFighting} fighting; gen2 GCs {GC.CollectionCount(2) - gc0}");
+    foreach (var e in asim.Events.Where(e => !e.Text.Contains("feet"))) Console.WriteLine($"  [{e.Tick}] {e.Text}");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "flood")
 {
     // Flooding check: dotnet run -c Release --project tools/Colony.Bench -- flood [size] [ticks]. Counts water standing

@@ -99,6 +99,18 @@ public partial class DesignationTool : Node3D
     public string? PlacementProblem { get; private set; }
 
     public static bool IsBuild(ToolMode m) => m > LastOrder;
+
+    /// <summary>The squad tool is on: clicks order the drafted about instead of designating (G, or the Military window).</summary>
+    public bool SquadOrders
+    {
+        get => _squadOrders;
+        set
+        {
+            _squadOrders = value;
+            if (value) EndSelection();
+        }
+    }
+    private bool _squadOrders;
     public PartType? PartFor(ToolMode m) => m == ToolMode.Part ? Part : null;
 
     public string ModeName(ToolMode m)
@@ -307,6 +319,11 @@ public partial class DesignationTool : Node3D
     /// <summary>Esc: aborts a box or line in progress, else drops a build tool back to digging. False if neither applied.</summary>
     public bool CancelPlacement()
     {
+        if (SquadOrders)
+        {
+            SquadOrders = false;
+            return true;
+        }
         if (_selection != Selection.None)
         {
             EndSelection();
@@ -464,6 +481,36 @@ public partial class DesignationTool : Node3D
 
         switch (e)
         {
+            // Squad orders: click the ground to march the drafted there, a nest to send them against it; RMB: done.
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when SquadOrders && _selection == Selection.None:
+                if (Hovered is { } spot)
+                {
+                    var cell = spot.Offset(0, 0, 1);
+                    if (_sim.Wildlife.NestNear(cell, 2) is { } nest) Issue(new SquadAttack(nest.Id));
+                    else Issue(new SquadMove(cell));
+                }
+                Handled();
+                break;
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right } when SquadOrders && _selection == Selection.None:
+                SquadOrders = false;
+                Handled();
+                break;
+            // G: draft everyone and give squad orders (again: done giving orders); Shift+G: stand everyone down.
+            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.G } gk:
+                if (gk.ShiftPressed)
+                {
+                    Issue(new SetDrafted(-1, false));
+                    SquadOrders = false;
+                }
+                else if (SquadOrders) SquadOrders = false;
+                else
+                {
+                    if (!_sim.Colonists.Any(c => c.Faction == Player && c.Drafted)) Issue(new SetDrafted(-1, true));
+                    SquadOrders = true;
+                }
+                Handled();
+                break;
+
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when _selection != Selection.None:
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right } when _selection == Selection.Cancel:
                 Apply();

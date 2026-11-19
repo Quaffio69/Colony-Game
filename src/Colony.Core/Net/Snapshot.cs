@@ -100,7 +100,7 @@ internal static class SnapIO
 public static class Snapshot
 {
     private const string Magic = "COLONYSNAP";
-    private const int Version = 1;
+    private const int Version = 2;
 
     /// <summary>Where the last load or take spent its time (ms), for the bench.</summary>
     public static string LastTimings { get; internal set; } = "";

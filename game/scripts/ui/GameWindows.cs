@@ -259,10 +259,14 @@ public partial class ChronicleWindow : GlyphWindow
     }
     public ChronicleWindow() : this(null!) { }
 
-    public static bool IsAlert(string text) => text.Contains("left the colony") || text.Contains("starv", StringComparison.OrdinalIgnoreCase);
+    public static bool IsAlert(string text) => text.Contains("left the colony") || text.Contains("starv", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("struck down") || text.Contains("died") || text.Contains("raid") || text.Contains("swarm out") || text.Contains("restless");
 
     private static (string Glyph, string Tone) Kind(string text) =>
-        IsAlert(text) ? ("↓", "bad")
+        text.Contains("destroyed a nest") ? ("♠", "good")
+        : text.Contains("struck down") || text.Contains("died") || text.Contains("raid") || text.Contains("swarm") || text.Contains("restless") ? ("♠", "bad")
+        : text.Contains("back on their feet") ? ("♥", "good")
+        : IsAlert(text) ? ("↓", "bad")
         : text.Contains("marry") ? ("♥", "bad")
         : text.Contains("born") ? ("☺", "good")
         : text.Contains("grown up") ? ("▲", "good")
@@ -463,7 +467,8 @@ public partial class HelpWindow : GlyphWindow
         ("R, [ ]", "rotate, size of the part being placed"), ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor"),
         ("Esc", "cancel placing, close the window, main menu"), ("Ctrl+Tab", "next window"), ("Enter", "debug: finish all orders"),
         ("F5 / F9", "quicksave / load the newest save"), ("F4", "play the next colony (hot-seat, several colonies)"),
-        ("C I B L", "colonists, stocks, build, chronicle"), ("H J V", "housing, work, inspect"), ("F1 F2 F3", "tests, appearance, this help"),
+        ("G", "draft everyone, then click ground to march or a nest to attack (G again: done)"), ("Shift+G", "stand everyone down"),
+        ("C I B L", "colonists, stocks, build, chronicle"), ("H J V M", "housing, work, inspect, military"), ("F1 F2 F3", "tests, appearance, this help"),
     ];
 
     protected override void Build()
@@ -483,6 +488,7 @@ public partial class HelpWindow : GlyphWindow
         Live("Stockpile cells, farm plots", () => $"{sim.Stockpiles.Count}, {sim.Farms.Count}");
         Live("Settlers, left, weddings, births", () => $"{_ui.MyFaction.Society.SettlersArrived}, {_ui.MyFaction.Society.Departed}, {_ui.MyFaction.Society.Marriages}, {_ui.MyFaction.Society.Births}");
         Live("Goods met", () => string.Join(", ", Needs.Goods.Select((g, k) => $"{g.Need} {_ui.MyFaction.Society.Met[k]:P0}")));
+        Live("Wildlife", () => $"{sim.Wildlife.Nests.Count} nests, {sim.Wildlife.Creatures.Count} out, {sim.Wildlife.Slain} slain, {sim.Wildlife.LastTickMs:0.00} ms a tick");
     }
 
     private void Live(string name, Func<string> value)

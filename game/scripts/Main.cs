@@ -112,6 +112,9 @@ public partial class Main : Node3D
         _waterView.Initialize(_sim, _world);
 
         GetNode<ColonistView>("ColonistView").Initialize(_sim, _world);
+        var creatures = new CreatureView { Name = "CreatureView" };
+        AddChild(creatures);
+        creatures.Initialize(_sim, _world, () => Player);
 
         _tool = GetNode<DesignationTool>("DesignationTool");
         _tool.Initialize(_sim, _world);
@@ -391,7 +394,7 @@ public partial class Main : Node3D
             {
                 s_devArgsDone = true;
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ticks" }.Any(a => Arg(a) != null))
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
                 if (Arg("--dig-demo") != null) DigDemo();
                 if (Arg("--stairs-demo") != null) StairsDemo();
@@ -402,6 +405,7 @@ public partial class Main : Node3D
                 if (Arg("--build-menu") is { } menu) _ui.OpenBuild(menu);
                 if (Arg("--water-demo") != null) WaterDemo();
                 if (Arg("--homes-demo") != null) HomesDemo();
+                if (Arg("--ants-demo") is { } antsDemo) AntsDemo(antsDemo);
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
                 if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
@@ -756,5 +760,51 @@ public partial class Main : Node3D
         _sim.Designations.DesignateBox(bottom.Offset(1, -1, 0), bottom.Offset(3, 1, 0));
         _stairsDemoAt = bottom.Offset(1, 0, 0);
         GD.Print($"Stairs demo: shaft at ({a.X},{a.Y}), levels {a.Z}..{bottom.Z}, room east of the bottom");
+    }
+}
+
+public partial class Main
+{
+    /// <summary>
+    /// --ants-demo[=calm]: a full giant ant nest a short walk from the colony, arms and armour handed out, everyone drafted
+    /// and sent to destroy it (=calm: just the nest, to watch them forage and see that they leave colonists alone).
+    /// </summary>
+    private void AntsDemo(string mode)
+    {
+        var home = _sim.Colonists.First(c => c.Faction == Player).Position;
+        Colony.Core.Navigation.Connectivity conn = _sim.Connectivity;
+        conn.Update();
+        TilePos? site = null;
+        for (int r = 16; r < 40 && site is null; r++)
+        for (int k = 0; k < 8 && site is null; k++)
+        {
+            int x = home.X + (int)(r * Math.Cos(k * Math.PI / 4)), y = home.Y + (int)(r * Math.Sin(k * Math.PI / 4));
+            var p = new TilePos(x, y, _sim.World.SurfaceLevel(x, y) + 1);
+            if (Colony.Core.Navigation.Movement.IsStandable(_sim.World, p) && conn.Connected(p, home) && _sim.Water.MassAt(p) < Colony.Core.Fluids.Water.MinMass) site = p;
+        }
+        if (site is not { } at)
+        {
+            GD.PrintErr("Ants demo: no spot for a nest near the colony");
+            return;
+        }
+        var nest = _sim.Wildlife.AddNest(_sim, Colony.Core.Combat.CreatureKinds.GiantAnt, at, 40);
+        _stairsDemoAt = at;
+        if (mode == "calm")
+        {
+            GD.Print($"Ants demo: a calm nest at {at}");
+            return;
+        }
+        string[] arms = ["war_axe", "spear", "sword", "bow", "spear", "sword", "war_axe"];
+        int i = 0;
+        foreach (var c in _sim.Colonists.Where(c => c.Faction == Player && !c.IsChild))
+        {
+            c.PutOn(_sim, Colony.Core.Industry.Catalog.Item(arms[i % arms.Length]));
+            c.PutOn(_sim, Colony.Core.Industry.Catalog.Item(i % 3 == 0 ? "plate_armor" : i % 3 == 1 ? "chitin_armor" : "padded_jerkin"));
+            if (i % 2 == 1) c.PutOn(_sim, Colony.Core.Industry.Catalog.Item("wooden_shield"));
+            i++;
+        }
+        _tool.Issue(new Colony.Core.Commands.SetDrafted(-1, true));
+        _tool.Issue(new Colony.Core.Commands.SquadAttack(nest.Id));
+        GD.Print($"Ants demo: nest of {nest.Total} at {at}, squad of {i} sent against it");
     }
 }

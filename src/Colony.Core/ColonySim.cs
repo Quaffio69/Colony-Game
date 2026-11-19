@@ -78,6 +78,10 @@ public sealed partial class ColonySim
     public Fluids.Waterworks Waterworks { get; } = new();
     /// <summary>Walls, wheels and pumps waiting to be built.</summary>
     public Constructions Constructions { get; }
+    /// <summary>Wild creatures and their nests (giant ants).</summary>
+    public Combat.Wildlife Wildlife { get; } = new();
+    /// <summary>Colonists who died (stats).</summary>
+    public int Deaths { get; private set; }
 
     /// <summary>Water steps every this many ticks.</summary>
     public const int WaterInterval = 4;
@@ -105,6 +109,7 @@ public sealed partial class ColonySim
         Farms.IsBlocked = c => Stockpiles.Contains(c) || Rooms.RoomAt(c) is not null;
         Designations.CanSow = c => Farms.TryGet(c, out var crop) && !Flora.TryGet(c, out _) && PlantInfo.CanGrowAt(World, c, crop);
         _caveIns = new CaveIns(world);
+        World.ChunkChanged += i => Wildlife.OnChunkChanged(World, i);
         DevHooks.SimCreated?.Invoke(this);
     }
 
@@ -291,7 +296,8 @@ public sealed partial class ColonySim
     public Terrain? Terrain { get; private set; }
 
     /// <summary>Generates a world and drops a starting party at the terrain's suggested spawn.</summary>
-    public static ColonySim Generate(WorldGenSettings settings, int colonists = 7, bool settleWaterInBackground = false, int factions = 1)
+    public static ColonySim Generate(WorldGenSettings settings, int colonists = 7, bool settleWaterInBackground = false, int factions = 1,
+        bool wildlife = true)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var generated = WorldGenerator.GenerateWithTerrain(settings);
@@ -341,6 +347,8 @@ public sealed partial class ColonySim
                 sim.Items.Drop(landing, Catalog.Item("bread"), StartingBread);
             }
         }
+
+        if (wildlife) sim.Wildlife.Populate(sim, settings.Seed);
 
         clock.Restart();
         sim.Connectivity.Update();
@@ -427,8 +435,40 @@ public sealed partial class ColonySim
     internal void Depart(Colonist c)
     {
         c.Leave(this);
+        c.DropGear(this); // the colony's arms stay with the colony
         _colonists.Remove(c);
     }
+
+    private readonly List<(Colonist Colonist, string Message)> _dying = new();
+
+    /// <summary>A colonist will die at the end of this tick (never mid-iteration).</summary>
+    internal void QueueDeath(Colonist c, string message)
+    {
+        if (c.Dead || _dying.Any(d => d.Colonist == c)) return;
+        _dying.Add((c, message));
+    }
+
+    /// <summary>Dies: drops its load and gear where it lies, is mourned, and is gone (its family stays a family).</summary>
+    private void Bury()
+    {
+        foreach (var (c, message) in _dying)
+        {
+            if (!_colonists.Contains(c)) continue;
+            c.Leave(this);
+            c.DropGear(this);
+            c.Dead = true;
+            if (c.Spouse is { } s && s.Spouse == c) s.Spouse = null;
+            c.Spouse = null;
+            _colonists.Remove(c);
+            Deaths++;
+            Announce(message, c.Faction);
+        }
+        _dying.Clear();
+    }
+
+    /// <summary>Colony-wide orders for a colonist (drafting, squad moves): null if fine, else why not.</summary>
+    internal string? CanCommand(Colonist c, int player) =>
+        c.Faction != player ? $"{c.Name} belongs to another colony" : null;
 
     /// <summary>Where newcomers arrive: standable ground around the landing place (or the first colonist).</summary>
     internal List<TilePos> ArrivalSpots(int count, int faction = 0)
@@ -581,6 +621,8 @@ public sealed partial class ColonySim
         {
             _stepping = false;
         }
+        Wildlife.Tick(this); // creatures act after colonists (blows struck this tick land before they move)
+        if (_dying.Count > 0) Bury();
         foreach (var f in _factions)
         {
             f.Housing.Tick(this); // follows home rooms, wears fixtures, houses people
@@ -672,6 +714,7 @@ public sealed partial class ColonySim
         Flora.Settle();
         Water.Settle();
         foreach (var f in _factions) f.Housing.Settle();
+        Wildlife.Settle(this);
         _reservedStudents.Clear();
         RebuildDerived();
     }
@@ -710,9 +753,10 @@ public sealed partial class ColonySim
             f.Society.SnapSave(w);
             f.Housing.SnapSave(w);
         }
+        Net.SnapIO.Section(w, "wildlife"); Wildlife.SnapSave(w);
         Net.SnapIO.Section(w, "sim");
         w.Write(Tick); w.Write(PathSearches); w.Write(CaveInCount); w.Write(ItemsProduced); w.Write(ColonistsEver);
-        w.Write(_families); w.Write(_eventRoomsVersion); w.Write(_waterworksDue); w.Write(NeedsEnabled);
+        w.Write(_families); w.Write(_eventRoomsVersion); w.Write(_waterworksDue); w.Write(NeedsEnabled); w.Write(Deaths);
         w.Write(_recentCaveIns.Count);
         foreach (var c in _recentCaveIns) { Net.SnapIO.Write(w, c.Origin); w.Write(c.Tiles); w.Write(c.Drop); w.Write(c.Tick); }
         w.Write(_events.Count);
@@ -767,10 +811,11 @@ public sealed partial class ColonySim
             f.Society.SnapLoad(r);
             f.Housing.SnapLoad(r, sim.Rooms, byId);
         }
+        Net.SnapIO.Section(r, "wildlife"); sim.Wildlife.SnapLoad(r);
         Net.SnapIO.Section(r, "sim");
         sim.Tick = r.ReadInt64(); sim.PathSearches = r.ReadInt64(); sim.CaveInCount = r.ReadInt32(); sim.ItemsProduced = r.ReadInt64();
         sim.ColonistsEver = r.ReadInt32(); sim._families = r.ReadInt32(); sim._eventRoomsVersion = r.ReadInt32();
-        sim._waterworksDue = r.ReadBoolean(); sim.NeedsEnabled = r.ReadBoolean();
+        sim._waterworksDue = r.ReadBoolean(); sim.NeedsEnabled = r.ReadBoolean(); sim.Deaths = r.ReadInt32();
         int ncv = r.ReadInt32();
         for (int i = 0; i < ncv; i++) sim._recentCaveIns.Add(new CaveIn(Net.SnapIO.ReadPos(r), r.ReadInt32(), r.ReadInt32(), r.ReadInt64()));
         int ne = r.ReadInt32();

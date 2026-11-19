@@ -380,3 +380,78 @@ public sealed record SettleGame : Command
         return "Saved the game's state";
     }
 }
+
+// ---- Military --------------------------------------------------------------------------------------------
+
+/// <summary>Drafts a colonist (or, with id -1, every grown colonist of the colony) to fight, or stands them down.</summary>
+public sealed record SetDrafted(int ColonistId, bool On) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        var people = ColonistId < 0
+            ? sim.Colonists.Where(c => c.Faction == Player && !c.IsChild).ToList()
+            : sim.Colonists.Where(c => c.Id == ColonistId).ToList();
+        if (people.Count == 0) return ColonistId < 0 ? "Nobody to draft" : "No such colonist";
+        if (ColonistId >= 0 && sim.CanCommand(people[0], Player) is { } why) return why;
+        if (ColonistId >= 0 && people[0].IsChild && On) return $"{people[0].Name} is a child";
+        foreach (var c in people) c.SetDrafted(sim, On);
+        return ColonistId < 0
+            ? On ? $"Drafted {people.Count} colonists: send them with the squad tool (G)" : $"{people.Count} colonists stood down"
+            : On ? $"{people[0].Name} drafted" : $"{people[0].Name} stood down";
+    }
+}
+
+/// <summary>Sends the colony's drafted colonists to a spot (they fight whatever comes at them there).</summary>
+public sealed record SquadMove(TilePos Target) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        // A loose formation round the spot: the first on it, the rest on standable cells spiralling out.
+        var spots = new List<TilePos>();
+        for (int r = 0; r <= 4 && spots.Count < 64; r++)
+        for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++)
+        {
+            if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != r) continue;
+            var p = Target.Offset(dx, dy, 0);
+            if (Navigation.Movement.IsStandable(sim.World, p) && (r == 0 || sim.Connectivity.Connected(p, Target))) spots.Add(p);
+        }
+        int n = 0;
+        foreach (var c in sim.Colonists)
+            if (c.Faction == Player && c.Drafted)
+            {
+                c.OrderMove(spots.Count > 0 ? spots[n % spots.Count] : Target);
+                n++;
+            }
+        return n == 0 ? "Nobody is drafted (G drafts everyone)" : $"Squad of {n} moving out";
+    }
+}
+
+/// <summary>Sends the colony's drafted colonists to destroy a nest.</summary>
+public sealed record SquadAttack(int NestId) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        if (sim.Wildlife.NestById(NestId) is not { } nest) return "That nest is gone";
+        int n = 0;
+        foreach (var c in sim.Colonists)
+            if (c.Faction == Player && c.Drafted)
+            {
+                c.OrderAttack(NestId);
+                n++;
+            }
+        return n == 0 ? "Nobody is drafted (G drafts everyone)" : $"Squad of {n} sent to destroy the nest of {nest.Kind.Plural}";
+    }
+}
+
+/// <summary>Debug: a nest of giant ants at a cell (angry: at war with the issuing colony from the start).</summary>
+public sealed record DebugSpawnNest(TilePos At, int Population, bool Angry) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        if (!Navigation.Movement.IsStandable(sim.World, At)) return "No footing for a nest there";
+        var nest = sim.Wildlife.AddNest(sim, Combat.CreatureKinds.GiantAnt, At, Population);
+        if (Angry) sim.Wildlife.Provoke(sim, nest, Player);
+        return $"Debug: a nest of {Population} giant ants{(Angry ? ", angry" : "")}";
+    }
+}

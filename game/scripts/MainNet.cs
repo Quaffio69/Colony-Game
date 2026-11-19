@@ -185,6 +185,7 @@ public partial class Main
         {
             s_lastNetCheck = at;
             GD.Print($"[net] {(s_host != null ? "host" : s_client != null ? "client" : "solo")} tick {_sim.Tick} hash {StateHash.Compute(_sim):x16}" +
+                     $" (ants slain {_sim.Wildlife.Slain}, out {_sim.Wildlife.Creatures.Count}, colonists hurt {_sim.Colonists.Count(c => c.Health < Colony.Core.Agents.Colonist.MaxHealth)}, dead {_sim.Deaths})" +
                      (s_client?.DesyncTick is { } d ? $" DESYNC at {d}" : ""));
             if (s_client != null) GetTree().Quit();
         }
@@ -215,7 +216,8 @@ public partial class Main
 
     /// <summary>
     /// --net-orders: a few frames in, this player orders its colony about through the normal command path (fell the
-    /// woods round it, dig a room, zone a stockpile), so a --net-check run exercises commands from both sides.
+    /// woods round it, dig a room, zone a stockpile; with --net-ants also an angry ant nest beside it), so a --net-check
+    /// run exercises commands from both sides.
     /// </summary>
     private void NetOrders()
     {
@@ -226,6 +228,8 @@ public partial class Main
         _tool.Issue(new DesignatePlants(Colony.Core.Orders.DesignationKind.Chop, p.X - 25, p.Y - 25, p.X + 25, p.Y + 25));
         _tool.Issue(new DesignateBox(p.Offset(3, -2, -1), p.Offset(6, 2, -1), Colony.Core.Orders.DesignationKind.Dig));
         _tool.Issue(new AddStockpile(p.Offset(-5, -5, -1), p.Offset(-2, -2, -1)));
+        if (Arg("--net-ants") != null) // --net-ants: an angry nest next door, so the check covers a fight
+            _tool.Issue(new DebugSpawnNest(new Colony.Core.World.TilePos(p.X + 10, p.Y, _sim.World.SurfaceLevel(p.X + 10, p.Y) + 1), 25, true));
         GD.Print($"[net] {(s_client != null ? "client" : "host")} gave orders as colony {Player}");
     }
 

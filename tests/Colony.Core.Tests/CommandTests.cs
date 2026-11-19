@@ -14,7 +14,7 @@ public class CommandTests
 
     public static IEnumerable<object[]> EveryCommand() => new Command[]
     {
-        new DesignateBox(A, B, DesignationKind.UpDownStair), new DesignateStairs(A, B), new SettleGame(), new DesignatePlants(DesignationKind.Chop, 1, 2, 3, 4),
+        new DesignateBox(A, B, DesignationKind.UpDownStair), new DesignateStairs(A, B), new SettleGame(), new SetDrafted(3, true), new SetDrafted(-1, false), new SquadMove(B), new SquadAttack(7), new DebugSpawnNest(A, 20, true), new DesignatePlants(DesignationKind.Chop, 1, 2, 3, 4),
         new CancelPlants(DesignationKind.Gather, 4, 3, 2, 1), new CancelOrders(A, B), new AddStockpile(A, B), new AddFarm(PlantKind.Glowcap, A, B),
         new PlaceWalls(A, B), new CancelWalls(A, B), new DebugCompleteAll(), new PaintRoom("carpentry", A, B), new EraseRoom(A, B),
         new PlacePart("carpentry.saw", A, true, 3), new RemoveParts(A, B), new CycleRecipe(A, true), new PlaceStructure(StructureKind.Pump, A, 3),

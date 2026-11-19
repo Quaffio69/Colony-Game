@@ -102,7 +102,25 @@ public static class Catalog
                 Wear = Int(e, "wear") ?? 0,
                 Place = Opt(e, "place"),
                 Material = Opt(e, "material"),
+                Gear = Opt(e, "gear"),
+                Damage = Int(e, "damage") ?? 0,
+                Cooldown = Int(e, "cooldown") ?? 0,
+                Reach = Int(e, "reach") ?? 1,
+                Cleave = Int(e, "cleave") ?? 1,
+                Pierce = Int(e, "pierce") ?? 0,
+                TwoHanded = (Int(e, "hands") ?? 1) == 2,
+                Protect = Int(e, "protect") ?? 0,
+                Block = Int(e, "block") ?? 0,
             });
+            var def = d.Items[^1];
+            switch (def.Gear)
+            {
+                case null: break;
+                case "weapon" when def.Damage > 0 && def.Cooldown > 0 && def.Reach >= 1 && def.Cleave >= 1: break;
+                case "body" when def.Protect > 0: break;
+                case "shield" when def.Block is > 0 and < 100: break;
+                default: throw Bad($"item '{id}': gear '{def.Gear}' needs weapon (damage, cooldown), body (protect) or shield (block 1-99) stats");
+            }
             if ((d.Items[^1].Fixture != null) != (d.Items[^1].FixtureTier > 0 && d.Items[^1].Wear > 0))
                 throw Bad($"item '{id}': a fixture needs 'fixture', 'tier' and 'wear' together");
             if ((d.Items[^1].Need == "food") != (d.Items[^1].Nutrition > 0))

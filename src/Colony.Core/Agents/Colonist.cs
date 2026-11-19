@@ -9,7 +9,7 @@ namespace Colony.Core.Agents;
 public enum ColonistState { Idle, Moving, Working }
 
 /// <summary>What a colonist is doing beyond walking: a designation, one leg of a haul trip, factory work, or a meal.</summary>
-public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver }
+public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver, Equip, Fight, Flee, Rally }
 
 /// <summary>Broad kinds of work a colonist may prefer (see <see cref="Colonist.Labors"/>); each covers some <see cref="Work"/> types.</summary>
 public enum Labor { Designations, Hauling, Industry }
@@ -29,7 +29,7 @@ public enum Work : byte { Mining, Woodcutting, Farming, Construction, Hauling, I
 /// designations, until proper job priorities exist. Every reservation it takes is released on completion or
 /// <see cref="Abandon"/>, and anything it carries is dropped rather than lost.
 /// </summary>
-public sealed class Colonist
+public sealed partial class Colonist
 {
     /// <summary>Ticks to walk one flat tile (scaled by each move's cost).</summary>
     public const int TicksPerFlatStep = 7;
@@ -199,6 +199,7 @@ public sealed class Colonist
         if (Satiety > 0) Satiety--;
         else StarvingTicks++;
         if (_foodRetry > 0) _foodRetry--;
+        if (Downed || Task is ColonistTask.Fight or ColonistTask.Flee) return true; // no leaving a fight for a meal (drafted, it eats between fights)
         if (Satiety >= Needs.Famished || Task == ColonistTask.Eat || _foodRetry > 0) return true;
         return !TryEat(sim); // drops its work (and any load) only if there is food to go to
     }
@@ -342,9 +343,9 @@ public sealed class Colonist
     /// <summary>Tires while awake; dropping from exhaustion (wherever it is) when rest runs out.</summary>
     private void TickRest(ColonySim sim)
     {
-        if (IsAutomaton || !sim.NeedsEnabled || Task == ColonistTask.Sleep) return;
+        if (IsAutomaton || !sim.NeedsEnabled || Task == ColonistTask.Sleep || Downed) return;
         Rest = Math.Max(0, Rest - 1);
-        if (Rest > 0 || Task == ColonistTask.Eat) return;
+        if (Rest > 0 || Task is ColonistTask.Eat or ColonistTask.Fight or ColonistTask.Flee || Drafted) return;
         if (Task != ColonistTask.None) Abandon(sim);
         StartSleeping(onTheFloor: true);
     }
@@ -456,7 +457,11 @@ public sealed class Colonist
         Finish();
     }
 
-    public string Describe() => (Task, State) switch
+    public string Describe() =>
+        Dead ? "dead" : Downed ? "struck down, recovering" : Task is ColonistTask.Equip or ColonistTask.Fight or ColonistTask.Flee or ColonistTask.Rally ? DescribeCombat()
+        : Drafted ? "drafted" : DescribeWork();
+
+    private string DescribeWork() => (Task, State) switch
     {
         (ColonistTask.Designation, ColonistState.Moving) => $"walking to job at {JobTarget}",
         (ColonistTask.Designation, ColonistState.Working) =>
@@ -492,6 +497,7 @@ public sealed class Colonist
         ApplyGravity(sim);
         TickHunger(sim);
         TickRest(sim);
+        if (TickCombat(sim)) return; // down, drafted, fighting back or fleeing: that is the whole tick
 
         if (Task == ColonistTask.Designation && JobTarget is { } job && !sim.Designations.IsClaimedBy(job, Id))
             Abandon(sim); // cancelled, re-designated, or completed by someone else
@@ -516,44 +522,10 @@ public sealed class Colonist
                 break;
 
             case ColonistState.Moving:
-                if (NextStep is null)
+                switch (AdvanceMove(sim))
                 {
-                    if (_path.Count == 0 && _trip is { } trip)
-                    {
-                        // End of a leg: plan the next one (when the shared path budget allows).
-                        if (sim.PathBudgetExhausted) return;
-                        sim.PathSearches++;
-                        var leg = PlanPath(sim, trip.Goals, trip.Near);
-                        _trip = _plannedTrip;
-                        if (leg is null)
-                        {
-                            Abandon(sim);
-                            return;
-                        }
-                        foreach (var p in leg) _path.Enqueue(p);
-                    }
-                    if (_path.Count == 0)
-                    {
-                        Arrive(sim);
-                        return;
-                    }
-                    var next = _path.Dequeue();
-                    if (Movement.MoveCost(sim.World, Position, next) is not { } cost)
-                    {
-                        Abandon(sim); // terrain changed under the path; replan
-                        return;
-                    }
-                    NextStep = next;
-                    _stepTicksTotal = cost * TicksPerFlatStep;
-                    _stepTicksDone = 0;
-                }
-
-                _stepTicksDone++;
-                if (_stepTicksDone >= _stepTicksTotal)
-                {
-                    Position = NextStep!.Value;
-                    NextStep = null;
-                    if (_path.Count == 0 && _trip is null) Arrive(sim);
+                    case MoveResult.Arrived: Arrive(sim); break;
+                    case MoveResult.Failed: Abandon(sim); break;
                 }
                 break;
 
@@ -608,9 +580,50 @@ public sealed class Colonist
                     case ColonistTask.FurnishDeliver:
                         FurnishInstall(sim);
                         break;
+                    case ColonistTask.Equip:
+                        FinishEquip(sim);
+                        break;
                 }
                 break;
         }
+    }
+
+    private enum MoveResult { Moving, Arrived, Failed }
+
+    /// <summary>
+    /// One tick along the path (planning the next leg of a long trip at the end of one): arrived when the path is done,
+    /// failed when a leg can't be planned or the ground changed under the next step.
+    /// </summary>
+    private MoveResult AdvanceMove(ColonySim sim)
+    {
+        if (NextStep is null)
+        {
+            if (_path.Count == 0 && _trip is { } trip)
+            {
+                // End of a leg: plan the next one (when the shared path budget allows).
+                if (sim.PathBudgetExhausted) return MoveResult.Moving;
+                sim.PathSearches++;
+                var leg = PlanPath(sim, trip.Goals, trip.Near);
+                _trip = _plannedTrip;
+                if (leg is null) return MoveResult.Failed;
+                foreach (var p in leg) _path.Enqueue(p);
+            }
+            if (_path.Count == 0) return MoveResult.Arrived;
+            var next = _path.Dequeue();
+            if (Movement.MoveCost(sim.World, Position, next) is not { } cost) return MoveResult.Failed; // terrain changed under the path; replan
+            NextStep = next;
+            _stepTicksTotal = cost * TicksPerFlatStep;
+            _stepTicksDone = 0;
+        }
+
+        _stepTicksDone++;
+        if (_stepTicksDone >= _stepTicksTotal)
+        {
+            Position = NextStep!.Value;
+            NextStep = null;
+            if (_path.Count == 0 && _trip is null) return MoveResult.Arrived;
+        }
+        return MoveResult.Moving;
     }
 
     // ---- Finding work ------------------------------------------------------------------------------------
@@ -1102,6 +1115,9 @@ public sealed class Colonist
             case ColonistTask.FurnishDeliver:
                 StartWorking(Housing.InstallTicks);
                 break;
+            case ColonistTask.Equip:
+                StartWorking(HandleTicks);
+                break;
             case ColonistTask.Designation:
                 if (!sim.Designations.TryGet(target, out var kind))
                 {
@@ -1211,6 +1227,9 @@ public sealed class Colonist
                 break;
             case ColonistTask.FurnishDeliver:
                 MyHousing(sim).Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
+                break;
+            case ColonistTask.Equip:
+                sim.Items.Unreserve(_equip.Cell, 1);
                 break;
         }
         if (_carried.Count > 0)
@@ -1352,6 +1371,7 @@ public sealed class Colonist
         _meal = default;
         _furnish = default;
         _haulDestination = "stockpile";
+        SettleCombat();
         JobTarget = null;
         NextStep = null;
         WorkDone = WorkRequired = 0;
@@ -1366,6 +1386,7 @@ public sealed class Colonist
         w.Write(Satiety); w.Write(StarvingTicks); w.Write(Household); w.Write(Spouse?.Id ?? -1); w.Write(IsChild); w.Write(BornTick);
         w.Write(Happiness); w.Write(UnhappyDays); w.Write(Rest); w.Write(LastTreat); w.Write(WorkTicks); w.Write(PreferredTicks);
         w.Write(CarryingType.Index);
+        SnapSaveCombat(w);
     }
 
     /// <summary>Reads a colonist; its spouse is linked afterwards (by id) and its home by the housing.</summary>
@@ -1385,6 +1406,7 @@ public sealed class Colonist
         c.Happiness = r.ReadSingle(); c.UnhappyDays = r.ReadInt32(); c.Rest = r.ReadSingle(); c.LastTreat = r.ReadInt64();
         c.WorkTicks = r.ReadInt32(); c.PreferredTicks = r.ReadInt32();
         c.CarryingType = new ItemType(r.ReadUInt16());
+        c.SnapLoadCombat(r);
         return (c, spouse);
     }
 }

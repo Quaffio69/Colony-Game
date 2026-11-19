@@ -80,7 +80,7 @@ public static class CommandCodec
         DesignateBox = 1, DesignateStairs, DesignatePlants, CancelPlants, CancelOrders, AddStockpile, AddFarm, PlaceWalls,
         CancelWalls, DebugCompleteAll, PaintRoom, EraseRoom, PlacePart, RemoveParts, CycleRecipe, PlaceStructure,
         RemoveStructures, PlaceEdge, RemoveEdge, EdgeLine, PlaceOutline, ClearWalls, Covers, SetWorkPriority, SetHomePolicy,
-        SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy, SettleGame,
+        SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy, SettleGame, SetDrafted, SquadMove, SquadAttack, DebugSpawnNest,
     }
 
     public static byte[] EncodeLog(IEnumerable<LoggedCommand> log)
@@ -160,6 +160,10 @@ public static class CommandCodec
             case SetPolicyShared x: Head(Tag.SetPolicyShared); w.Write(x.Policy); w.Write(x.Shared); break;
             case AddPolicy: Head(Tag.AddPolicy); break;
             case SettleGame: Head(Tag.SettleGame); break;
+            case SetDrafted x: Head(Tag.SetDrafted); w.Write(x.ColonistId); w.Write(x.On); break;
+            case SquadMove x: Head(Tag.SquadMove); P(w, x.Target); break;
+            case SquadAttack x: Head(Tag.SquadAttack); w.Write(x.NestId); break;
+            case DebugSpawnNest x: Head(Tag.DebugSpawnNest); P(w, x.At); w.Write(x.Population); w.Write(x.Angry); break;
             default: throw new NotSupportedException($"No codec for {c.GetType().Name}");
         }
     }
@@ -200,6 +204,10 @@ public static class CommandCodec
             Tag.SetPolicyShared => new SetPolicyShared(r.ReadInt32(), r.ReadBoolean()),
             Tag.AddPolicy => new AddPolicy(),
             Tag.SettleGame => new SettleGame(),
+            Tag.SetDrafted => new SetDrafted(r.ReadInt32(), r.ReadBoolean()),
+            Tag.SquadMove => new SquadMove(P(r)),
+            Tag.SquadAttack => new SquadAttack(r.ReadInt32()),
+            Tag.DebugSpawnNest => new DebugSpawnNest(P(r), r.ReadInt32(), r.ReadBoolean()),
             _ => throw new InvalidDataException($"Unknown command tag {tag}"),
         };
         return c with { Player = player };

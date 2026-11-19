@@ -76,7 +76,8 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   dug under a real lake a cell at a time),
   `-- flood [size] [ticks]` (water on land and the water books; run 100k ticks at 1024: ~17 flooded columns,
   steady; the 512 test world never overfills a lake, so only this long run catches slow accumulation),
-  `-- terrain` (hydrology checks), `-- far`.
+  `-- terrain` (hydrology checks), `-- far`, `-- ants [size] [ticks] [colonists]` (nests round a colony, raids and a squad
+  assault: step and wildlife tick costs, swarm sizes, the story in events).
 - Known next optimizations: component rebuild is still O(regions + edges) per change (incremental or
   off-thread with deterministic apply tick); idle colonists re-search on any item/reservation change and
   hauling scans all piles and stockpile cells (spatial index); A* costs ~1-2 us/node; sim runs on the main
@@ -106,9 +107,11 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   and what is under the cursor; `LastAction` shows as a message). Windows and hotkeys: Colonists C (Overview/Needs/Family,
   click to find), Stocks I, Build B (tabs Orders/Zones/Rooms/Walls/Floors/Water, category | items with costs, footer
   with size/rotate/cancel; drives `DesignationTool`'s public selection API; closing it drops build tools), Chronicle L
-  (events + cave-ins, sticks to the bottom), Housing H, Work J, Inspect V (home/workshop under the cursor), Tests & demos
+  (events + cave-ins, sticks to the bottom), Housing H, Work J, Inspect V (home/workshop under the cursor), Military M
+  (fighters: health, gear, draft switches; nearby nests with Look/Attack), Tests & demos
   F1, Appearance F2 (theme, frame, corners, font, size, spacing, UI scale, glass/shadows/chips), Help F3 (keys, debug).
-  Home key looks at the colony. **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
+  Home key looks at the colony; G drafts everyone and turns on squad orders (`DesignationTool.SquadOrders`: click ground
+  to march, a nest to attack; G/RMB/Esc: done), Shift+G stands everyone down. **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
   map size; `Main.NewColony` reloads the scene), Multiplayer (disabled), Appearance, Tests, Quit; opened by Esc when
   nothing is left to close (the game does not start on it yet); the sim waits while it is up.
 - **Multiplayer direction:** freeform, each player a distinct colony (faction) in one world: cooperate against NPC
@@ -140,7 +143,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   when they come back (`Commands.Applied`); no pause/speed keys. HUD shows `NetStatus` (DESYNC/Disconnected in bad).
   Main menu Multiplayer: name, port, Host this world, Host a new world (2-4 players), Join by address, players, Leave.
   Dev: `--host[=PORT]`, `--join=ADDR[:PORT]`, `--name=`, `--speed=0..2`, `--net-orders` (orders own colony through the
-  command path), `--net-check=TICKS` (prints the state hash at that tick; client quits, host 15 s later). End-to-end:
+  command path; with `--net-ants` also an angry ant nest beside it), `--net-check=TICKS` (prints the state hash at that tick; client quits, host 15 s later). End-to-end:
   start a headless host with `--colonies=2 --host=7781 --net-orders --net-check=1500`, then a client with
   `--join=127.0.0.1:7781 --net-orders --net-check=1500`; the two `[net] ... hash` lines must match (they did).
 - Limits: demos edit the world outside commands, so they're off online (a world a demo changed can still be hosted:
@@ -173,7 +176,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 
 - **Commands (`Colony.Core.Commands`):** every player action is a `Command` record (dig box, stairs, plant areas,
   zones, farms, dams, paint/erase rooms, place/remove parts, recipes, waterworks, edge pieces and lines, outlines,
-  floors/roofs, work priorities, home policy, housing policy edits, debug complete). Commands name things by stable ids
+  floors/roofs, work priorities, home policy, housing policy edits, drafting and squad orders, debug complete / spawn nest). Commands name things by stable ids
   and cells (part id, room type id, policy index, a cell of the home), never object references, and `Apply` returns
   the player's message. `sim.Commands` (`CommandQueue`): `Submit` queues, `Flush` applies before the next tick (Step
   flushes first thing), `Execute` applies now (single player; it is still "before the next tick"); every applied
@@ -223,7 +226,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   Who hauls is set by work priorities (see Work priorities).
 - **Production tree is data (`data/tech-tree.json`, embedded in Core, loaded by `Industry.Catalog`):** items
   (stack/carry sizes, pile model, colour), 12 broad DF-style workshops (`RoomType`), their 32 stations
-  (`PartType`s with role Machine; build material by size) and 71 recipes (multi-input `Ingredient`s, output
+  (`PartType`s with role Machine; build material by size) and 78 recipes (multi-input `Ingredient`s, output
   count, labour ticks, education). Adding a product is one item + one recipe line; tiers are computed. Load
   errors throw naming the entry. Tests check the tree bootstraps from raw resources and batches fit crates.
   **Home fixtures** (category "home"): items with `fixture` (slot: bed, furniture, tableware, lighting, decor), `tier`
@@ -442,6 +445,43 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   rigid piece until it lands; designations on it are cancelled; colonists ride it down or pop out on top.
   Masses over `CaveIns.MaxMassTiles` count as self-supporting. Any code removing solid tiles should go
   through `CompleteDesignation` or call `ColonySim.CheckSupport`. No damage yet (no health system).
+- **Health and combat (`Agents/ColonistCombat.cs`, `Combat.Gear`):** light and fast. A colonist has 100 health and heals
+  1 per 60 ticks (per 20 asleep). At 0 it is struck down (`Downed`: lies where it fell, heals 1 per 30 ticks, stands at 25)
+  and rarely dies (`DeathChance` 12%, a hashed roll; `ColonySim.QueueDeath` -> `Bury` after the wildlife tick: load and
+  gear dropped, spouse unlinked, `Deaths`). Departing colonists leave their gear. Blows are `Gear.Resolve`: a shield
+  blocks `block`% outright, else damage minus body armour's `protect` (less the weapon's `pierce`); a fully soaked blow
+  still chips 1 a quarter of the time. Rolls hash (tick, attacker, target). **Gear is catalog data** (`gear`: weapon /
+  body / shield, with damage, cooldown, reach, cleave, pierce, hands, protect, block): spear (reach 2, pierce), bow
+  (reach 9, needs `Gear.LineOfSight`: solids and thin walls block), war axe (two-handed, cleaves 3: swarms), sword (fast,
+  takes a shield); padded jerkin 1, chitin armour 2 (from ant chitin), plate 4, power armour 7; wooden shield 25%, iron
+  40%. Bare hands: 4 dmg / 20 ticks. A two-handed weapon drops the shield. **Drafting** (commands `SetDrafted` (id or -1:
+  all grown), `SquadMove` (a formation round the spot), `SquadAttack(nestId)`): drafted colonists drop work, fetch the
+  best usable gear lying about (`TryEquip`, task `Equip`, one slot at a time), march to `Rally`, fight any foe within
+  `EngageRange` (10) and strike the nest they were sent against; they eat when famished between fights and never
+  collapse from tiredness; squadmates spread round a target. Undrafted, a bitten colonist fights back (task `Fight`), or
+  flees below 35 health (children always flee), and goes back to work 80 ticks after the last blow. `Colonist.AdvanceMove`
+  is the shared walking step (normal tasks and combat chases). Every new combat field is in `SnapSaveCombat`/`Settle`.
+- **Wildlife (`Combat.Wildlife`, `Nest`, `Creature`, `CreatureKind`, `FlowField`):** creature kinds are data
+  (`CreatureKinds`: health, `Attack`, speed, `Temperament` Docile/Provokable/Hostile, drop, nest cap and mound health),
+  so animals and other peoples' soldiers slot in later. **Giant ants** (the first): 8 health (one weapon blow; two
+  punches), bite 3 per 24 ticks, quicker than colonists; a third drop chitin. **Nests** are counted, not simulated: a
+  population underground breeds to 40 (one per `BirthInterval`), a full nest founds another 30-60 tiles off every few
+  days (not near colonies or nests; `MaxNests` = map area / 100²), `Populate` scatters them at generation (a 55% chance
+  per 128² cell, 64+ tiles from every landing). A nest is **awake** (foragers out, `2 + total/8`) only while a colonist
+  is within `WakeRange` (56) or it is fighting; asleep, its ants go back underground. **Temperament:** ants leave
+  colonists alone until provoked: struck (`Hurt`/`StrikeNest` -> `Alarm`: angry at that colony for `CalmTicks` (2 days),
+  defenders boil out 3 every 2 ticks), or a colony's land (16² blocks with its rooms, stockpiles, farms, landing;
+  `ColonyReach` 6) meets the nest's territory (radius 12 + total/4, max 24): `Crowded`, announced, then a raid every
+  ~1.5 days (a third of the nest, 4-16, filing out along one shared A* `Trail` to the nearest colonist of that colony
+  within `RaidRange` 96; nothing if unreachable). Defenders fight only near their nest; raiders roam 20 tiles off the
+  trail's end; nobody bites a downed colonist. The mound has 600 health; destroyed, up to 20 survivors fight on as
+  `Lost` and wander off within a day. **Swarm pathing:** no ant searches: foragers and the homeward follow the nest's
+  home flow field (Dijkstra flood round the entrance, rebuilt when its chunks change, at most every 100 ticks), fighters
+  descend the nest's threat field (a flood from the colonists they are after over a box round the fight, every 24
+  ticks) and close the last 4 tiles greedily, raiders walk the trail; stuck 120 ticks, an ant burrows home. Colonists
+  find foes through `Wildlife.Near`/`NearestFoe` (8x8 column buckets rebuilt each tick). Cost at 2048 with ~100 ants out
+  and 40 fighting: ~0.03 ms/tick (`-- ants` bench). Snapshots hold nests and creatures; `Settle` drops the caches
+  (fields, trails, targets, buckets rebuilt) identically on both sides. `DebugSpawnNest` (command) makes an angry nest.
 
 ## Commands
 
@@ -451,7 +491,8 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - Visual check / render benchmark: `<godot_console.exe> --path game -- --screenshot=out.png` (or `--bench`)
   plus optional `--size=WxDxH --seed=N --level=N --zoom=DIST --dig-demo --stairs-demo --ticks=N`, and
   `--look=X,Y` (camera on a column), `--water-demo` (terrace spring, waterfall wheel, pond, pump, irrigated field), `--showroom[=WORKSHOP_ID]` (every workshop with every station in sizes 1-5, stocked raw goods, farms;
-  the id focuses one) with `--build-menu=WORKSHOP_ID` to open the build menu.
+  the id focuses one) with `--build-menu=WORKSHOP_ID` to open the build menu, `--ants-demo[=calm]` (a full ant nest
+  beside the colony; everyone armed, drafted and sent against it; =calm: just the nest).
   Waits until the world is fully meshed, measures 120 frames, prints `[bench]` lines (startup phases,
   frame ms, draw calls, memory), saves the PNG and quits.
 - Sim benchmark: `dotnet run -c Release --project tools/Colony.Bench -- [size] [colonists] [ticks]`
@@ -513,7 +554,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       Dev flags `--factory-demo` (fell woods, log stockpile, equipped sawmill, plank stockpile) and
       `--parts-demo` (levelled showroom with every saw and tool size). Parts come in 5 sizes ([ ] in the builder).
 - [x] Construction: blueprints, material delivery, builders (log-cost starter parts, plank-cost big ones).
-- [x] Production tree: data-driven catalog, 12 workshops / 32 stations / 71 recipes with models for every
+- [x] Production tree: data-driven catalog, 12 workshops / 32 stations / 78 recipes with models for every
       station size, multi-input crates, recipe per machine, education and the Academy, automatons, build
       menu (B). Raw sources: clay, sand, 8 minerals by depth, wild herbs, grain/herb/glowcap farms.
 - [ ] Next for industry: conveyors between output and input crates; rooms themselves costing
@@ -535,7 +576,12 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       colony), Multiplayer page in the main menu, HUD status; verified across two processes (identical hashes).
 - [x] Save/load: settings + command log saves, background load with progress, quicksave/quickload, daily autosave.
 - [x] Snapshots: whole-state saves and joins (settle as a command, exact; ~2 s load at 2048).
-- [ ] Next for the demo: chat, combat and health (war, NPC enemies), trade between colonies, colonist pages (job clothing, titles by
+- [x] Combat and the first threat: health, struck down / rare death, four weapons and two-part armour from the catalog,
+      drafting and squad orders (G, Military window M), giant ant nests (docile until provoked or crowded; defend, raid,
+      spread; swarm flow fields), verified in tests, the `ants` bench and two processes (`--net-ants`).
+- [ ] Next for combat: war between colonies (colonists attacking colonists), more threats (wild animals, hostile and
+      provokable peoples), medicine/bandages and carrying the downed to bed, ranged arrows drawn in flight, armour tiers.
+- [ ] Next for the demo: chat, trade between colonies, colonist pages (job clothing, titles by
       proficiency once skills exist), title art behind the main menu, NAT/relay for internet play without port forwarding.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.

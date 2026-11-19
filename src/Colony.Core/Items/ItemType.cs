@@ -97,6 +97,20 @@ public sealed class ItemDef
     public string? Place { get; init; }
     /// <summary>What a fixture is mostly made of: wood, stone, metal, glass, cloth or clay (colonists may like one).</summary>
     public string? Material { get; init; }
+    /// <summary>Equipment slot: "weapon", "body" or "shield" (null: not gear). See <see cref="Combat.Gear"/>.</summary>
+    public string? Gear { get; init; }
+    /// <summary>Weapons: damage per hit, ticks between attacks, reach in tiles (over 2: ranged), extra foes hit, armour ignored.</summary>
+    public int Damage { get; init; }
+    public int Cooldown { get; init; }
+    public int Reach { get; init; }
+    public int Cleave { get; init; }
+    public int Pierce { get; init; }
+    /// <summary>Needs both hands (no shield with it).</summary>
+    public bool TwoHanded { get; init; }
+    /// <summary>Body armour: damage taken off every hit.</summary>
+    public int Protect { get; init; }
+    /// <summary>Shields: percent of hits blocked outright.</summary>
+    public int Block { get; init; }
     /// <summary>1 + the highest tier among the inputs of the recipe that makes it (raw = 0).</summary>
     public int Tier { get; internal set; }
     public bool IsRaw => Category == "raw";

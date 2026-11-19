@@ -52,6 +52,7 @@ public partial class GameUi : CanvasLayer
         Add(new HousingWindow(this), Key.H);
         Add(new WorkWindow(this), Key.J);
         Add(new InspectorWindow(this), Key.V);
+        Add(new MilitaryWindow(this), Key.M);
         Add(new TestsWindow(this), Key.F1);
         Add(new AppearanceWindow(this), Key.F2);
         Add(new HelpWindow(this), Key.F3);
@@ -269,7 +270,7 @@ public partial class GameUi : CanvasLayer
     private (string, bool) WorldStatus()
     {
         if (Tool.SelectionInfo is { } sel) return (sel, true);
-        string tool = Tool.ModeName(Tool.Mode);
+        string tool = Tool.SquadOrders ? "Squad orders: click ground to march, a nest to attack it · RMB: done" : Tool.ModeName(Tool.Mode);
         string hover = HoverText();
         return (hover.Length > 0 ? $"{tool} · {hover}" : $"{tool} · Tab: orders · B: build · Esc: menu", false);
     }
@@ -297,6 +298,10 @@ public partial class GameUi : CanvasLayer
             s += $", {hm.Name.ToLowerInvariant()} making {making.Name.ToLowerInvariant()} (F to change)";
         if (Sim.Rooms.RoomAt(above) is { } room) s += room.Faction == Me ? $" · {room.Name} (V: details)" : $" · {room.Name} of {Sim.Factions[room.Faction].Name}";
         if (Sim.Items.TryGet(above, out var pile) && pile.Count > 0) s += $" · {pile.Count} {pile.Type.Name.ToLowerInvariant()}";
+        if (Sim.Wildlife.NestNear(above, 2) is { } nest)
+            s += $" · {nest.Kind.Name.ToLowerInvariant()} nest of {nest.Total} ({(nest.HostileTo(Me, Sim.Tick) ? "hostile" : "calm, leave them be")}; G then click: attack)";
+        int ants = Sim.Wildlife.Near(above, 1).Count();
+        if (ants > 0) s += $" · {G.Plural(ants, "giant ant")}";
         return s;
     }
 }
