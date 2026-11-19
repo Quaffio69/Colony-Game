@@ -116,6 +116,36 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   (below), hot-seat. Next: networking (lockstep: peers exchange commands stamped with the tick they apply before);
   war needs combat and health first.
 
+## Networking (`Colony.Core.Net`, game `MainNet.cs`)
+
+- **Host-relayed lockstep over TCP** (plain .NET sockets in Core, no Godot: tested headless over loopback). The host's
+  sim is the reference and never waits. `LockstepHost`: accepts clients (`Peer`: length-prefixed frames, a reader
+  thread filling an inbox drained on the main thread), gives each a free colony (refuses when full or on a protocol
+  mismatch), sends a Welcome (colony, `GameSettings`, the command log so far, the tick), stamps the client's colony on
+  every command it sends (`with { Player = faction }`: nobody acts for another colony) and submits it; each frame
+  `Broadcast` flushes (so commands apply even while paused) and sends each client a Turn: newly logged commands with
+  their ticks and the host's tick. `AfterTick` (call after every host tick) takes a `StateHash` every
+  `HashInterval` (100) ticks, sent with the next turn. `LockstepClient`: `Connect` (waits for the welcome),
+  `BuildWorld` (generates from the settings and `CommandQueue.Replay`s the log to the join tick), `Poll`, `Advance`
+  (applies each command when the sim reaches its tick, never runs past `ConfirmedTick`, compares hashes:
+  `DesyncTick`), `Send`. Guests trail the host by their latency and catch up.
+- **`StateHash`:** colonists, piles, designations, stockpiles, rooms, blueprints, edge/cover revisions, combined
+  order-independently with a fixed 64-bit mix (never `HashCode`: seeded per process; also never enumerate
+  string-keyed dictionaries in sim logic, their order differs between processes).
+- **Game:** sessions live in statics across scene reloads. `HostGame` (this world, if `Shareable`: generated from
+  settings and only changed by commands; demos and tests mark it unshareable, and they're disabled online),
+  `HostNewGame`, `JoinGame` (builds the world, reloads onto it), `LeaveOnline`. Host frames: `Poll`, ticks with
+  `AfterTick`, `Broadcast`; the menu doesn't pause an online game. Client frames: `Poll`, `Advance` (all confirmed
+  ticks, a third at a time when far behind); its tool sends commands (`DesignationTool.Remote`) and shows their results
+  when they come back (`Commands.Applied`); no pause/speed keys. HUD shows `NetStatus` (DESYNC/Disconnected in bad).
+  Main menu Multiplayer: name, port, Host this world, Host a new world (2-4 players), Join by address, players, Leave.
+  Dev: `--host[=PORT]`, `--join=ADDR[:PORT]`, `--name=`, `--speed=0..2`, `--net-orders` (orders own colony through the
+  command path), `--net-check=TICKS` (prints the state hash at that tick; client quits, host 15 s later). End-to-end:
+  start a headless host with `--colonies=2 --host=7781 --net-orders --net-check=1500`, then a client with
+  `--join=127.0.0.1:7781 --net-orders --net-check=1500`; the two `[net] ... hash` lines must match (they did).
+- Limits: joining replays the whole log (long games join slowly until snapshots exist); demos edit the world outside
+  commands, so they're off online.
+
 ## Commands and factions (multiplayer foundation)
 
 - **Commands (`Colony.Core.Commands`):** every player action is a `Command` record (dig box, stairs, plant areas,
@@ -478,8 +508,10 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       Work, Tests) plus Colonists, Stocks, Chronicle, Inspect, Appearance, Help windows and a main menu; work priorities.
 - [x] Multiplayer foundation: player commands (queue, log, exact replay, binary codec), factions (ownership of orders,
       zones, rooms, blueprints, colonists; per-colony society and housing), multi-colony world generation, hot-seat.
-- [ ] Next for the demo: networking (lockstep over the command codec, a lobby in the main menu), save/load (world
-      seed + command log is already a save), colonist pages (job clothing, titles by proficiency once skills exist),
-      combat and health (war, NPC enemies), trade between colonies, title art behind the main menu.
+- [x] Networking: host-relayed lockstep over TCP (join mid-game by replay, desync hashes, guests act only for their
+      colony), Multiplayer page in the main menu, HUD status; verified across two processes (identical hashes).
+- [ ] Next for the demo: save/load (settings + command log is already a save; snapshots for fast joins and long games),
+      chat, combat and health (war, NPC enemies), trade between colonies, colonist pages (job clothing, titles by
+      proficiency once skills exist), title art behind the main menu, NAT/relay for internet play without port forwarding.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.

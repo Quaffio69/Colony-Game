@@ -78,7 +78,7 @@ public partial class GameUi : CanvasLayer
     public GlyphWindow? Window(string id) => _windows.GetValueOrDefault(id);
     public void OpenWindow(string id) { if (Window(id) is { } w) _m.Open(w); }
     public void Toggle(string id) { if (Window(id) is { } w) _m.Toggle(w); }
-    public void ShowMenu(bool show) => _menu.Show(show);
+    public void ShowMenu(bool show, string page = "") => _menu.Show(show, page);
     public void ResetLayout() => _m.ResetLayout();
 
     /// <summary>--build-menu=WORKSHOP: opens Build on that workshop's room tab.</summary>
@@ -90,7 +90,7 @@ public partial class GameUi : CanvasLayer
 
     // ---- HUD --------------------------------------------------------------------------------------------
 
-    private Label _colony = null!, _date = null!, _level = null!, _terrain = null!;
+    private Label _colony = null!, _date = null!, _level = null!, _terrain = null!, _net = null!;
     private readonly List<HudStat> _stats = new();
     private HudStat _alerts = null!;
     private GlyphSegmented _speed = null!;
@@ -121,6 +121,11 @@ public partial class GameUi : CanvasLayer
         _alerts = new HudStat("‼", "bad", () => OpenWindow("chronicle")) { Pill = true };
         row.AddChild(_alerts);
         row.AddChild(G.Spacer());
+        _net = G.Text("", "Info");
+        _net.MouseFilter = Control.MouseFilterEnum.Pass;
+        _net.WithTip("Online play: Esc, Multiplayer to host, join or leave");
+        row.AddChild(_net);
+        row.AddChild(Space(2));
         _terrain = G.Text("", "Faint");
         row.AddChild(_terrain);
         row.AddChild(Space(2));
@@ -254,6 +259,9 @@ public partial class GameUi : CanvasLayer
         _level.Text = $"Level {Main.View.ViewLevel}";
         _terrain.Text = Main.PendingSections > 0 ? $"building terrain {Main.PendingSections}" : !Sim.WaterReady ? "settling water…" : "";
         _speed.Index = Main.Paused ? 0 : Main.SpeedIndex + 1;
+        _speed.Visible = Main.Client == null; // a guest runs at the host's pace
+        _net.Text = Main.NetStatus;
+        G.Retone(_net, _net.Text.StartsWith("DESYNC") || _net.Text.StartsWith("Disconnected") ? "Bad" : "Info");
     }
 
     // ---- Status pill (when the mouse is over the world) -----------------------------------------------

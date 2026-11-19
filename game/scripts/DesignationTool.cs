@@ -638,7 +638,21 @@ public partial class DesignationTool : Node3D
     /// </summary>
     public void Issue(Command command)
     {
-        LastAction = _sim.Commands.Execute(command with { Player = Player });
+        if (Remote is { } send)
+        {
+            send(command with { Player = Player }); // online: the host applies it, and its result comes back (ShowResult)
+            return;
+        }
+        ShowResult(_sim.Commands.Execute(command with { Player = Player }));
+    }
+
+    /// <summary>Online as a guest: where commands go instead of the local sim.</summary>
+    public Action<Command>? Remote { get; set; }
+
+    /// <summary>What a command did (shown in the status pill).</summary>
+    public void ShowResult(string message)
+    {
+        LastAction = message;
         ActionSerial++;
     }
 

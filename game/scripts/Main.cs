@@ -76,6 +76,7 @@ public partial class Main : Node3D
             _sim = ColonySim.Generate(new WorldGenSettings(Seed, WorldWidth, WorldDepth, WorldHeight), StartingColonists,
                 settleWaterInBackground: true, factions: Colonies); // settles while the terrain is meshed for the first frames
             GD.Print($"World {WorldWidth}x{WorldDepth}x{WorldHeight} built in {Time.GetTicksMsec() - start} ms: {_sim.StartupReport}");
+            RememberSettings();
         }
 
         _sim.AsyncWater = true; // the water step computes on worker threads while a frame draws
@@ -123,6 +124,7 @@ public partial class Main : Node3D
 
         _ui = new GameUi(this) { Name = "GameUi" };
         AddChild(_ui);
+        ReadyNet();
     }
 
     // ---- What the UI reads and drives ----------------------------------------------------------------
@@ -210,7 +212,8 @@ public partial class Main : Node3D
     /// <summary>Runs a dev demo in the current colony (the same as its --xxx-demo flag).</summary>
     public void RunDemo(string id)
     {
-        if (!CanRunDemos) return;
+        if (!CanRunDemos || Online) return;
+        MarkUnshareable(); // demos edit the world directly
         _sim.WaitForWater();
         _stairsDemoAt = null;
         switch (id)
@@ -243,10 +246,10 @@ public partial class Main : Node3D
         {
             case Key.Pageup or Key.X: _world.ViewLevel++; break;
             case Key.Pagedown or Key.Z: _world.ViewLevel--; break;
-            case Key.Space when !key.Echo: _paused = !_paused; break;
-            case Key.Key1: _speedIndex = 0; _paused = false; break;
-            case Key.Key2: _speedIndex = 1; _paused = false; break;
-            case Key.Key3: _speedIndex = 2; _paused = false; break;
+            case Key.Space when !key.Echo && s_client == null: _paused = !_paused; break;
+            case Key.Key1 when s_client == null: _speedIndex = 0; _paused = false; break;
+            case Key.Key2 when s_client == null: _speedIndex = 1; _paused = false; break;
+            case Key.Key3 when s_client == null: _speedIndex = 2; _paused = false; break;
             case Key.Home when !key.Echo: FocusHome(); break;
             case Key.F4 when !key.Echo && _sim.Factions.Count > 1: PlayAs((Player + 1) % _sim.Factions.Count); break;
         }
@@ -272,23 +275,33 @@ public partial class Main : Node3D
     {
         HandleDevArgs(delta);
 
-        if (!_paused && !_ui.MenuOpen && _sim.WaterReady) // the world starts once its water has settled (and waits while the main menu is up)
+        // A client's sim runs only what the host confirms; everyone else runs at their own speed (a host also streams turns).
+        if (!ClientFrame())
         {
-            // Fixed-rate simulation; cap catch-up so a long frame can't snowball.
-            _tickAccumulator += delta * Speeds[_speedIndex];
-            int budget = 20 * Speeds[_speedIndex];
-            var clock = System.Diagnostics.Stopwatch.StartNew();
-            while (_tickAccumulator >= TickSeconds && budget-- > 0)
+            s_host?.Poll();
+            // The world starts once its water has settled; it waits while the main menu is up (unless others play in it).
+            if (!_paused && (!_ui.MenuOpen || Online) && _sim.WaterReady)
             {
-                _sim.Step();
-                _tickAccumulator -= TickSeconds;
+                // Fixed-rate simulation; cap catch-up so a long frame can't snowball.
+                _tickAccumulator += delta * Speeds[_speedIndex];
+                int budget = 20 * Speeds[_speedIndex];
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                while (_tickAccumulator >= TickSeconds && budget-- > 0)
+                {
+                    _sim.Step();
+                    s_host?.AfterTick();
+                    _tickAccumulator -= TickSeconds;
+                }
+                if (budget <= 0) _tickAccumulator = 0;
+                _simMsThisFrame = clock.Elapsed.TotalMilliseconds;
+                _simMsTotal += _simMsThisFrame;
+                _maxSimMs = System.Math.Max(_maxSimMs, _simMsThisFrame);
             }
-            if (budget <= 0) _tickAccumulator = 0;
-            _simMsThisFrame = clock.Elapsed.TotalMilliseconds;
-            _simMsTotal += _simMsThisFrame;
-            _maxSimMs = System.Math.Max(_maxSimMs, _simMsThisFrame);
+            s_host?.Broadcast();
+            HostNetCheckQuit();
         }
-
+        NetOrders();
+        NetCheck();
     }
 
     /// <summary>
@@ -322,6 +335,8 @@ public partial class Main : Node3D
     private ulong _meshedAtMs;
     private readonly List<double> _frameMs = new();
     private double _maxSimMs, _simMsThisFrame, _simMsTotal;
+
+    public override void _ExitTree() => UnhookNet();
 
     public override void _EnterTree()
     {
@@ -365,7 +380,7 @@ public partial class Main : Node3D
             if (Arg("--test-menu") != null) _ui.OpenWindow("tests");
             if (Arg("--work-menu") != null) _ui.OpenWindow("work");
             if (Arg("--open") is { Length: > 0 } open) foreach (var id in open.Split(',')) _ui.OpenWindow(id);
-            if (Arg("--main-menu") != null) _ui.ShowMenu(true);
+            if (Arg("--main-menu") is { } menuPage) _ui.ShowMenu(true, menuPage);
             if (int.TryParse(Arg("--play-as"), out int playAs)) PlayAs(playAs);
             if (Arg("--ui-selftest") != null) AddChild(new UiSelfTest(_ui));
             // World-editing flags apply once, to the first world (not again when the test menu reloads the scene).
@@ -384,9 +399,12 @@ public partial class Main : Node3D
                 if (Arg("--build-menu") is { } menu) _ui.OpenBuild(menu);
                 if (Arg("--water-demo") != null) WaterDemo();
                 if (Arg("--homes-demo") != null) HomesDemo();
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo" }.Any(a => Arg(a) != null))
+                    MarkUnshareable(); // demos edit the world directly
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
                 if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
+                NetDevArgs(); // --host, --join (a join reloads the scene onto the host's world)
                 // --test=NAME [--test-watch]: run the first test whose name contains NAME and open its world.
                 if (Arg("--test") is { Length: > 0 } testName)
                 {

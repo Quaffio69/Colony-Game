@@ -14,7 +14,10 @@ public partial class MainMenu : Control
     private readonly ColorRect _backdrop = new();
     private readonly GlyphPanel _panel = new() { Opaque = true };
     private readonly VBoxContainer _box = new();
-    private bool _newColony;
+    private bool _newColony, _multiplayer;
+    private string? _problem;
+    private int _hostColonies = 2;
+    private LineEdit? _name, _address, _port;
     private int _size = 1, _colonies = 1;
     private LineEdit? _seed;
     private static readonly int[] Sizes = [512, 1024, 2048];
@@ -42,10 +45,11 @@ public partial class MainMenu : Control
         if (Visible) Build();
     }
 
-    public void Show(bool show)
+    public void Show(bool show, string page = "")
     {
         Visible = show;
-        _newColony = false;
+        _newColony = page == "new";
+        _multiplayer = page == "multiplayer";
         if (show) Build();
     }
 
@@ -62,14 +66,13 @@ public partial class MainMenu : Control
         _box.AddChild(sub);
         _box.AddChild(G.Gap(1.5f));
 
-        if (_newColony) BuildNewColony();
+        if (_multiplayer) BuildMultiplayer();
+        else if (_newColony) BuildNewColony();
         else
         {
             Item("Continue", "Primary", () => Show(false), "Back to the colony (Esc)");
             Item("New colony", "", () => { _newColony = true; Build(); }, "A fresh world: pick a seed and a map size");
-            var mp = Item("Multiplayer", "", () => { }, "Coming: several players' colonies in one world, to trade, ally or fight");
-            mp.Disabled = true;
-            _box.AddChild(G.Text("Coming: several colonies in one world", "Faint", align: HorizontalAlignment.Center));
+            Item(_ui.Main.Online ? "Multiplayer (online)" : "Multiplayer", "", () => { _multiplayer = true; _problem = null; Build(); }, "Several players' colonies in one world: host a game or join one");
             _box.AddChild(G.Gap(0.5f));
             Item("Appearance", "", () => { Show(false); _ui.OpenWindow("appearance"); }, "Themes, fonts and effects (F2)");
             Item("Tests & demos", "", () => { Show(false); _ui.OpenWindow("tests"); }, "Developer: run tests, build demos (F1)");
@@ -84,6 +87,7 @@ public partial class MainMenu : Control
 
     private void Layout()
     {
+        if (!IsInsideTree()) return; // the scene reloaded (a game joined) before this deferred call ran
         float cw = GlyphTheme.Cw, ch = GlyphTheme.Ch;
         var inner = _box.GetCombinedMinimumSize();
         var size = new Vector2(44 * cw, inner.Y + 3 * ch);
@@ -100,6 +104,79 @@ public partial class MainMenu : Control
         _box.AddChild(b);
         _box.AddChild(G.Gap(0.35f));
         return b;
+    }
+
+    /// <summary>
+    /// Multiplayer: your name; host this world (when others can rebuild it and it has free colonies) or a new one for
+    /// 2-4 colonies; join a host by address. Online: who is in, and Leave.
+    /// </summary>
+    private void BuildMultiplayer()
+    {
+        var main = _ui.Main;
+        _box.AddChild(new GlyphSection("Multiplayer"));
+        if (main.Online)
+        {
+            _box.AddChild(G.Text(main.NetStatus, "Accent", align: HorizontalAlignment.Center));
+            var players = main.Host?.Players ?? main.Client?.Players ?? [];
+            foreach (var p in players)
+                _box.AddChild(new GlyphKV("☺", ColonistView.FactionColor(p.Faction), p.Name, _ui.Sim.Factions[p.Faction].Name));
+            _box.AddChild(G.Gap(0.5f));
+            Item("Leave", "", () => { main.LeaveOnline(); Build(); }, "Stop hosting, or leave the game you joined (this world stays open, offline)");
+            Item("Back", "", () => { _multiplayer = false; Build(); }, "Back to the menu");
+            return;
+        }
+
+        LineEdit Field(string label, string text, string tip)
+        {
+            var row = new HBoxContainer();
+            row.AddChild(G.Text(label, "Dim", cols: 9));
+            var field = new LineEdit { Text = text, SizeFlagsHorizontal = SizeFlags.ExpandFill };
+            field.WithTip(tip);
+            row.AddChild(field);
+            _box.AddChild(row);
+            _box.AddChild(G.Gap(0.25f));
+            return field;
+        }
+
+        _name = Field("Name", main.PlayerName, "What other players see");
+        _port = Field("Port", Main.DefaultPort.ToString(), "The TCP port the host listens on (forward it on your router to play over the internet)");
+        int Port() => int.TryParse(_port!.Text.Trim(), out int p) && p is > 0 and < 65536 ? p : Main.DefaultPort;
+        void TakeName() { if (_name!.Text.Trim() is { Length: > 0 } n) main.PlayerName = n; }
+
+        _box.AddChild(G.Gap(0.5f));
+        _box.AddChild(new GlyphSection("Host"));
+        var hostHere = Item("Host this world", "Primary", () =>
+        {
+            TakeName();
+            _problem = main.HostGame(Port());
+            Build();
+        }, main.Shareable && _ui.Sim.Factions.Count > 1
+            ? $"Others join this world as its other colonies ({_ui.Sim.Factions.Count - 1} free)"
+            : "Only a world made by New colony (or Host a new world) with room for guests can be shared");
+        hostHere.Disabled = !main.Shareable || _ui.Sim.Factions.Count < 2;
+        var coloniesRow = new HBoxContainer();
+        coloniesRow.AddChild(G.Text("Players", "Dim", cols: 9));
+        coloniesRow.AddChild(new GlyphSegmented(["2", "3", "4"], _hostColonies - 2, i => _hostColonies = i + 2) { Tips = ["You and one guest", "You and two guests", "You and three guests"] });
+        _box.AddChild(coloniesRow);
+        _box.AddChild(G.Gap(0.35f));
+        Item("Host a new world", "", () =>
+        {
+            TakeName();
+            main.HostNewGame(new Random().Next(1, 999_999), Sizes[_size], _hostColonies, Port());
+        }, $"A fresh {Sizes[_size]}² world with a colony for each player (map size as in New colony)");
+
+        _box.AddChild(G.Gap(0.5f));
+        _box.AddChild(new GlyphSection("Join"));
+        _address = Field("Address", "127.0.0.1", "The host's address (their IP, or 127.0.0.1 for a game on this computer)");
+        Item("Join", "Primary", () =>
+        {
+            TakeName();
+            _problem = main.JoinGame(_address!.Text.Trim(), Port());
+            if (_problem != null) Build();
+        }, "Connect, receive the game so far and take a free colony (building the world takes a moment)");
+        if (_problem != null) _box.AddChild(G.Para(_problem, "Bad"));
+        _box.AddChild(G.Gap(0.5f));
+        Item("Back", "", () => { _multiplayer = false; Build(); }, "Back to the menu");
     }
 
     private void BuildNewColony()
