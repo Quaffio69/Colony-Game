@@ -29,6 +29,10 @@ public sealed class Designations
     private readonly VoxelWorld _world;
     private readonly Dictionary<TilePos, DesignationKind> _orders = new();
     private readonly Dictionary<TilePos, int> _claims = new();
+    private readonly Owners _owners = new();
+
+    /// <summary>The faction whose order this is (0 when unowned or the first colony).</summary>
+    public int OwnerOf(TilePos p) => _owners.Of(p);
 
     public Designations(VoxelWorld world) => _world = world;
 
@@ -44,7 +48,7 @@ public sealed class Designations
     /// <summary>Trees, for validating <see cref="DesignationKind.Chop"/> orders (set by <see cref="ColonySim"/>).</summary>
     public Nature.Flora? Flora { get; set; }
 
-    public bool Designate(TilePos p, DesignationKind kind = DesignationKind.Dig)
+    public bool Designate(TilePos p, DesignationKind kind = DesignationKind.Dig, int faction = 0)
     {
         if (!_world.InBounds(p)) return false;
         if (kind == DesignationKind.Sow)
@@ -61,7 +65,8 @@ public sealed class Designations
             if (tile == TileType.Air) return false;
             if (Result(kind, tile) == tile) return false; // nothing would change
         }
-        if (_orders.TryGetValue(p, out var existing) && existing == kind) return false;
+        if (_orders.TryGetValue(p, out var existing) && (existing == kind || _owners.Of(p) != faction)) return false; // already so, or another colony's order
+        _owners.Set(p, faction);
 
         _orders[p] = kind;
         _claims.Remove(p); // the job changed; whoever held it will notice and drop it
@@ -69,20 +74,22 @@ public sealed class Designations
         return true;
     }
 
-    public bool Cancel(TilePos p)
+    public bool Cancel(TilePos p, int faction = Owners.Any)
     {
-        if (!_orders.Remove(p)) return false;
+        if (!_orders.ContainsKey(p) || !_owners.Matches(p, faction)) return false;
+        _orders.Remove(p);
+        _owners.Clear(p);
         _claims.Remove(p);
         Version++;
         return true;
     }
 
     /// <summary>Designates every solid tile in the inclusive box between two corners; returns how many were added.</summary>
-    public int DesignateBox(TilePos a, TilePos b, DesignationKind kind = DesignationKind.Dig) =>
-        ForBox(a, b, p => Designate(p, kind));
+    public int DesignateBox(TilePos a, TilePos b, DesignationKind kind = DesignationKind.Dig, int faction = 0) =>
+        ForBox(a, b, p => Designate(p, kind, faction));
 
     /// <summary>Cancels every designation in the inclusive box between two corners; returns how many were removed.</summary>
-    public int CancelBox(TilePos a, TilePos b) => ForBox(a, b, Cancel);
+    public int CancelBox(TilePos a, TilePos b, int faction = Owners.Any) => ForBox(a, b, p => Cancel(p, faction));
 
     /// <summary>Orders that target a plant (standing in an open cell) rather than a tile.</summary>
     public static bool IsPlantOrder(DesignationKind kind) => kind is DesignationKind.Chop or DesignationKind.Gather or DesignationKind.Sow;
@@ -99,12 +106,12 @@ public sealed class Designations
     /// apply to whose column lies in the rectangle between two corners, at any level: this work always happens
     /// on the surface, so the area is picked in 2D. Returns how many plants were marked.
     /// </summary>
-    public int DesignatePlantArea(DesignationKind kind, int x0, int y0, int x1, int y1) =>
-        ForPlantsInArea(x0, y0, x1, y1, plant => Accepts(kind, plant), p => Designate(p, kind));
+    public int DesignatePlantArea(DesignationKind kind, int x0, int y0, int x1, int y1, int faction = 0) =>
+        ForPlantsInArea(x0, y0, x1, y1, plant => Accepts(kind, plant), p => Designate(p, kind, faction));
 
     /// <summary>Cancels orders of one plant kind in the columns of a rectangle (any level). Returns how many.</summary>
-    public int CancelPlantArea(DesignationKind kind, int x0, int y0, int x1, int y1) =>
-        ForPlantsInArea(x0, y0, x1, y1, _ => true, p => _orders.TryGetValue(p, out var k) && k == kind && Cancel(p));
+    public int CancelPlantArea(DesignationKind kind, int x0, int y0, int x1, int y1, int faction = Owners.Any) =>
+        ForPlantsInArea(x0, y0, x1, y1, _ => true, p => _orders.TryGetValue(p, out var k) && k == kind && Cancel(p, faction));
 
     private int ForPlantsInArea(int x0, int y0, int x1, int y1, Func<Nature.Plant, bool> filter, Func<TilePos, bool> action)
     {
@@ -133,7 +140,7 @@ public sealed class Designations
     /// A single-level box gets up/down stairs. The world's bottom layer is never touched.
     /// </summary>
     /// <returns>How many tiles were designated.</returns>
-    public int DesignateStairs(TilePos a, TilePos b)
+    public int DesignateStairs(TilePos a, TilePos b, int faction = 0)
     {
         int top = Math.Max(a.Z, b.Z), bottom = Math.Max(1, Math.Min(a.Z, b.Z));
         int n = 0;
@@ -143,7 +150,7 @@ public sealed class Designations
                 : z == top ? DesignationKind.DownStair
                 : z == bottom ? DesignationKind.UpStair
                 : DesignationKind.UpDownStair;
-            n += DesignateBox(a with { Z = z }, b with { Z = z }, kind);
+            n += DesignateBox(a with { Z = z }, b with { Z = z }, kind, faction);
         }
         return n;
     }
@@ -188,6 +195,7 @@ public sealed class Designations
     {
         if (!_orders.Remove(p, out var kind)) return false;
         _claims.Remove(p);
+        _owners.Clear(p);
         if (!IsPlantOrder(kind)) _world.Set(p, Result(kind, _world.Get(p)));
         Version++;
         return true;

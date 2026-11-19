@@ -86,6 +86,9 @@ public sealed class Home
 /// </summary>
 public sealed class Housing
 {
+    /// <summary>The colony these homes belong to (it houses only its own people, in its own home rooms).</summary>
+    public int Faction { get; init; }
+
     public const int Bed = 0, Furniture = 1, Tableware = 2, Lighting = 3, Decor = 4, SlotCount = 5;
     /// <summary>Slot names, as the catalog's 'fixture' values.</summary>
     public static readonly string[] Slots = ["bed", "furniture", "tableware", "lighting", "decor"];
@@ -130,6 +133,8 @@ public sealed class Housing
     public IReadOnlyList<Home> All => _homes;
     /// <summary>Bumps when homes, fixtures, residents or policies change (for views).</summary>
     public int Version { get; private set; }
+    /// <summary>Marks the policies changed (a policy added or renamed outside the setters).</summary>
+    public void Touch() => Version++;
     public int WornOut { get; private set; }
     public int Salvaged { get; private set; }
 
@@ -371,7 +376,7 @@ public sealed class Housing
         _homes.Clear();
         foreach (var room in sim.Rooms.All)
         {
-            if (!room.Type.IsHome) continue;
+            if (!room.Type.IsHome || room.Faction != Faction) continue;
             var home = old.FirstOrDefault(h => h.Room == room);
             if (home == null)
             {
@@ -423,7 +428,7 @@ public sealed class Housing
     /// </summary>
     internal void AssignResidents(ColonySim sim)
     {
-        var people = sim.Colonists.Where(c => !c.IsAutomaton).ToList();
+        var people = sim.Colonists.Where(c => !c.IsAutomaton && c.Faction == Faction).ToList();
         var before = _homes.ToDictionary(h => h, h => h.Residents.ToList());
         var lodgedIn = new Dictionary<Colonist, Home>();
         foreach (var (home, list) in before)

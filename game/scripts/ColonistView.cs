@@ -45,6 +45,15 @@ public partial class ColonistView : Node3D
             Visible = false,
         };
         root.AddChild(load);
+        if (_sim.Factions.Count > 1)
+            root.AddChild(new MeshInstance3D
+            {
+                Mesh = new TorusMesh { InnerRadius = 0.26f, OuterRadius = 0.36f, Rings = 16, RingSegments = 6 },
+                MaterialOverride = new StandardMaterial3D { AlbedoColor = FactionColor(c.Faction), ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded },
+                Position = new Vector3(0, 0.04f, 0),
+                Scale = new Vector3(1, 0.3f, 1),
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            });
         root.AddChild(new Label3D
         {
             Text = c.Name,
@@ -54,10 +63,21 @@ public partial class ColonistView : Node3D
             OutlineSize = 10,
             Position = new Vector3(0, BodyHeight + 0.3f, 0),
             NoDepthTest = true,
+            Modulate = _sim.Factions.Count > 1 ? FactionColor(c.Faction).Lightened(0.35f) : Colors.White,
         });
         AddChild(root);
         _views.Add((c, root));
     }
+
+    /// <summary>A colony's colour (rings and name tags when several share the world).</summary>
+    public static Color FactionColor(int faction) => faction switch
+    {
+        0 => new Color(1f, 0.78f, 0.3f),
+        1 => new Color(0.35f, 0.65f, 1f),
+        2 => new Color(0.5f, 0.95f, 0.45f),
+        3 => new Color(1f, 0.4f, 0.55f),
+        _ => Color.FromHsv(faction * 0.17f % 1f, 0.7f, 1f),
+    };
 
     public override void _Process(double delta)
     {

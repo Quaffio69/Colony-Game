@@ -65,8 +65,11 @@ public static class Needs
     /// Whether the colony may use up goods lying here: anywhere but a factory's input crate (that is the factory's
     /// stock) or an unbuilt part's footprint (construction materials).
     /// </summary>
-    public static bool Usable(ColonySim sim, TilePos p) =>
-        sim.Rooms.PartAt(p) is not { } part || (part.Built && part.Role != PartRole.Input);
+    public static bool Usable(ColonySim sim, TilePos p, int faction = 0) => sim.Factions.Count == 1
+        ? sim.Rooms.PartAt(p) is not { } only || (only.Built && only.Role != PartRole.Input) // one colony: everything is its own
+        :
+        (sim.Rooms.PartAt(p) is not { } part || (part.Built && part.Role != PartRole.Input && part.Room.Faction == faction))
+        && (!sim.Stockpiles.Contains(p) || sim.Stockpiles.OwnerOf(p) == faction); // never another colony's stores
 }
 
 /// <summary>
@@ -75,6 +78,12 @@ public static class Needs
 /// </summary>
 public sealed class Society
 {
+    /// <summary>The colony this is the society of.</summary>
+    public int Faction { get; init; }
+    private Housing Homes(ColonySim sim) => sim.Factions[Faction].Housing;
+    private List<Colonist> Members(ColonySim sim) => sim.Colonists.Where(c => c.Faction == Faction).ToList();
+    private void Say(ColonySim sim, string text) => sim.Announce(text, Faction);
+
     private readonly float[] _owed = new float[Needs.Goods.Length];
 
     /// <summary>Share of each living-standard need met on the last day (0..1), in <see cref="Needs.Goods"/> order.</summary>
@@ -92,21 +101,21 @@ public sealed class Society
     public int Departed { get; private set; }
 
     /// <summary>Meals of nutrition lying where the colony may eat them.</summary>
-    public static int FoodInStore(ColonySim sim)
+    public static int FoodInStore(ColonySim sim, int faction = 0)
     {
         int meals = 0;
         foreach (var (p, pile) in sim.Items.All)
-            if (Needs.IsFood(pile.Type) && Needs.Usable(sim, p)) meals += pile.Available * Needs.Nutrition(pile.Type);
+            if (Needs.IsFood(pile.Type) && Needs.Usable(sim, p, faction)) meals += pile.Available * Needs.Nutrition(pile.Type);
         return meals;
     }
 
-    public static int Eaters(ColonySim sim) => sim.Colonists.Count(c => !c.IsAutomaton);
+    public static int Eaters(ColonySim sim, int faction = 0) => sim.Colonists.Count(c => !c.IsAutomaton && c.Faction == faction);
 
     /// <summary>How many days the food in store would feed everyone (infinite with nobody to feed).</summary>
-    public static float FoodDays(ColonySim sim)
+    public static float FoodDays(ColonySim sim, int faction = 0)
     {
-        int eaters = Eaters(sim);
-        return eaters == 0 ? float.PositiveInfinity : FoodInStore(sim) / (eaters * (float)Needs.Day / Needs.MealTicks);
+        int eaters = Eaters(sim, faction);
+        return eaters == 0 ? float.PositiveInfinity : FoodInStore(sim, faction) / (eaters * (float)Needs.Day / Needs.MealTicks);
     }
 
     internal void Tick(ColonySim sim)
@@ -115,10 +124,11 @@ public sealed class Society
         for (int i = sim.Colonists.Count - 1; i >= 0; i--)
         {
             var c = sim.Colonists[i];
-            if (c.StarvingTicks < Needs.StarvingLimit || c.InFamily || c.IsChild || Eaters(sim) <= Needs.NeverBelow) continue; // families stay together
+            if (c.Faction != Faction) continue;
+            if (c.StarvingTicks < Needs.StarvingLimit || c.InFamily || c.IsChild || Eaters(sim, Faction) <= Needs.NeverBelow) continue; // families stay together
             sim.Depart(c);
             Departed++;
-            sim.Announce($"{c.Name} has left the colony, starving");
+            Say(sim, $"{c.Name} has left the colony, starving");
         }
         if (sim.Tick % Needs.Day != 0) return;
         Days++;
@@ -126,8 +136,8 @@ public sealed class Society
         Mood(sim);
         Settle(sim);
         Families(sim);
-        if (Eaters(sim) > 0 && FoodDays(sim) is var days and < LowFoodDays)
-            sim.Announce(days <= 0
+        if (Eaters(sim, Faction) > 0 && FoodDays(sim, Faction) is var days and < LowFoodDays)
+            Say(sim, days <= 0
                 ? "There is no food left! Gather berries, farm grain and bake bread, or colonists will leave"
                 : $"Food is running low: {days:0.0} days left. Gather berries, farm grain (bread feeds four times as many)");
     }
@@ -138,7 +148,7 @@ public sealed class Society
     /// <summary>Uses up each need's daily share from the stores (plainest goods first) and records how much was met.</summary>
     private void Consume(ColonySim sim)
     {
-        int eaters = Eaters(sim);
+        int eaters = Eaters(sim, Faction);
         float sum = 0;
         for (int k = 0; k < Needs.Goods.Length; k++)
         {
@@ -153,7 +163,7 @@ public sealed class Society
             _owed[k] -= due;
             int left = due;
             foreach (var (p, pile) in sim.Items.All
-                         .Where(e => e.Value.Type.Def.Need == need && e.Value.Available > 0 && Needs.Usable(sim, e.Key))
+                         .Where(e => e.Value.Type.Def.Need == need && e.Value.Available > 0 && Needs.Usable(sim, e.Key, Faction))
                          .OrderBy(e => e.Value.Type.Def.Tier).ThenBy(e => e.Key.Y).ThenBy(e => e.Key.X).ThenBy(e => e.Key.Z).ToList())
             {
                 left -= sim.Items.Consume(p, left);
@@ -179,7 +189,7 @@ public sealed class Society
     {
         float sum = 0;
         int n = 0;
-        foreach (var c in sim.Colonists)
+        foreach (var c in Members(sim))
         {
             if (c.IsAutomaton) continue;
             float food = c.Starving ? 0 : c.Hungry ? 0.5f : 1;
@@ -190,13 +200,13 @@ public sealed class Society
             n++;
         }
         Happiness = n > 0 ? sum / n : 0.5f;
-        if (Eaters(sim) <= Needs.NeverBelow) return;
-        var leaving = sim.Colonists.Where(c => !c.IsAutomaton && !c.InFamily && !c.IsChild && c.UnhappyDays >= Needs.UnhappyDaysToLeave)
+        if (Eaters(sim, Faction) <= Needs.NeverBelow) return;
+        var leaving = Members(sim).Where(c => !c.IsAutomaton && !c.InFamily && !c.IsChild && c.UnhappyDays >= Needs.UnhappyDaysToLeave)
             .OrderBy(c => c.Happiness).ThenByDescending(c => c.Id).FirstOrDefault(); // the newest arrivals give up first
         if (leaving == null) return;
         sim.Depart(leaving);
         Departed++;
-        sim.Announce($"{leaving.Name} has left the colony, unhappy ({(leaving.Home == null ? "no home" : "a poor home")})");
+        Say(sim, $"{leaving.Name} has left the colony, unhappy ({(leaving.Home == null ? "no home" : "a poor home")})");
     }
 
     /// <summary>
@@ -205,17 +215,17 @@ public sealed class Society
     /// </summary>
     private void Settle(ColonySim sim)
     {
-        int eaters = Eaters(sim);
-        if (!SettlersCome || eaters == 0 || sim.Colonists.Any(c => c.Starving) || FoodDays(sim) < Needs.SettlerFoodDays) return;
+        int eaters = Eaters(sim, Faction);
+        if (!SettlersCome || eaters == 0 || Members(sim).Any(c => c.Starving) || FoodDays(sim, Faction) < Needs.SettlerFoodDays) return;
         int count = Math.Clamp((int)MathF.Round(eaters * (0.05f + 0.2f * Happiness)), 1, 12);
-        count = Math.Max(1, Math.Min(count, sim.Housing.FreeBeds));
-        var spots = sim.ArrivalSpots(count);
+        count = Math.Max(1, Math.Min(count, Homes(sim).FreeBeds));
+        var spots = sim.ArrivalSpots(count, Faction);
         foreach (var at in spots)
-            sim.AddColonist(NameGenerator.Generate(unchecked((int)sim.Tick * 31 + 11), sim.ColonistsEver), at);
+            sim.AddColonist(NameGenerator.Generate(unchecked((int)sim.Tick * 31 + 11), sim.ColonistsEver), at, faction: Faction);
         if (spots.Count == 0) return;
         SettlersArrived += spots.Count;
-        string why = Happiness >= 0.6f ? "its happy people" : sim.Housing.FreeBeds > 0 ? "its food and free beds" : "its food stores";
-        sim.Announce(spots.Count == 1 ? $"A settler arrives, drawn by {why}" : $"{spots.Count} settlers arrive, drawn by {why}");
+        string why = Happiness >= 0.6f ? "its happy people" : Homes(sim).FreeBeds > 0 ? "its food and free beds" : "its food stores";
+        Say(sim, spots.Count == 1 ? $"A settler arrives, drawn by {why}" : $"{spots.Count} settlers arrive, drawn by {why}");
     }
 
     public int Marriages { get; private set; }
@@ -230,18 +240,18 @@ public sealed class Society
     private void Families(ColonySim sim)
     {
         long tick = sim.Tick;
-        foreach (var c in sim.Colonists)
+        foreach (var c in Members(sim))
             if (c.IsChild && tick - c.BornTick >= (long)Needs.ChildDays * Needs.Day)
             {
                 c.IsChild = false;
-                sim.Announce($"{c.Name} has grown up (and still lives at home until they marry)");
+                Say(sim, $"{c.Name} has grown up (and still lives at home until they marry)");
             }
-        sim.Housing.AssignResidents(sim); // settlers first: they take beds before couples look for a home
+        Homes(sim).AssignResidents(sim); // settlers first: they take beds before couples look for a home
 
         // Marriages: a couple needs a home of its own: an empty one, or one where nobody but the two of them lodges
         // (a home other settlers live in is taken). One per such home, each on a daily chance.
-        var free = sim.Colonists.Where(c => !c.IsAutomaton && !c.IsChild && c.Spouse == null).OrderBy(c => c.Id).ToList();
-        foreach (var home in sim.Housing.CoupleHomes().ToList())
+        var free = Members(sim).Where(c => !c.IsAutomaton && !c.IsChild && c.Spouse == null).OrderBy(c => c.Id).ToList();
+        foreach (var home in Homes(sim).CoupleHomes().ToList())
         {
             if (Chance(tick, home.Room.Id, 1) >= Needs.MarriageChance) continue;
             // Who lodges here marries first (if two do, each other); then the longest in the colony.
@@ -258,24 +268,24 @@ public sealed class Society
             a.Spouse = b;
             b.Spouse = a;
             a.Household = b.Household = family;
-            sim.Housing.Claim(home, family);
+            Homes(sim).Claim(home, family);
             Marriages++;
-            sim.Announce($"{a.Name} and {b.Name} marry and make {home.Name} their home");
+            Say(sim, $"{a.Name} and {b.Name} marry and make {home.Name} their home");
         }
-        sim.Housing.AssignResidents(sim);
+        Homes(sim).AssignResidents(sim);
 
         // Births: a couple at home with a bed to spare, while nobody starves.
-        if (sim.Colonists.Any(c => c.Starving)) return;
-        foreach (var c in sim.Colonists.Where(c => c.Spouse is { } s && c.Id < s.Id).ToList())
+        if (Members(sim).Any(c => c.Starving)) return;
+        foreach (var c in Members(sim).Where(c => c.Spouse is { } s && c.Id < s.Id).ToList())
         {
             if (c.Home is not { } home || home.Family != c.Household) continue;
             int family = sim.Colonists.Count(m => m.Household == c.Household);
             if (home.Beds <= family || Chance(tick, c.Id, 2) >= Needs.BirthChance) continue;
             var child = sim.AddChild(c, c.Spouse!);
             Births++;
-            sim.Announce($"{child.Name} is born to {c.Name} and {c.Spouse!.Name}");
+            Say(sim, $"{child.Name} is born to {c.Name} and {c.Spouse!.Name}");
         }
-        sim.Housing.AssignResidents(sim);
+        Homes(sim).AssignResidents(sim);
     }
 
     private static float Chance(long tick, int id, int salt) => Procedural.Noise.Hash(unchecked((int)(tick / Needs.Day)), id, salt, 7717);

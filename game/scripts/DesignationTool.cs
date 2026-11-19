@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Colony.Core;
 using Colony.Core.Agents;
+using Colony.Core.Commands;
 using Colony.Core.Industry;
 using Colony.Core.Nature;
 using Colony.Core.Orders;
@@ -342,24 +343,7 @@ public partial class DesignationTool : Node3D
         return (new TilePos(x, y - 1, z), EdgeInfo.North);
     }
 
-    private void PlaceEdgePiece((TilePos Cell, int Side) edge)
-    {
-        var bp = _sim.Constructions.PlaceEdge(EdgePiece, edge.Cell, edge.Side, WallMaterial);
-        string name = Constructions.Name(EdgePiece).ToLowerInvariant();
-        LastAction = bp is not null
-            ? $"Planned a {name}: needs {bp.Cost.Count} {bp.Cost.Material.Name.ToLowerInvariant()} and a builder"
-            : $"Can't place a {name}: {_sim.Constructions.CanPlaceEdge(EdgePiece, edge.Cell, edge.Side)}";
-    }
-
-    /// <summary>The edges of the wall line being dragged: along the start edge's direction, to where the mouse is.</summary>
-    private IEnumerable<(TilePos Cell, int Side)> LineEdges()
-    {
-        var (start, side) = _lineStart;
-        if (side == EdgeInfo.East)
-            for (int y = Math.Min(start.Y, _cornerY); y <= Math.Max(start.Y, _cornerY); y++) yield return (start with { Y = y }, side);
-        else
-            for (int x = Math.Min(start.X, _cornerX); x <= Math.Max(start.X, _cornerX); x++) yield return (start with { X = x }, side);
-    }
+    private void PlaceEdgePiece((TilePos Cell, int Side) edge) => Issue(new PlaceEdge(EdgePiece, edge.Cell, edge.Side, WallMaterial));
 
     /// <summary>Shows the wall line being dragged as a thin box along its edges.</summary>
     private void UpdateLine()
@@ -374,49 +358,7 @@ public partial class DesignationTool : Node3D
         _box.Visible = true;
     }
 
-    private void ApplyLine()
-    {
-        int done = 0;
-        foreach (var edge in LineEdges().ToList())
-        {
-            if (_selection == Selection.Cancel)
-            {
-                if (_sim.Constructions.CancelEdge(edge.Cell, edge.Side) || _sim.Constructions.Demolish(edge.Cell, edge.Side, _sim.Items)) done++;
-            }
-            else if (_sim.Constructions.PlaceEdge(EdgePiece, edge.Cell, edge.Side, WallMaterial) is not null) done++;
-        }
-        string name = Constructions.Name(EdgePiece).ToLowerInvariant();
-        LastAction = _selection == Selection.Cancel ? $"Removed {done} wall pieces along the line" : $"Planned {done} {name}s along the line";
-    }
-
-    /// <summary>Cancels planned and takes down built walls, doors and windows on every edge in or round the box.</summary>
-    private string ClearWalls(TilePos a, TilePos b)
-    {
-        int x0 = Math.Min(a.X, b.X), x1 = Math.Max(a.X, b.X), y0 = Math.Min(a.Y, b.Y), y1 = Math.Max(a.Y, b.Y);
-        int planned = 0, built = 0;
-        for (int z = Math.Min(a.Z, b.Z) + 1; z <= Math.Max(a.Z, b.Z) + 1; z++)
-        for (int y = y0 - 1; y <= y1; y++)
-        for (int x = x0 - 1; x <= x1; x++)
-        {
-            var c = new TilePos(x, y, z);
-            if (!_sim.World.InBounds(c)) continue;
-            foreach (int side in new[] { EdgeInfo.East, EdgeInfo.North })
-            {
-                bool onBox = side == EdgeInfo.East ? y >= y0 : x >= x0; // the edge touches the box
-                if (!onBox) continue;
-                if (_sim.Constructions.CancelEdge(c, side)) planned++;
-                else if (_sim.Constructions.Demolish(c, side, _sim.Items)) built++;
-            }
-        }
-        return $"Cancelled {planned} planned and took down {built} built wall pieces";
-    }
-
-    private void RemoveEdge((TilePos Cell, int Side) edge)
-    {
-        if (_sim.Constructions.CancelEdge(edge.Cell, edge.Side)) LastAction = "Cancelled the planned piece";
-        else if (_sim.Constructions.Demolish(edge.Cell, edge.Side, _sim.Items)) LastAction = "Took the piece down (its material is left beside it)";
-        else LastAction = "Nothing on that edge";
-    }
+    private void RemoveEdgePiece((TilePos Cell, int Side) edge) => Issue(new RemoveEdge(edge.Cell, edge.Side));
 
     /// <summary>Paints rooms of this workshop (or homes).</summary>
     public void SelectWorkshop(RoomType w)
@@ -551,7 +493,7 @@ public partial class DesignationTool : Node3D
                 if (_hoverEdge is { } edge)
                 {
                     if (eb.ButtonIndex == MouseButton.Left) PlaceEdgePiece(edge);
-                    else RemoveEdge(edge);
+                    else RemoveEdgePiece(edge);
                 }
                 Handled();
                 break;
@@ -607,34 +549,29 @@ public partial class DesignationTool : Node3D
 
             // F: change what the machine under the cursor makes.
             case InputEventKey { Pressed: true, Echo: false, Keycode: Key.F } fk when HoveredMachine() is { } machine:
-                if (_sim.Rooms.CycleRecipe(machine, fk.ShiftPressed))
-                    LastAction = $"{machine.Name} in {machine.Room.Name} now makes {machine.Recipe!.Name.ToLowerInvariant()}: {machine.Recipe.Describe()}";
-                else
-                    LastAction = $"{machine.Name} only makes {machine.Recipe!.Name.ToLowerInvariant()}";
+                Issue(new Colony.Core.Commands.CycleRecipe(machine.Cells[0], fk.ShiftPressed));
                 Handled();
                 break;
 
             // F over a home: switch it to the next housing policy (H edits the policies themselves).
             case InputEventKey { Pressed: true, Echo: false, Keycode: Key.F } hk when HoveredHome() is { } home:
             {
-                var policies = _sim.Housing.Policies;
+                var policies = _sim.Factions[Player].Housing.Policies;
                 int next = (policies.IndexOf(home.Policy) + (hk.ShiftPressed ? policies.Count - 1 : 1)) % policies.Count;
-                _sim.Housing.SetPolicy(home, policies[next]);
-                var plan = Housing.Plan(home);
-                LastAction = $"{home.Name} is now a {policies[next].Name.ToLowerInvariant()}: room for {plan.Residents}";
+                Issue(new SetHomePolicy(home.Room.Cells.First(), next));
                 Handled();
                 break;
             }
 
             case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Enter or Key.KpEnter }:
-                DebugCompleteAll();
+                Issue(new DebugCompleteAll());
                 break;
         }
     }
 
     /// <summary>The home whose floor is the hovered tile's top, if any.</summary>
     public Home? HoveredHome() =>
-        Hovered is { } h && _sim.Rooms.RoomAt(h.Offset(0, 0, 1)) is { Type.IsHome: true } room ? _sim.Housing.HomeOf(room) : null;
+        Hovered is { } h && _sim.Rooms.RoomAt(h.Offset(0, 0, 1)) is { Type.IsHome: true } room && room.Faction == Player ? _sim.Factions[Player].Housing.HomeOf(room) : null;
 
     /// <summary>The machine standing on (or in) the hovered tile, if any.</summary>
     public Part? HoveredMachine()
@@ -656,14 +593,7 @@ public partial class DesignationTool : Node3D
 
     private (TilePos A, TilePos B) Corners() => (_anchor, new TilePos(_cornerX, _cornerY, _cornerZ));
 
-    private void PlaceStructure(TilePos cell)
-    {
-        string name = Constructions.Name(Structure).ToLowerInvariant();
-        var bp = _sim.Constructions.Place(Structure, cell, _facing);
-        LastAction = bp is not null
-            ? $"Placed a {name} blueprint: needs {bp.Cost.Count} {bp.Cost.Material.Name.ToLowerInvariant()} and a builder"
-            : $"Can't place a {name}: {_sim.Constructions.CanPlace(Structure, cell)}";
-    }
+    private void PlaceStructure(TilePos cell) => Issue(new Colony.Core.Commands.PlaceStructure(Structure, cell, _facing));
 
     public void SelectStructure(StructureKind kind)
     {
@@ -672,125 +602,57 @@ public partial class DesignationTool : Node3D
         EndSelection();
     }
 
-    private void PlacePart(PartType part, TilePos cell)
-    {
-        int size = SizeFor(part);
-        string name = PartInfo.Name(part, size).ToLowerInvariant();
-        var placed = _sim.Rooms.Place(part, cell, _rotated, size);
-        LastAction = placed is not null
-            ? (placed.Built ? $"Placed a {name} in {placed.Room.Name}" : $"Placed a {name} blueprint in {placed.Room.Name}: needs {placed.Cost.Count} {placed.Cost.Material.Name.ToLowerInvariant()} and a builder")
-            : $"Can't place {name}: {_sim.Rooms.CanPlace(part, cell, _rotated, size)}";
-    }
+    private void PlacePart(PartType part, TilePos cell) => Issue(new Colony.Core.Commands.PlacePart(part.Id, cell, _rotated, SizeFor(part)));
 
     private void Apply()
     {
-        var d = _sim.Designations;
         var (a, b) = Corners();
-        if (Mode == ToolMode.WallLine)
+        bool cancel = _selection == Selection.Cancel;
+        Command command = Mode switch
         {
-            ApplyLine();
-            EndSelection();
-            return;
-        }
-        if (Mode is ToolMode.Floor or ToolMode.Roof)
-        {
-            var kind = Mode == ToolMode.Floor ? StructureKind.Floor : StructureKind.Roof;
-            int material = Mode == ToolMode.Floor ? FloorMaterial : RoofMaterial;
-            string what = Mode == ToolMode.Floor ? FloorMaterials.All[material].Name.ToLowerInvariant() : RoofMaterials.All[material].Name.ToLowerInvariant() + " roof";
-            LastAction = _selection == Selection.Cancel
-                ? $"Took up {_sim.Constructions.ClearCoverBox(kind, a, b, _sim.Items)} {(Mode == ToolMode.Floor ? "floor" : "roof")} cells"
-                : $"Planned {_sim.Constructions.PlaceCoverBox(kind, a, b, material)} cells of {what} ({Constructions.Cost(kind, material).Count} {Constructions.Cost(kind, material).Material.Name.ToLowerInvariant()} each)";
-            EndSelection();
-            return;
-        }
-        if (_selection == Selection.Cancel)
-        {
-            if (Mode == ToolMode.Outline)
-                LastAction = ClearWalls(a, b);
-            else if (Mode == ToolMode.Room)
-                LastAction = $"Erased {_sim.Rooms.Erase(a, b)} room cells";
-            else if (Mode == ToolMode.Wall)
-                LastAction = $"Cancelled {_sim.Constructions.CancelBox(a, b)} wall blueprints";
-            else if (Mode == ToolMode.Structure)
-            {
-                int built = 0;
-                for (int z = Math.Min(a.Z, b.Z); z <= Math.Max(a.Z, b.Z) + 1; z++)
-                for (int y = Math.Min(a.Y, b.Y); y <= Math.Max(a.Y, b.Y); y++)
-                for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
-                    if (_sim.RemoveStructure(new TilePos(x, y, z))) built++;
-                LastAction = $"Removed {built} waterworks, cancelled {_sim.Constructions.CancelBox(a, b)} blueprints";
-            }
-            else if (PartFor(Mode) is not null)
-                LastAction = $"Removed {_sim.Rooms.RemovePartsIn(a, b)} parts";
-            else if (IsAreaTool(Mode))
-                LastAction = $"Cancelled {d.CancelPlantArea(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y)} {BaseModeName(Mode).ToLowerInvariant()} orders";
-            else
-            {
-                // Box corners are ground tiles: also clear tree/stockpile cells standing on them.
-                int orders = d.CancelBox(a with { Z = Math.Min(a.Z, b.Z) }, b with { Z = Math.Max(a.Z, b.Z) + 1 });
-                int zones = _sim.Stockpiles.RemoveBox(a, b);
-                int plots = _sim.Farms.RemoveBox(a, b);
-                LastAction = $"Cancelled {orders} designations, removed {zones} stockpile and {plots} farm cells";
-            }
-        }
-        else if (Mode == ToolMode.Outline)
-        {
-            int n = _sim.Constructions.PlaceOutline(a, b, WallMaterial);
-            var (mat, _) = Constructions.Cost(StructureKind.EdgeWall, WallMaterial);
-            LastAction = n > 0 ? $"Walls: {n} planned round the box ({n} {mat.Name.ToLowerInvariant()}); add doors with the Door tool" : "Walls: none fit (already walled, or no floor beside the outline)";
-        }
-        else if (Mode == ToolMode.Room)
-        {
-            int n = _sim.Rooms.Paint(Workshop, a, b);
-            LastAction = n > 0 ? $"{Workshop.Name}: painted {n} floor cells" : $"{Workshop.Name}: no free floor in that box";
-        }
-        else if (Mode == ToolMode.Wall)
-        {
-            int n = _sim.Constructions.PlaceWalls(a, b);
-            LastAction = n > 0 ? $"Walls: {n} blueprints (each needs 1 stone and a builder)" : "Walls: no open cell with ground or a wall below in that box";
-        }
-        else if (CropFor(Mode) is { } crop)
-        {
-            int n = _sim.Farms.AddFloorBox(crop, a, b);
-            LastAction = n > 0 ? $"{BaseModeName(Mode)}: zoned {n} plots" :
-                crop == PlantKind.Glowcap ? "No plots: glowcaps need a solid floor under a roof" : "No plots: crops need free grass or soil";
-        }
-        else
-        {
-            int n = Mode switch
-            {
-                ToolMode.Stairs => d.DesignateStairs(a, b),
-                // Plant work is always on the surface: every plant in the area's columns, whatever the level.
-                ToolMode.Chop or ToolMode.Gather => d.DesignatePlantArea(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y),
-                ToolMode.Stockpile => _sim.Stockpiles.AddFloorBox(a, b),
-                _ => d.DesignateBox(a, b, KindFor(Mode, 0, 0, 0)),
-            };
-            LastAction = Mode switch
-            {
-                ToolMode.Chop => $"Chop trees: marked {n} trees",
-                ToolMode.Gather => $"Gather plants: marked {n} ripe plants",
-                _ => $"{ModeName(Mode)}: designated {n} tiles",
-            };
-        }
+            ToolMode.WallLine => new EdgeLine(EdgePiece, _lineStart.Cell, _lineStart.Side,
+                _lineStart.Side == EdgeInfo.East ? _cornerY : _cornerX, WallMaterial, cancel),
+            ToolMode.Floor => new Covers(StructureKind.Floor, a, b, FloorMaterial, cancel),
+            ToolMode.Roof => new Covers(StructureKind.Roof, a, b, RoofMaterial, cancel),
+            ToolMode.Outline => cancel ? new ClearWalls(a, b) : new PlaceOutline(a, b, WallMaterial),
+            ToolMode.Room => cancel ? new EraseRoom(a, b) : new PaintRoom(Workshop.Id, a, b),
+            ToolMode.Wall => cancel ? new CancelWalls(a, b) : new PlaceWalls(a, b),
+            ToolMode.Structure => new RemoveStructures(a, b),
+            ToolMode.Part => new RemoveParts(a, b),
+            ToolMode.Chop or ToolMode.Gather => cancel
+                ? new CancelPlants(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y)
+                : new DesignatePlants(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y),
+            _ when cancel => new CancelOrders(a, b),
+            ToolMode.Stairs => new DesignateStairs(a, b),
+            ToolMode.Stockpile => new AddStockpile(a, b),
+            _ when CropFor(Mode) is { } crop => new AddFarm(crop, a, b),
+            _ => new DesignateBox(a, b, KindFor(Mode, 0, 0, 0)),
+        };
+        Issue(command);
         EndSelection();
     }
+
+    /// <summary>
+    /// Every change the player makes goes through here as a command (applied before the next tick and logged, so the
+    /// game replays exactly; multiplayer will send it to the other players instead of applying it at once).
+    /// </summary>
+    public void Issue(Command command)
+    {
+        LastAction = _sim.Commands.Execute(command with { Player = Player });
+        ActionSerial++;
+    }
+
+    /// <summary>Counts issued commands (so the UI shows a message even when it repeats).</summary>
+    public int ActionSerial { get; private set; }
+
+    /// <summary>The colony this player controls: every command is issued as it.</summary>
+    public int Player { get; set; }
 
     private void EndSelection()
     {
         _selection = Selection.None;
         _box.Visible = false;
         _drape.Visible = false;
-    }
-
-    /// <summary>Debug shortcut: instantly completes every designation.</summary>
-    private void DebugCompleteAll()
-    {
-        var d = _sim.Designations;
-        var all = new List<TilePos>(d.All.Keys);
-        // Top-down, so stairs carve in the order a colonist would and cave-ins behave predictably.
-        all.Sort((p, q) => q.Z.CompareTo(p.Z));
-        foreach (var p in all) _sim.CompleteDesignation(p);
-        LastAction = $"Debug: completed {all.Count} designations";
     }
 
     private void UpdateGhost(bool placing)

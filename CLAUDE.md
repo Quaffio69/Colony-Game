@@ -111,10 +111,37 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   Home key looks at the colony. **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
   map size; `Main.NewColony` reloads the scene), Multiplayer (disabled), Appearance, Tests, Quit; opened by Esc when
   nothing is left to close (the game does not start on it yet); the sim waits while it is up.
-- **Multiplayer direction (not built):** freeform, each player a distinct colony (faction) in one world: cooperate
-  against NPC enemies, trade, compete or go to war, with no mechanics beyond distinct colonies. Path: player actions
-  as sim commands (deterministic lockstep fits the deterministic Core), a faction id on everything a colony owns, then
-  networking; war needs combat and health first.
+- **Multiplayer direction:** freeform, each player a distinct colony (faction) in one world: cooperate against NPC
+  enemies, trade, compete or go to war, with no mechanics beyond distinct colonies. Built: commands and factions
+  (below), hot-seat. Next: networking (lockstep: peers exchange commands stamped with the tick they apply before);
+  war needs combat and health first.
+
+## Commands and factions (multiplayer foundation)
+
+- **Commands (`Colony.Core.Commands`):** every player action is a `Command` record (dig box, stairs, plant areas,
+  zones, farms, dams, paint/erase rooms, place/remove parts, recipes, waterworks, edge pieces and lines, outlines,
+  floors/roofs, work priorities, home policy, housing policy edits, debug complete). Commands name things by stable ids
+  and cells (part id, room type id, policy index, a cell of the home), never object references, and `Apply` returns
+  the player's message. `sim.Commands` (`CommandQueue`): `Submit` queues, `Flush` applies before the next tick (Step
+  flushes first thing), `Execute` applies now (single player; it is still "before the next tick"); every applied
+  command is logged with its tick, so `CommandQueue.Replay` on a world generated the same way reproduces the game
+  exactly (tested on an encoded log). `CommandCodec` writes them in binary (tag, player, fields; every type round-trips).
+  The game issues everything through `DesignationTool.Issue` (stamps the local player); dev demos still edit directly.
+- **Factions (`Agents.Faction`, `sim.Factions`):** a colony: id, name, landing spot, its own `Society` (settlers, mood,
+  goods, families, departures) and `Housing` (only its own home rooms and people). `sim.Society`/`sim.Housing` are
+  shorthand for faction 0. Ownership: designations, stockpile cells and farm plots (`Owners`: cell -> faction, only
+  non-zero stored), `Room.Faction`, `Blueprint.Faction`, `Colonist.Faction`; registries take an optional `faction`
+  (place: owner, default 0; cancel/remove: filter, default `Owners.Any`). A player can't redesignate another colony's
+  order, cancel its things, place parts in its rooms, or command its colonists (commands refuse). Colonists only take
+  their colony's orders (`JobBoard.Candidates` faction filter), rooms, blueprints, homes and students; haulers fill only
+  their colony's stockpiles, crates and sites, from loose piles or their own stores (`Hauling.Plans` faction); food and
+  goods come from loose piles or their own stores (`Needs.Usable(sim, p, faction)`); a Magister comes to each colony's
+  own Academy. Loose piles are anyone's. Built walls/floors/roofs and waterworks have no owner. `SimEvent` carries the
+  faction (-1: everyone). `ColonySim.Generate(..., factions: N)`: colony 0 at the spawn, others on dry land evenly
+  round it a quarter of the map away, each with founders and (when N > 1) its provisions in a small stockpile of its
+  own. With one colony the ownership checks are skipped (`Colonist.Filter`, `Needs.Usable`), so single player pays
+  nothing for them (benched). Game: `Main.Player` is the local colony (HUD, windows, commands follow it), `--colonies=N`, `--play-as=N`, F4
+  hot-seat switches colony, New colony offers 1-4 colonies; colonists show a ring and name tag in their colony's colour.
 
 ## Game design decisions
 
@@ -449,7 +476,10 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       schooling children, health beyond consumption, settler couples, old age.
 - [x] UI: Glyph UI (theme, glass panels, window manager, HUD, dock, status pill), every menu migrated (Build, Housing,
       Work, Tests) plus Colonists, Stocks, Chronicle, Inspect, Appearance, Help windows and a main menu; work priorities.
-- [ ] Next for UI / demo: colonist pages (job clothing, titles by proficiency once skills exist), player actions as sim
-      commands, factions per player, title art behind the main menu, save/load.
+- [x] Multiplayer foundation: player commands (queue, log, exact replay, binary codec), factions (ownership of orders,
+      zones, rooms, blueprints, colonists; per-colony society and housing), multi-colony world generation, hot-seat.
+- [ ] Next for the demo: networking (lockstep over the command codec, a lobby in the main menu), save/load (world
+      seed + command log is already a save), colonist pages (job clothing, titles by proficiency once skills exist),
+      combat and health (war, NPC enemies), trade between colonies, title art behind the main menu.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.

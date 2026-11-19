@@ -31,6 +31,8 @@ public sealed class Blueprint
 {
     public required TilePos Cell { get; init; }
     public required StructureKind Kind { get; init; }
+    /// <summary>The colony that planned it: its haulers supply it, its builders build it.</summary>
+    public int Faction { get; init; }
     /// <summary>0..3: +x, +y, -x, -y (which way a pump pushes, or a wheel's axle runs).</summary>
     public int Facing { get; init; }
     public BuildCost Cost => Constructions.Cost(Kind, Material);
@@ -144,10 +146,10 @@ public sealed class Constructions
     }
 
     /// <summary>Plans a thin wall, door or window (a door or window may replace a built wall: it is cut in when built).</summary>
-    public Blueprint? PlaceEdge(StructureKind kind, TilePos cell, int side, int material = 0)
+    public Blueprint? PlaceEdge(StructureKind kind, TilePos cell, int side, int material = 0, int faction = 0)
     {
         if (CanPlaceEdge(kind, cell, side) is not null) return null;
-        var bp = new Blueprint { Cell = SiteOf(cell, side)!.Value, Kind = kind, EdgeCell = cell, Side = side, Material = WallMaterials.Clamp(material) };
+        var bp = new Blueprint { Cell = SiteOf(cell, side)!.Value, Kind = kind, EdgeCell = cell, Side = side, Material = WallMaterials.Clamp(material), Faction = faction };
         _byEdge[(cell, side)] = bp;
         AddSite(bp);
         _order.Add(bp);
@@ -159,19 +161,19 @@ public sealed class Constructions
     /// Walls all round a box of floor cells (the edges on its outline, on the level above each corner's ground: the
     /// box's floor level). Returns how many were planned.
     /// </summary>
-    public int PlaceOutline(TilePos a, TilePos b, int material, StructureKind kind = StructureKind.EdgeWall)
+    public int PlaceOutline(TilePos a, TilePos b, int material, StructureKind kind = StructureKind.EdgeWall, int faction = 0)
     {
         int x0 = Math.Min(a.X, b.X), x1 = Math.Max(a.X, b.X), y0 = Math.Min(a.Y, b.Y), y1 = Math.Max(a.Y, b.Y), z = Math.Min(a.Z, b.Z) + 1;
         int n = 0;
         for (int x = x0; x <= x1; x++)
         {
-            if (PlaceEdge(kind, new TilePos(x, y0 - 1, z), EdgeInfo.North, material) is not null) n++; // south side
-            if (PlaceEdge(kind, new TilePos(x, y1, z), EdgeInfo.North, material) is not null) n++;     // north side
+            if (PlaceEdge(kind, new TilePos(x, y0 - 1, z), EdgeInfo.North, material, faction) is not null) n++; // south side
+            if (PlaceEdge(kind, new TilePos(x, y1, z), EdgeInfo.North, material, faction) is not null) n++;     // north side
         }
         for (int y = y0; y <= y1; y++)
         {
-            if (PlaceEdge(kind, new TilePos(x0 - 1, y, z), EdgeInfo.East, material) is not null) n++;  // west side
-            if (PlaceEdge(kind, new TilePos(x1, y, z), EdgeInfo.East, material) is not null) n++;      // east side
+            if (PlaceEdge(kind, new TilePos(x0 - 1, y, z), EdgeInfo.East, material, faction) is not null) n++;  // west side
+            if (PlaceEdge(kind, new TilePos(x1, y, z), EdgeInfo.East, material, faction) is not null) n++;      // east side
         }
         return n;
     }
@@ -205,10 +207,10 @@ public sealed class Constructions
         return null;
     }
 
-    public Blueprint? PlaceCover(StructureKind kind, TilePos cell, int material)
+    public Blueprint? PlaceCover(StructureKind kind, TilePos cell, int material, int faction = 0)
     {
         if (CanPlaceCover(kind, cell, material) is not null) return null;
-        var bp = new Blueprint { Cell = cell, Kind = kind, Material = material };
+        var bp = new Blueprint { Cell = cell, Kind = kind, Material = material, Faction = faction };
         _byCover[(cell, kind == StructureKind.Roof)] = bp;
         AddSite(bp);
         _order.Add(bp);
@@ -217,18 +219,18 @@ public sealed class Constructions
     }
 
     /// <summary>Floors (or roofs) over every floor cell in a box between ground tiles, like painting a room. Returns how many.</summary>
-    public int PlaceCoverBox(StructureKind kind, TilePos a, TilePos b, int material)
+    public int PlaceCoverBox(StructureKind kind, TilePos a, TilePos b, int material, int faction = 0)
     {
         int n = 0;
         for (int z = Math.Min(a.Z, b.Z) + 1; z <= Math.Max(a.Z, b.Z) + 1; z++)
         for (int y = Math.Min(a.Y, b.Y); y <= Math.Max(a.Y, b.Y); y++)
         for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
-            if (PlaceCover(kind, new TilePos(x, y, z), material) is not null) n++;
+            if (PlaceCover(kind, new TilePos(x, y, z), material, faction) is not null) n++;
         return n;
     }
 
     /// <summary>Takes up floors or roofs (planned or built) on the floor cells of a box, refunding built ones. Returns how many.</summary>
-    public int ClearCoverBox(StructureKind kind, TilePos a, TilePos b, ItemPiles items)
+    public int ClearCoverBox(StructureKind kind, TilePos a, TilePos b, ItemPiles items, int faction = Owners.Any)
     {
         bool roof = kind == StructureKind.Roof;
         int n = 0;
@@ -237,7 +239,7 @@ public sealed class Constructions
         for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
         {
             var c = new TilePos(x, y, z);
-            if (CoverAt(c, roof) is { } bp)
+            if (CoverAt(c, roof) is { } bp && (faction == Owners.Any || bp.Faction == faction))
             {
                 Remove(bp);
                 n++;
@@ -255,9 +257,9 @@ public sealed class Constructions
     }
 
     /// <summary>Cancels the blueprint on an edge (delivered materials stay as a loose pile). False if there is none.</summary>
-    public bool CancelEdge(TilePos cell, int side)
+    public bool CancelEdge(TilePos cell, int side, int faction = Owners.Any)
     {
-        if (EdgeAt(cell, side) is not { } bp) return false;
+        if (EdgeAt(cell, side) is not { } bp || (faction != Owners.Any && bp.Faction != faction)) return false;
         Remove(bp);
         return true;
     }
@@ -298,10 +300,10 @@ public sealed class Constructions
         return onFloor ? null : "needs ground below";
     }
 
-    public Blueprint? Place(StructureKind kind, TilePos cell, int facing = 0)
+    public Blueprint? Place(StructureKind kind, TilePos cell, int facing = 0, int faction = 0)
     {
         if (CanPlace(kind, cell) is not null) return null;
-        var bp = new Blueprint { Cell = cell, Kind = kind, Facing = facing & 3 };
+        var bp = new Blueprint { Cell = cell, Kind = kind, Facing = facing & 3, Faction = faction };
         _byCell[cell] = bp;
         _order.Add(bp);
         Version++;
@@ -312,20 +314,20 @@ public sealed class Constructions
     /// Walls in every open cell of the box between two ground tiles, from the level above the lower corner up
     /// to the level above the upper one (so a box spanning levels raises a dam that high). Returns how many.
     /// </summary>
-    public int PlaceWalls(TilePos a, TilePos b)
+    public int PlaceWalls(TilePos a, TilePos b, int faction = 0)
     {
         int n = 0;
         for (int z = Math.Min(a.Z, b.Z) + 1; z <= Math.Max(a.Z, b.Z) + 1; z++)
         for (int y = Math.Min(a.Y, b.Y); y <= Math.Max(a.Y, b.Y); y++)
         for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
-            if (Place(StructureKind.Wall, new TilePos(x, y, z)) is not null) n++;
+            if (Place(StructureKind.Wall, new TilePos(x, y, z), 0, faction) is not null) n++;
         return n;
     }
 
     /// <summary>Cancels blueprints in the box (and the level above it). Delivered materials stay as loose piles.</summary>
-    public int CancelBox(TilePos a, TilePos b)
+    public int CancelBox(TilePos a, TilePos b, int faction = Owners.Any)
     {
-        var hits = _order.Where(bp =>
+        var hits = _order.Where(bp => (faction == Owners.Any || bp.Faction == faction) &&
             bp.Cell.X >= Math.Min(a.X, b.X) && bp.Cell.X <= Math.Max(a.X, b.X) &&
             bp.Cell.Y >= Math.Min(a.Y, b.Y) && bp.Cell.Y <= Math.Max(a.Y, b.Y) &&
             bp.Cell.Z >= Math.Min(a.Z, b.Z) && bp.Cell.Z <= Math.Max(a.Z, b.Z) + 1).ToList();

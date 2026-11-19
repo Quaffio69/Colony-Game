@@ -291,7 +291,7 @@ public sealed class ColonySim
     public Terrain? Terrain { get; private set; }
 
     /// <summary>Generates a world and drops a starting party at the terrain's suggested spawn.</summary>
-    public static ColonySim Generate(WorldGenSettings settings, int colonists = 7, bool settleWaterInBackground = false)
+    public static ColonySim Generate(WorldGenSettings settings, int colonists = 7, bool settleWaterInBackground = false, int factions = 1)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var generated = WorldGenerator.GenerateWithTerrain(settings);
@@ -316,17 +316,29 @@ public sealed class ColonySim
         long floraMs = clock.ElapsedMilliseconds;
         int trees = sim.Flora.All.Count(p => PlantInfo.IsTree(p.Kind));
 
-        // Founders: one Scholar and a couple of Literates lead the party (schools need teachers; see Graduate).
-        foreach (var p in sim.FindSpawnPoints(generated.Terrain.SpawnX, generated.Terrain.SpawnY, colonists))
+        // Founders: one Scholar and a couple of Literates lead each party (schools need teachers; see Graduate).
+        // The first colony lands at the terrain's spawn; others land on dry ground spaced round it (multiplayer).
+        for (int f = 0; f < Math.Max(1, factions); f++)
         {
-            int n = sim._colonists.Count;
-            sim.AddColonist(NameGenerator.Generate(settings.Seed, n), p, education: n == 0 ? 2 : n <= 2 ? 1 : 0);
-        }
-        if (sim._colonists.Count > 0)
-        {
-            var landing = sim._colonists[^1].Position;
-            sim.Items.Drop(landing, ItemType.Berries, StartingBerries);
-            sim.Items.Drop(landing, Catalog.Item("bread"), StartingBread);
+            var faction = f == 0 ? sim._factions[0] : sim.AddFaction(FactionNames[f % FactionNames.Length]);
+            var (cx, cy) = f == 0 ? (generated.Terrain.SpawnX, generated.Terrain.SpawnY) : sim.OtherLanding(generated.Terrain, f, factions);
+            faction.Landing = new TilePos(cx, cy, 0);
+            int first = sim._colonists.Count;
+            foreach (var p in sim.FindSpawnPoints(cx, cy, colonists, dry: f > 0))
+            {
+                int n = sim._colonists.Count - first;
+                sim.AddColonist(NameGenerator.Generate(settings.Seed + f * 7919, n), p, education: n == 0 ? 2 : n <= 2 ? 1 : 0, faction: f);
+            }
+            if (sim._colonists.Count > first)
+            {
+                var landing = sim._colonists[^1].Position;
+                // With several colonies, each one's provisions start in a little stockpile of its own (loose goods are
+                // anyone's, and the neighbours would count them as theirs too).
+                if (factions > 1)
+                    sim.Stockpiles.AddFloorBox(landing.Offset(-1, -1, -1), landing.Offset(1, 1, -1), f);
+                sim.Items.Drop(landing, ItemType.Berries, StartingBerries);
+                sim.Items.Drop(landing, Catalog.Item("bread"), StartingBread);
+            }
         }
 
         clock.Restart();
@@ -359,9 +371,9 @@ public sealed class ColonySim
     /// <summary>Human-readable timings from <see cref="Generate"/>.</summary>
     public string StartupReport { get; private set; } = "";
 
-    public Colonist AddColonist(string name, TilePos position, int education = 0, bool automaton = false)
+    public Colonist AddColonist(string name, TilePos position, int education = 0, bool automaton = false, int faction = 0)
     {
-        var c = new Colonist(ColonistsEver++, name, position, education) { IsAutomaton = automaton };
+        var c = new Colonist(ColonistsEver++, name, position, education) { IsAutomaton = automaton, Faction = faction };
         if (_stepping) _arriving.Add(c); // joining mid-tick (e.g. an automaton finished): starts next tick
         else _colonists.Add(c);
         return c;
@@ -373,10 +385,26 @@ public sealed class ColonySim
     /// <summary>Hunger, the living standard and settlers (<see cref="Society"/>). Off for sandbox tests that don't feed anyone.</summary>
     public bool NeedsEnabled { get; set; } = true;
 
-    public Society Society { get; } = new();
+    /// <summary>Every colony in the world (index = faction id); the first is the local player's in single player.</summary>
+    public IReadOnlyList<Faction> Factions => _factions;
+    private readonly List<Faction> _factions = [new Faction(0, "The Colony")];
+
+    /// <summary>A new colony (a player or an NPC) landing at a spot.</summary>
+    public Faction AddFaction(string name, TilePos? landing = null)
+    {
+        var f = new Faction(_factions.Count, name) { Landing = landing };
+        _factions.Add(f);
+        return f;
+    }
+
+    /// <summary>The first colony's society (shorthand for <c>Factions[0].Society</c>).</summary>
+    public Society Society => _factions[0].Society;
 
     /// <summary>Homes, their furnishing policies, fixtures and residents.</summary>
-    public Housing Housing { get; } = new();
+    public Housing Housing => _factions[0].Housing;
+    /// <summary>Player commands: every change a player makes goes through these (see <see cref="Commands.Command"/>).</summary>
+    public Commands.CommandQueue Commands => _commands ??= new Commands.CommandQueue(this);
+    private Commands.CommandQueue? _commands;
 
     private int _families;
 
@@ -387,7 +415,7 @@ public sealed class ColonySim
     internal Colonist AddChild(Colonist mother, Colonist father)
     {
         var at = mother.Home is { } home ? Housing.SleepCell(home, mother) : mother.Position;
-        var child = AddColonist(NameGenerator.Generate(unchecked((int)Tick * 37 + 5), ColonistsEver), at);
+        var child = AddColonist(NameGenerator.Generate(unchecked((int)Tick * 37 + 5), ColonistsEver), at, faction: mother.Faction);
         child.IsChild = true;
         child.BornTick = Tick;
         child.Household = mother.Household;
@@ -402,10 +430,12 @@ public sealed class ColonySim
     }
 
     /// <summary>Where newcomers arrive: standable ground around the landing place (or the first colonist).</summary>
-    internal List<TilePos> ArrivalSpots(int count)
+    internal List<TilePos> ArrivalSpots(int count, int faction = 0)
     {
-        if (Terrain is { } t) return FindSpawnPoints(t.SpawnX, t.SpawnY, count);
-        return _colonists.Count > 0 ? FindSpawnPoints(_colonists[0].Position.X, _colonists[0].Position.Y, count) : [];
+        if (_factions[faction].Landing is { } land) return FindSpawnPoints(land.X, land.Y, count);
+        if (faction == 0 && Terrain is { } t) return FindSpawnPoints(t.SpawnX, t.SpawnY, count);
+        if (_colonists.FirstOrDefault(c => c.Faction == faction) is { } member) return FindSpawnPoints(member.Position.X, member.Position.Y, count);
+        return [];
     }
 
     /// <summary>Food the founders bring along, about two weeks for seven (dropped beside the landing place).</summary>
@@ -416,103 +446,111 @@ public sealed class ColonySim
 
     // ---- Events -----------------------------------------------------------------------------------------
 
-    private readonly List<(long Tick, string Text)> _events = new();
+    private readonly List<SimEvent> _events = new();
     private const int EventsKept = 400;
 
     /// <summary>Recent colony events (graduations, arrivals), oldest first.</summary>
-    public IReadOnlyList<(long Tick, string Text)> Events => _events;
+    public IReadOnlyList<SimEvent> Events => _events;
 
-    internal void Announce(string text)
+    internal void Announce(string text, int faction = -1)
     {
-        _events.Add((Tick, text));
+        _events.Add(new SimEvent(Tick, text, faction));
         if (_events.Count > EventsKept) _events.RemoveAt(0);
     }
 
     // ---- Education --------------------------------------------------------------------------------------
 
-    private readonly int[] _reservedStudents = new int[8];
+    private readonly Dictionary<(int Faction, int Level), int> _reservedStudents = new();
 
     /// <summary>The education level an Academy recipe teaches (its output item names a level).</summary>
     public static int Teaches(Recipe recipe) => Catalog.Education(recipe.Output.Name);
 
     /// <summary>Colonists one level below what <paramref name="recipe"/> teaches, not already booked for a class.</summary>
-    public int StudentsAvailable(Recipe recipe)
+    public int StudentsAvailable(Recipe recipe, int faction = 0)
     {
         int level = Teaches(recipe);
         int n = 0;
         foreach (var c in _colonists)
-            if (!c.IsAutomaton && c.Education == level - 1) n++;
-        return Math.Max(0, n - _reservedStudents[level]);
+            if (!c.IsAutomaton && c.Faction == faction && c.Education == level - 1) n++;
+        return Math.Max(0, n - _reservedStudents.GetValueOrDefault((faction, level)));
     }
 
-    internal void ReserveStudents(Recipe recipe, int units) => _reservedStudents[Teaches(recipe)] += units;
+    internal void ReserveStudents(Recipe recipe, int units, int faction = 0) =>
+        _reservedStudents[(faction, Teaches(recipe))] = _reservedStudents.GetValueOrDefault((faction, Teaches(recipe))) + units;
 
-    internal void ReleaseStudents(Recipe recipe, int units)
+    internal void ReleaseStudents(Recipe recipe, int units, int faction = 0)
     {
         int level = Teaches(recipe);
-        _reservedStudents[level] = Math.Max(0, _reservedStudents[level] - units);
+        _reservedStudents[(faction, level)] = Math.Max(0, _reservedStudents.GetValueOrDefault((faction, level)) - units);
     }
 
     /// <summary>A class finished: up to <paramref name="units"/> students (lowest id first) rise to the level taught.</summary>
-    internal void Graduate(Recipe recipe, int units)
+    internal void Graduate(Recipe recipe, int units, int faction = 0)
     {
-        ReleaseStudents(recipe, units);
+        ReleaseStudents(recipe, units, faction);
         int level = Teaches(recipe);
         foreach (var c in _colonists)
         {
             if (units == 0) break;
-            if (c.IsAutomaton || c.Education != level - 1) continue;
+            if (c.IsAutomaton || c.Faction != faction || c.Education != level - 1) continue;
             c.Education = level;
             units--;
-            Announce($"{c.Name} graduated from the Academy: now a {Catalog.EducationName(level)}");
+            Announce($"{c.Name} graduated from the Academy: now a {Catalog.EducationName(level)}", faction);
         }
     }
 
     /// <summary>Worker items (automatons) step off the assembly frame and join the colony as unskilled workers.</summary>
-    internal void AddWorkers(Recipe recipe, int units, TilePos at)
+    internal void AddWorkers(Recipe recipe, int units, TilePos at, int faction = 0)
     {
         for (int i = 0; i < units; i++)
         {
             int n = _colonists.Count(c => c.IsAutomaton) + _arriving.Count(c => c.IsAutomaton) + 1;
-            AddColonist($"{recipe.Output.Name} {n}", at, automaton: true);
-            Announce($"{recipe.Output.Name} {n} awakens and joins the colony");
+            AddColonist($"{recipe.Output.Name} {n}", at, automaton: true, faction: faction);
+            Announce($"{recipe.Output.Name} {n} awakens and joins the colony", faction);
         }
     }
 
     private int _eventRoomsVersion = -1;
-    private bool _magisterArrived;
 
     /// <summary>
-    /// Story events driven by what the colony has built. The first Magister can't be taught (only Magisters
-    /// teach Magisters), so one arrives once the Academy has an attunement circle to work at.
+    /// Story events driven by what a colony has built. The first Magister can't be taught (only Magisters
+    /// teach Magisters), so one arrives once a colony's Academy has an attunement circle to work at.
     /// </summary>
     private void CheckEvents()
     {
-        if (_magisterArrived || Rooms.Version == _eventRoomsVersion) return;
+        if (Rooms.Version == _eventRoomsVersion) return;
         _eventRoomsVersion = Rooms.Version;
         int magister = Catalog.EducationLevels.Count - 1;
-        if (_colonists.Any(c => c.Education >= magister))
+        foreach (var faction in _factions)
         {
-            _magisterArrived = true;
-            return;
-        }
-        foreach (var room in Rooms.All)
-            foreach (var part in room.Parts)
+            if (faction.MagisterArrived) continue;
+            if (_colonists.Any(c => c.Faction == faction.Id && c.Education >= magister))
             {
-                if (!part.Built || part.Recipe is null || part.Type.Recipes.All(r => r.Kind != ItemKind.Education || Teaches(r) < magister)) continue;
-                var at = Movement.IsStandable(World, part.Origin) ? part.Origin : room.Cells.First();
-                var name = NameGenerator.Generate(unchecked((int)Tick * 31 + 7), _colonists.Count);
-                AddColonist(name, at, education: magister);
-                Announce($"A wandering Magister, {name}, is drawn to the {part.Name.ToLowerInvariant()} and joins the colony");
-                _magisterArrived = true;
-                return;
+                faction.MagisterArrived = true;
+                continue;
             }
+            foreach (var room in Rooms.All)
+            {
+                if (room.Faction != faction.Id || faction.MagisterArrived) continue;
+                foreach (var part in room.Parts)
+                {
+                    if (!part.Built || part.Recipe is null || part.Type.Recipes.All(r => r.Kind != ItemKind.Education || Teaches(r) < magister)) continue;
+                    var at = Movement.IsStandable(World, part.Origin) ? part.Origin : room.Cells.First();
+                    var name = NameGenerator.Generate(unchecked((int)Tick * 31 + 7), _colonists.Count);
+                    AddColonist(name, at, education: magister, faction: faction.Id);
+                    Announce($"A wandering Magister, {name}, is drawn to the {part.Name.ToLowerInvariant()} and joins the colony", faction.Id);
+                    faction.MagisterArrived = true;
+                    break;
+                }
+            }
+        }
     }
 
     public void Step()
     {
         DevHooks.Stepping?.Invoke();
         WaitForWater();
+        _commands?.Flush(); // anything players queued applies before this tick
         Tick++;
         _tickNodeStart = Pathfinder.NodesExpanded;
         if (_waterworksDue) RunWaterworks(); // the step begun at the end of the last tick lands first
@@ -542,8 +580,11 @@ public sealed class ColonySim
         {
             _stepping = false;
         }
-        Housing.Tick(this); // follows home rooms, wears fixtures, houses people
-        if (NeedsEnabled) Society.Tick(this);
+        foreach (var f in _factions)
+        {
+            f.Housing.Tick(this); // follows home rooms, wears fixtures, houses people
+            if (NeedsEnabled) f.Society.Tick(this);
+        }
 
         // Water steps last in the tick, after everything that changes the world. With AsyncWater it computes on
         // worker threads until the next tick begins (the game draws a frame meanwhile); the outcome is the same.
@@ -571,7 +612,23 @@ public sealed class ColonySim
     }
 
     /// <summary>Standable surface tiles nearest to (x, y), spiralling outwards, one per column.</summary>
-    private List<TilePos> FindSpawnPoints(int cx, int cy, int count)
+    /// <summary>Names for the colonies after the first.</summary>
+    public static readonly string[] FactionNames = ["The Colony", "Ironvale", "Stonebrook", "Ashford", "Highmere", "Duskhollow", "Fernwatch", "Coldharbor"];
+
+    /// <summary>
+    /// Where colony <paramref name="f"/> of <paramref name="count"/> lands: evenly round the first colony's spawn, a quarter of
+    /// the map away (at least 24 tiles), nudged to the nearest dry land.
+    /// </summary>
+    private (int X, int Y) OtherLanding(Procedural.Terrain terrain, int f, int count)
+    {
+        float r = Math.Max(24, Math.Min(World.Width, World.Depth) / 4f);
+        double angle = 2 * Math.PI * (f - 1) / Math.Max(1, count - 1);
+        int x = Math.Clamp((int)(terrain.SpawnX + r * Math.Cos(angle)), 4, World.Width - 5);
+        int y = Math.Clamp((int)(terrain.SpawnY + r * Math.Sin(angle)), 4, World.Depth - 5);
+        return FindSpawnPoints(x, y, 1, dry: true) is [var p] ? (p.X, p.Y) : (x, y);
+    }
+
+    private List<TilePos> FindSpawnPoints(int cx, int cy, int count, bool dry = false)
     {
         var result = new List<TilePos>();
         for (int r = 0; result.Count < count && r < Math.Max(World.Width, World.Depth); r++)
@@ -582,8 +639,11 @@ public sealed class ColonySim
             int x = cx + dx, y = cy + dy;
             if (!World.InBounds(x, y, 0)) continue;
             var p = new TilePos(x, y, World.SurfaceLevel(x, y) + 1);
-            if (Movement.IsStandable(World, p)) result.Add(p);
+            if (Movement.IsStandable(World, p) && (!dry || Water.MassAt(p) < Fluids.Water.MinMass)) result.Add(p);
         }
         return result;
     }
 }
+
+/// <summary>Something worth telling the player: when, what, and which colony it concerns (-1: everyone).</summary>
+public readonly record struct SimEvent(long Tick, string Text, int Faction = -1);

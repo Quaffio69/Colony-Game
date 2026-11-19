@@ -161,7 +161,7 @@ public sealed class JobBoard
     /// proceeds top-down.
     /// </summary>
     public List<Job> Candidates(int component, TilePos from, Designations designations, int max,
-        IReadOnlySet<TilePos>? exclude = null, int kinds = -1)
+        IReadOnlySet<TilePos>? exclude = null, int kinds = -1, int faction = Owners.Any)
     {
         var best = new List<(long Key, Job Job)>(max + 1);
         foreach (var job in _jobs)
@@ -170,6 +170,7 @@ public sealed class JobBoard
             if (Array.IndexOf(job.Components, component) < 0) continue;
             if (!designations.Contains(job.Target) || designations.IsClaimed(job.Target)) continue; // board may lag a tick
             if (exclude != null && exclude.Contains(job.Target)) continue;
+            if (faction != Owners.Any && designations.OwnerOf(job.Target) != faction) continue; // another colony's order
 
             long dx = job.Target.X - from.X, dy = job.Target.Y - from.Y, dz = job.Target.Z - from.Z;
             long dist = dx * dx + dy * dy + 4 * dz * dz;

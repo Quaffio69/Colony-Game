@@ -45,6 +45,8 @@ public sealed class Room
     internal readonly List<Part> PartList = new();
 
     public required int Id { get; init; }
+    /// <summary>The colony that owns it: only its colonists work, live or store goods here.</summary>
+    public int Faction { get; init; }
     public required RoomType Type { get; init; }
     public IReadOnlyCollection<TilePos> Cells => CellSet;
     public IReadOnlyList<Part> Parts => PartList;
@@ -128,7 +130,7 @@ public sealed class Rooms
     /// (their levels and the level above, so a multi-level box takes every floor in it). Cells already in a
     /// room or blocked are skipped. Returns how many cells were added.
     /// </summary>
-    public int Paint(RoomType type, TilePos a, TilePos b)
+    public int Paint(RoomType type, TilePos a, TilePos b, int faction = 0)
     {
         var candidates = new List<TilePos>();
         ForCells(a, b, c =>
@@ -144,10 +146,10 @@ public sealed class Rooms
         {
             Movement.GetMoves(_world, c, _moves);
             foreach (var (q, _) in _moves)
-                if (_cellRoom.TryGetValue(q, out var r) && r.Type == type && !touched.Contains(r)) touched.Add(r);
+                if (_cellRoom.TryGetValue(q, out var r) && r.Type == type && r.Faction == faction && !touched.Contains(r)) touched.Add(r);
         }
         touched.Sort((x, y) => x.Id.CompareTo(y.Id));
-        var target = touched.Count > 0 ? touched[0] : NewRoom(type);
+        var target = touched.Count > 0 ? touched[0] : NewRoom(type, faction);
         for (int i = 1; i < touched.Count; i++) Merge(touched[i], target);
         foreach (var c in candidates)
         {
@@ -160,13 +162,13 @@ public sealed class Rooms
     }
 
     /// <summary>Removes room cells (and any parts on them) in the box. Returns how many cells were removed.</summary>
-    public int Erase(TilePos a, TilePos b)
+    public int Erase(TilePos a, TilePos b, int faction = Owners.Any)
     {
         var affected = new List<Room>();
         int n = 0;
         ForCells(a, b, c =>
         {
-            if (!_cellRoom.TryGetValue(c, out var r)) return;
+            if (!_cellRoom.TryGetValue(c, out var r) || (faction != Owners.Any && r.Faction != faction)) return;
             RemoveCell(c, r);
             if (!affected.Contains(r)) affected.Add(r);
             n++;
@@ -185,9 +187,9 @@ public sealed class Rooms
         Version++;
     }
 
-    private Room NewRoom(RoomType type)
+    private Room NewRoom(RoomType type, int faction)
     {
-        var r = new Room { Id = _nextRoomId++, Type = type };
+        var r = new Room { Id = _nextRoomId++, Type = type, Faction = faction };
         _rooms.Add(r);
         return r;
     }
@@ -232,7 +234,7 @@ public sealed class Rooms
         for (int i = 1; i < pieces.Count; i++)
         {
             var piece = new HashSet<TilePos>(pieces[i]);
-            var split = NewRoom(room.Type);
+            var split = NewRoom(room.Type, room.Faction);
             foreach (var c in pieces[i])
             {
                 room.CellSet.Remove(c);
@@ -390,12 +392,12 @@ public sealed class Rooms
     }
 
     /// <summary>Removes every part with a cell in the box. Returns how many were removed.</summary>
-    public int RemovePartsIn(TilePos a, TilePos b)
+    public int RemovePartsIn(TilePos a, TilePos b, int faction = Owners.Any)
     {
         var parts = new List<Part>();
         ForCells(a, b, c =>
         {
-            if (_cellPart.TryGetValue(c, out var p) && !parts.Contains(p)) parts.Add(p);
+            if (_cellPart.TryGetValue(c, out var p) && (faction == Owners.Any || p.Room.Faction == faction) && !parts.Contains(p)) parts.Add(p);
         });
         foreach (var p in parts) RemovePart(p);
         return parts.Count;
@@ -423,9 +425,9 @@ public sealed class Rooms
         foreach (var m in machines)
         {
             var r = m.Recipe!;
-            if (!sim.Colonists.Any(c => c.Education >= r.Education))
+            if (!sim.Colonists.Any(c => c.Faction == room.Faction && c.Education >= r.Education))
                 return $"{r.Name.ToLowerInvariant()} needs a {Catalog.EducationName(r.Education)} worker";
-            if (r.Kind == Items.ItemKind.Education && sim.StudentsAvailable(r) == 0)
+            if (r.Kind == Items.ItemKind.Education && sim.StudentsAvailable(r, room.Faction) == 0)
                 return $"no colonists ready to become {r.Name}";
         }
         // Machines take partial batches when nothing more is coming, so one unit is the least they can start on.

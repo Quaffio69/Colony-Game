@@ -77,7 +77,7 @@ public partial class ColonistsWindow : GlyphWindow
     public override void Tick()
     {
         var sim = _ui.Sim;
-        string roster = _tab + ":" + string.Join(",", sim.Colonists.Select(c => c.Id));
+        string roster = _tab + ":" + string.Join(",", _ui.Mine.Select(c => c.Id) + "/" + _ui.Me);
         if (roster != _roster)
         {
             _roster = roster;
@@ -96,7 +96,7 @@ public partial class ColonistsWindow : GlyphWindow
         heads.AddChild(G.Text(_tab switch { 0 => "Doing", 1 => "Food", _ => "Schooling" }, "Faint", cols: _tab == 1 ? 10 : 14));
         heads.AddChild(G.Text(_tab switch { 0 => "Mood", 1 => "Rest", _ => "Family" }, "Faint", expand: true));
         Content.AddChild(heads);
-        foreach (var c in _ui.Sim.Colonists)
+        foreach (var c in _ui.Mine)
         {
             var colonist = c;
             var row = new GlyphRow { Clickable = true };
@@ -193,7 +193,7 @@ public partial class StocksWindow : GlyphWindow
     public override void Tick()
     {
         var totals = _ui.Totals;
-        float days = Society.FoodDays(_ui.Sim);
+        float days = Society.FoodDays(_ui.Sim, _ui.Me);
         string key = string.Join(",", totals) + $"|{days:0.0}|{_ui.History.GetValueOrDefault("meals")?.Count}";
         if (key == _shown) return;
         _shown = key;
@@ -201,7 +201,7 @@ public partial class StocksWindow : GlyphWindow
 
         Content.AddChild(new GlyphSection("Food"));
         Content.AddChild(new GlyphKV("%", GlyphTheme.Tok("good"), "Days of food", float.IsInfinity(days) ? "-" : $"{days:0.0}", days < 2 ? "bad" : "hi"));
-        Content.AddChild(new GlyphKV("%", GlyphTheme.Tok("good"), "Meals in store", Society.FoodInStore(_ui.Sim).ToString()));
+        Content.AddChild(new GlyphKV("%", GlyphTheme.Tok("good"), "Meals in store", Society.FoodInStore(_ui.Sim, _ui.Me).ToString()));
         var items = Enumerable.Range(0, totals.Length).Where(i => totals[i] > 0).Select(i => new ItemType((ushort)i)).ToList();
         foreach (var t in items.Where(t => t.Def.Nutrition > 0)) Add(t, totals);
 
@@ -277,7 +277,7 @@ public partial class ChronicleWindow : GlyphWindow
     public override void Tick()
     {
         var sim = _ui.Sim;
-        var events = sim.Events.Select(e => (e.Tick, e.Text)).Concat(sim.RecentCaveIns.Select(c =>
+        var events = sim.Events.Where(e => e.Faction == _ui.Me || e.Faction < 0).Select(e => (e.Tick, e.Text)).Concat(sim.RecentCaveIns.Select(c =>
             (c.Tick, $"Cave-in: {c.Tiles} tiles fell {c.Drop} levels near {c.Origin.X},{c.Origin.Y}"))).OrderBy(e => e.Item1).ToList();
         long last = events.Count > 0 ? events[^1].Item1 : -1;
         if (events.Count == _lastCount && last == _lastTick) return;
@@ -325,7 +325,8 @@ public partial class InspectorWindow : GlyphWindow
             Content.AddChild(G.Para("Point at a home or a workshop in the world to see its details here.", "Faint"));
             return;
         }
-        if (_room.Type.IsHome && sim.Housing.HomeOf(_room) is { } home) HomePanel(home);
+        if (_room.Faction != _ui.Me) Content.AddChild(G.Para($"Belongs to {sim.Factions[_room.Faction].Name}.", "Warn"));
+        if (_room.Type.IsHome && sim.Factions[_room.Faction].Housing.HomeOf(_room) is { } home) HomePanel(home);
         else if (!_room.Type.IsHome) RoomPanel(_room);
     }
 
@@ -479,8 +480,8 @@ public partial class HelpWindow : GlyphWindow
         Live("Power", () => $"{sim.Waterworks.Generated:0.#} made, {sim.Waterworks.Demand:0.#} wanted ({sim.Waterworks.Supply:P0})");
         Live("Designations, blueprints", () => $"{sim.Designations.Count}, {sim.Constructions.Count}");
         Live("Stockpile cells, farm plots", () => $"{sim.Stockpiles.Count}, {sim.Farms.Count}");
-        Live("Settlers, left, weddings, births", () => $"{sim.Society.SettlersArrived}, {sim.Society.Departed}, {sim.Society.Marriages}, {sim.Society.Births}");
-        Live("Goods met", () => string.Join(", ", Needs.Goods.Select((g, k) => $"{g.Need} {sim.Society.Met[k]:P0}")));
+        Live("Settlers, left, weddings, births", () => $"{_ui.MyFaction.Society.SettlersArrived}, {_ui.MyFaction.Society.Departed}, {_ui.MyFaction.Society.Marriages}, {_ui.MyFaction.Society.Births}");
+        Live("Goods met", () => string.Join(", ", Needs.Goods.Select((g, k) => $"{g.Need} {_ui.MyFaction.Society.Met[k]:P0}")));
     }
 
     private void Live(string name, Func<string> value)

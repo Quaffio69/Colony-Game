@@ -19,6 +19,15 @@ public partial class GameUi : CanvasLayer
 {
     public readonly Main Main;
     public ColonySim Sim => Main.Sim;
+    /// <summary>The local player's colony: what the HUD and windows show.</summary>
+    public int Me => Main.Player;
+    public Colony.Core.Agents.Faction MyFaction => Sim.Factions[Me];
+    /// <summary>This colony's colonists.</summary>
+    public List<Colony.Core.Agents.Colonist> Mine => Sim.Colonists.Where(c => c.Faction == Me).ToList();
+
+    /// <summary>Goods this colony can use: loose, or in its own stockpiles, crates and sites.</summary>
+    public bool Ours(TilePos p) =>
+        (!Sim.Stockpiles.Contains(p) || Sim.Stockpiles.OwnerOf(p) == Me) && (Sim.Rooms.PartAt(p) is not { } part || part.Room.Faction == Me);
     public DesignationTool Tool => Main.Tool;
     private readonly GlyphManager _m;
     private readonly Dictionary<string, GlyphWindow> _windows = new();
@@ -151,7 +160,7 @@ public partial class GameUi : CanvasLayer
 
     private void Sample()
     {
-        _totals = Sim.Items.Totals();
+        _totals = Sim.Items.Totals(Ours);
         long step = Needs.Day / SamplesPerDay;
         if (_lastSample >= 0 && Sim.Tick - _lastSample < step) return;
         _lastSample = Sim.Tick;
@@ -161,12 +170,12 @@ public partial class GameUi : CanvasLayer
             list.Add(v);
             if (list.Count > SamplesPerDay * 4) list.RemoveAt(0);
         }
-        Add("meals", Society.FoodInStore(Sim));
+        Add("meals", Society.FoodInStore(Sim, Me));
         Add("log", Count(ItemType.Log));
         Add("plank", Count(ItemType.Plank));
         Add("stone", Count(ItemType.Stone));
-        Add("people", Sim.Colonists.Count);
-        Add("mood", Sim.Society.Happiness * 100);
+        Add("people", Mine.Count);
+        Add("mood", MyFaction.Society.Happiness * 100);
     }
 
     public int Count(ItemType t) => t.Index < _totals.Length ? _totals[t.Index] : 0;
@@ -192,7 +201,7 @@ public partial class GameUi : CanvasLayer
     public int AlertCount()
     {
         long since = Sim.Tick - Needs.Day;
-        int n = Sim.Events.Count(e => e.Tick >= since && ChronicleWindow.IsAlert(e.Text));
+        int n = Sim.Events.Count(e => e.Tick >= since && (e.Faction == Me || e.Faction < 0) && ChronicleWindow.IsAlert(e.Text));
         n += Sim.RecentCaveIns.Count(c => c.Tick >= since);
         return n;
     }
@@ -204,14 +213,14 @@ public partial class GameUi : CanvasLayer
         _hudIn = 0.2;
         Sample();
         UpdateHud();
-        if (Tool.LastAction is { } act && act != _lastAction)
+        if (Tool.LastAction is { } act && Tool.ActionSerial != _lastAction)
         {
-            _lastAction = act;
+            _lastAction = Tool.ActionSerial;
             GlyphStatus.Say(act);
         }
     }
 
-    private string? _lastAction;
+    private int _lastAction;
 
     private void UpdateHud()
     {
@@ -220,25 +229,25 @@ public partial class GameUi : CanvasLayer
             _colony.Text = "Test world";
             G.Retone(_colony, "Warn", bold: true);
         }
-        else _colony.Text = "The Colony";
+        else _colony.Text = Sim.Factions.Count > 1 ? $"{MyFaction.Name} ({Me + 1}/{Sim.Factions.Count})" : MyFaction.Name;
         _date.Text = Date(Sim.Tick);
         _date.Visible = _m.Cols > 110;
 
-        int people = Sim.Colonists.Count, children = Sim.Colonists.Count(c => c.IsChild);
-        int starving = Sim.Colonists.Count(c => c.Starving), hungry = Sim.Colonists.Count(c => c.Hungry);
+        int people = Mine.Count, children = Mine.Count(c => c.IsChild);
+        int starving = Mine.Count(c => c.Starving), hungry = Mine.Count(c => c.Hungry);
         _stats[0].Set(people.ToString(), Math.Sign(DailyChange("people")), starving > 0,
             $"Colonists: {people}" + (children > 0 ? $" ({children} children)" : "") + (starving > 0 ? $", {starving} starving" : hungry > 0 ? $", {hungry} hungry" : "") + " · click: colonists");
-        float days = Society.FoodDays(Sim);
+        float days = Society.FoodDays(Sim, Me);
         _stats[1].Set(float.IsInfinity(days) ? "-" : $"{days:0.0}d", Math.Sign(DailyChange("meals")), days < 2,
-            $"Food: {(float.IsInfinity(days) ? "nobody eats" : $"{days:0.0} days")} ({Society.FoodInStore(Sim)} meals){(days < Needs.SettlerFoodDays ? $" · settlers come at {Needs.SettlerFoodDays:0} days" : "")}");
+            $"Food: {(float.IsInfinity(days) ? "nobody eats" : $"{days:0.0} days")} ({Society.FoodInStore(Sim, Me)} meals){(days < Needs.SettlerFoodDays ? $" · settlers come at {Needs.SettlerFoodDays:0} days" : "")}");
         _stats[2].Set(Count(ItemType.Log).ToString(), Math.Sign(DailyChange("log")), false, $"Logs: {Count(ItemType.Log)} ({DailyChange("log"):+0;-0;0}/day)");
         _stats[3].Set(Count(ItemType.Plank).ToString(), Math.Sign(DailyChange("plank")), false, $"Planks: {Count(ItemType.Plank)} ({DailyChange("plank"):+0;-0;0}/day)");
         _stats[4].Set(Count(ItemType.Stone).ToString(), Math.Sign(DailyChange("stone")), false, $"Stone: {Count(ItemType.Stone)} ({DailyChange("stone"):+0;-0;0}/day)");
-        float mood = Sim.Society.Happiness;
-        _stats[5].Set($"{mood * 100:0}%", Math.Sign(DailyChange("mood")), mood < Needs.Unhappy + 0.1f, $"Mood: {mood:P0} (goods standard {Sim.Society.Standard:P0}) · below {Needs.Unhappy:P0} for {Needs.UnhappyDaysToLeave} days, singles leave");
-        int homeless = Sim.Colonists.Count(c => !c.IsAutomaton && c.Home == null);
-        _stats[6].Set(homeless > 0 ? $"{homeless}!" : Sim.Housing.FreeBeds.ToString(), 0, homeless > 0,
-            homeless > 0 ? $"{homeless} homeless · {Sim.Housing.FreeBeds} free beds in {Sim.Housing.All.Count} homes" : $"{Sim.Housing.FreeBeds} free beds in {Sim.Housing.All.Count} homes");
+        float mood = MyFaction.Society.Happiness;
+        _stats[5].Set($"{mood * 100:0}%", Math.Sign(DailyChange("mood")), mood < Needs.Unhappy + 0.1f, $"Mood: {mood:P0} (goods standard {MyFaction.Society.Standard:P0}) · below {Needs.Unhappy:P0} for {Needs.UnhappyDaysToLeave} days, singles leave");
+        int homeless = Mine.Count(c => !c.IsAutomaton && c.Home == null);
+        _stats[6].Set(homeless > 0 ? $"{homeless}!" : MyFaction.Housing.FreeBeds.ToString(), 0, homeless > 0,
+            homeless > 0 ? $"{homeless} homeless · {MyFaction.Housing.FreeBeds} free beds in {MyFaction.Housing.All.Count} homes" : $"{MyFaction.Housing.FreeBeds} free beds in {MyFaction.Housing.All.Count} homes");
         int alerts = AlertCount();
         _alerts.Visible = alerts > 0;
         _alerts.Set(alerts.ToString(), 0, false, "Alerts today · click: chronicle");
@@ -278,7 +287,7 @@ public partial class GameUi : CanvasLayer
             s += $", farm plot ({Colony.Core.Nature.PlantInfo.Name(crop).ToLowerInvariant()})";
         if (Tool.HoveredMachine() is { Recipe: { } making } hm)
             s += $", {hm.Name.ToLowerInvariant()} making {making.Name.ToLowerInvariant()} (F to change)";
-        if (Sim.Rooms.RoomAt(above) is { } room) s += $" · {room.Name} (V: details)";
+        if (Sim.Rooms.RoomAt(above) is { } room) s += room.Faction == Me ? $" · {room.Name} (V: details)" : $" · {room.Name} of {Sim.Factions[room.Faction].Name}";
         if (Sim.Items.TryGet(above, out var pile) && pile.Count > 0) s += $" · {pile.Count} {pile.Type.Name.ToLowerInvariant()}";
         return s;
     }

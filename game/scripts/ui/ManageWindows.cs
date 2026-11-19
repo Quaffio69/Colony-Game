@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Colony.Core.Agents;
+using Colony.Core.Commands;
 using Colony.Core.Industry;
 using Godot;
 
@@ -16,7 +17,7 @@ namespace ColonyGame.UI;
 public partial class HousingWindow : GlyphWindow
 {
     private readonly GameUi _ui;
-    private int _version = -1;
+    private int _version = -1, _shownFor = -1;
 
     public HousingWindow(GameUi ui) : base("housing", "Housing", "⌂", "good", "H")
     {
@@ -34,8 +35,7 @@ public partial class HousingWindow : GlyphWindow
         var add = new HBoxContainer();
         add.AddChild(G.Button(" New policy ", () =>
         {
-            var last = _ui.Sim.Housing.Policies[^1];
-            _ui.Sim.Housing.Policies.Add(last.Clone($"{last.Name} {_ui.Sim.Housing.Policies.Count + 1}"));
+            _ui.Tool.Issue(new AddPolicy());
             _version = -1;
         }, "A copy of the last policy"));
         Footer.AddChild(G.Gap(0.25f));
@@ -45,26 +45,28 @@ public partial class HousingWindow : GlyphWindow
 
     public override void Tick()
     {
-        var housing = _ui.Sim.Housing;
-        if (housing.Version == _version) return;
+        var housing = _ui.MyFaction.Housing;
+        if (housing.Version == _version && _shownFor == _ui.Me) return;
+        _shownFor = _ui.Me;
         _version = housing.Version;
         G.Clear(Content);
         foreach (var policy in housing.Policies)
         {
             var p = policy;
             int homes = housing.All.Count(h => h.Policy == p);
+            int pi = housing.Policies.IndexOf(p);
             var plan = Housing.Plan(12, p);
             var head = new HBoxContainer();
             head.AddChild(new GlyphSection(p.Name));
             Content.AddChild(head);
             Content.AddChild(new GlyphKV(null, default, $"{G.Plural(homes, "home")} on it · a 12-cell home sleeps", plan.Residents.ToString()));
-            Content.AddChild(new GlyphSwitch("Shared lodging (singles board here; never a family's home)", p.Shared, on => housing.SetShared(p, on)));
+            Content.AddChild(new GlyphSwitch("Shared lodging (singles board here; never a family's home)", p.Shared, on => _ui.Tool.Issue(new SetPolicyShared(pi, on))));
             for (int s = 0; s < Housing.SlotCount; s++)
             {
                 int slot = s;
                 var row = new HBoxContainer();
                 row.AddChild(G.Text(Housing.Slots[s], cols: 11));
-                row.AddChild(new GlyphSegmented(Catalog.FixtureTiers.Select(t => t).ToArray(), p.Tier[s], i => housing.SetTier(p, slot, i))
+                row.AddChild(new GlyphSegmented(Catalog.FixtureTiers.Select(t => t).ToArray(), p.Tier[s], i => _ui.Tool.Issue(new SetPolicyTier(pi, slot, i)))
                 {
                     Tips = Catalog.FixtureTiers.Select(t => $"{Housing.Slots[slot]}: {t} ({Housing.SlotEffects[slot]})").ToArray(),
                 });
@@ -72,9 +74,9 @@ public partial class HousingWindow : GlyphWindow
                 if (s == Housing.Bed) row.AddChild(G.Text("one each", "Faint", cols: 12, align: HorizontalAlignment.Right));
                 else
                 {
-                    row.AddChild(G.Button("−", () => housing.SetPerResident(p, slot, p.PerResident[slot] - 0.25f), "Fewer per resident"));
+                    row.AddChild(G.Button("−", () => _ui.Tool.Issue(new SetPolicyPerResident(pi, slot, p.PerResident[slot] - 0.25f)), "Fewer per resident"));
                     row.AddChild(G.Text($"{p.PerResident[s]:0.##}", "Hi", bold: true, cols: 4, align: HorizontalAlignment.Right));
-                    row.AddChild(G.Button("+", () => housing.SetPerResident(p, slot, p.PerResident[slot] + 0.25f), "More per resident"));
+                    row.AddChild(G.Button("+", () => _ui.Tool.Issue(new SetPolicyPerResident(pi, slot, p.PerResident[slot] + 0.25f)), "More per resident"));
                 }
                 Content.AddChild(row);
             }
@@ -127,13 +129,13 @@ public partial class WorkWindow : GlyphWindow
 
     public override void Tick()
     {
-        string roster = string.Join(",", _ui.Sim.Colonists.Select(c => c.Id + (c.IsChild ? "c" : "")));
+        string roster = string.Join(",", _ui.Mine.Select(c => c.Id + (c.IsChild ? "c" : "")));
         if (roster != _roster)
         {
             _roster = roster;
             G.Clear(Content);
             _rows.Clear();
-            foreach (var c in _ui.Sim.Colonists)
+            foreach (var c in _ui.Mine)
             {
                 var row = new GlyphRow();
                 row.AddThemeConstantOverride("separation", 0);
@@ -143,7 +145,7 @@ public partial class WorkWindow : GlyphWindow
                 var cells = new PriorityCell[Colonist.WorkTypes];
                 for (int w = 0; w < Colonist.WorkTypes; w++)
                 {
-                    cells[w] = new PriorityCell(c, (Work)w, Widths[w]);
+                    cells[w] = new PriorityCell(c, (Work)w, Widths[w], _ui.Tool.Issue);
                     row.AddChild(cells[w]);
                 }
                 var doing = G.Text("", "Dim", expand: true);
@@ -161,10 +163,10 @@ public partial class WorkWindow : GlyphWindow
 
     private void SetColumn(Work work)
     {
-        var first = _ui.Sim.Colonists.FirstOrDefault(c => !c.IsChild);
+        var first = _ui.Mine.FirstOrDefault(c => !c.IsChild);
         if (first == null) return;
         int value = PriorityCell.Next(first.Priority(work), +1);
-        foreach (var c in _ui.Sim.Colonists) c.SetPriority(work, value);
+        foreach (var c in _ui.Mine) _ui.Tool.Issue(new SetWorkPriority(c.Id, work, value));
         foreach (var r in _rows) foreach (var cell in r.Cells) cell.QueueRedraw();
     }
 }
@@ -178,9 +180,11 @@ public partial class PriorityCell : GlyphControl
     private bool _hover;
     private static readonly string[] Tones = ["faint", "bad", "warn", "good", "info"];
 
-    public PriorityCell(Colonist c, Work work, int cols)
+    private readonly Action<Command> _issue;
+
+    public PriorityCell(Colonist c, Work work, int cols, Action<Command> issue)
     {
-        _c = c; _work = work; _cols = cols;
+        _c = c; _work = work; _cols = cols; _issue = issue;
         MouseDefaultCursorShape = c.IsChild ? CursorShape.Arrow : CursorShape.PointingHand;
         MouseEntered += () =>
         {
@@ -190,7 +194,7 @@ public partial class PriorityCell : GlyphControl
         };
         MouseExited += () => { _hover = false; GlyphStatus.Tip = null; QueueRedraw(); };
     }
-    public PriorityCell() : this(null!, Work.Mining, 6) { }
+    public PriorityCell() : this(null!, Work.Mining, 6, _ => { }) { }
 
     public static int Next(int priority, int step)
     {
@@ -208,7 +212,7 @@ public partial class PriorityCell : GlyphControl
         int step = b.ButtonIndex switch { MouseButton.Left => 1, MouseButton.Right => -1, _ => 0 };
         if (step == 0) return;
         AcceptEvent();
-        _c.SetPriority(_work, Next(_c.Priority(_work), step));
+        _issue(new SetWorkPriority(_c.Id, _work, Next(_c.Priority(_work), step)));
         QueueRedraw();
     }
 

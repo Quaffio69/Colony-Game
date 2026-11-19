@@ -21,6 +21,8 @@ public partial class Main : Node3D
     [Export] public int WorldDepth { get; set; } = 2048;
     [Export] public int WorldHeight { get; set; } = 384;
     [Export] public int StartingColonists { get; set; } = 7;
+    /// <summary>How many colonies the world starts with (one per player; --colonies=N).</summary>
+    [Export] public int Colonies { get; set; } = 1;
 
     private static readonly int[] Speeds = [1, 3, 10];
     private const double TickSeconds = 1.0 / ColonySim.TicksPerSecond;
@@ -72,7 +74,7 @@ public partial class Main : Node3D
         else
         {
             _sim = ColonySim.Generate(new WorldGenSettings(Seed, WorldWidth, WorldDepth, WorldHeight), StartingColonists,
-                settleWaterInBackground: true); // settles while the terrain is meshed for the first frames
+                settleWaterInBackground: true, factions: Colonies); // settles while the terrain is meshed for the first frames
             GD.Print($"World {WorldWidth}x{WorldDepth}x{WorldHeight} built in {Time.GetTicksMsec() - start} ms: {_sim.StartupReport}");
         }
 
@@ -112,6 +114,7 @@ public partial class Main : Node3D
 
         _tool = GetNode<DesignationTool>("DesignationTool");
         _tool.Initialize(_sim, _world);
+        Player = _tool.Player = Math.Clamp(s_player, 0, _sim.Factions.Count - 1); // kept across test-world visits
 
         _rig = GetNode<CameraRig>("CameraRig");
         _rig.GroundHeight = VisibleGround;
@@ -138,6 +141,19 @@ public partial class Main : Node3D
     public void FocusOn(TilePos p) => _rig.Focus(SimSpace.TileCenter(p), 18f);
 
     /// <summary>The colony, or the whole test world when one is open.</summary>
+    /// <summary>The colony this player controls (commands are issued as it; the UI shows it).</summary>
+    public int Player { get; private set; }
+
+    /// <summary>Hot-seat (F4, until networking): play as another colony in this world.</summary>
+    public void PlayAs(int faction)
+    {
+        Player = s_player = Math.Clamp(faction, 0, _sim.Factions.Count - 1);
+        _tool.Player = Player;
+        _tool.CancelPlacement();
+        UI.GlyphStatus.Say($"Playing as {_sim.Factions[Player].Name} (F4: next colony)");
+        FocusOnColony();
+    }
+
     public void FocusHome()
     {
         if (_test != null) FocusOnTestWorld();
@@ -145,16 +161,18 @@ public partial class Main : Node3D
     }
 
     /// <summary>Starts a new colony: a fresh world from this seed and size (the scene reloads onto it).</summary>
-    public void NewColony(int seed, int size)
+    public void NewColony(int seed, int size, int colonies = 1)
     {
-        s_newWorld = (seed, size, size, WorldHeight);
+        s_newWorld = (seed, size, size, WorldHeight, colonies);
+        s_player = 0;
         s_home = null;
         s_launch = null;
         s_launchResult = null;
         GetTree().ReloadCurrentScene();
     }
 
-    private static (int Seed, int W, int D, int H)? s_newWorld;
+    private static (int Seed, int W, int D, int H, int Colonies)? s_newWorld;
+    private static int s_player;
     private GameUi _ui = null!;
 
     // ---- Test menu ------------------------------------------------------------------------------
@@ -230,6 +248,7 @@ public partial class Main : Node3D
             case Key.Key2: _speedIndex = 1; _paused = false; break;
             case Key.Key3: _speedIndex = 2; _paused = false; break;
             case Key.Home when !key.Echo: FocusHome(); break;
+            case Key.F4 when !key.Echo && _sim.Factions.Count > 1: PlayAs((Player + 1) % _sim.Factions.Count); break;
         }
     }
 
@@ -242,9 +261,11 @@ public partial class Main : Node3D
             return;
         }
         var sum = Vector3.Zero;
-        foreach (var c in _sim.Colonists) sum += SimSpace.TileCenter(c.Position);
+        var mine = _sim.Colonists.Where(c => c.Faction == Player).ToList();
+        if (mine.Count == 0) mine = _sim.Colonists.ToList();
+        foreach (var c in mine) sum += SimSpace.TileCenter(c.Position);
         // Colonists start south of the mountain; look at them from the valley so the slope does not block the view.
-        _rig.Focus(sum / _sim.Colonists.Count, 22f, yaw: 200f);
+        _rig.Focus(sum / mine.Count, 22f, yaw: 200f);
     }
 
     public override void _Process(double delta)
@@ -314,10 +335,11 @@ public partial class Main : Node3D
                     (WorldWidth, WorldDepth, WorldHeight) = (w, d, h);
             }
             if (arg.StartsWith("--seed=") && int.TryParse(arg["--seed=".Length..], out int seed)) Seed = seed;
+            if (arg.StartsWith("--colonies=") && int.TryParse(arg["--colonies=".Length..], out int colonies)) Colonies = Math.Clamp(colonies, 1, 8);
         }
         if (s_newWorld is { } fresh) // the main menu's "New colony"
         {
-            (Seed, WorldWidth, WorldDepth, WorldHeight) = fresh;
+            (Seed, WorldWidth, WorldDepth, WorldHeight, Colonies) = fresh;
             s_newWorld = null;
             s_devArgsDone = true; // the demos and dev flags were for the first world
         }
@@ -344,6 +366,7 @@ public partial class Main : Node3D
             if (Arg("--work-menu") != null) _ui.OpenWindow("work");
             if (Arg("--open") is { Length: > 0 } open) foreach (var id in open.Split(',')) _ui.OpenWindow(id);
             if (Arg("--main-menu") != null) _ui.ShowMenu(true);
+            if (int.TryParse(Arg("--play-as"), out int playAs)) PlayAs(playAs);
             if (Arg("--ui-selftest") != null) AddChild(new UiSelfTest(_ui));
             // World-editing flags apply once, to the first world (not again when the test menu reloads the scene).
             if (!s_devArgsDone)

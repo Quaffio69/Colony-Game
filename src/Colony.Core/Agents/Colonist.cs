@@ -216,7 +216,7 @@ public sealed class Colonist
         var options = new List<(TilePos Cell, ItemPile Pile, int Dist)>();
         foreach (var (p, pile) in sim.Items.All)
         {
-            if (!Needs.IsFood(pile.Type) || pile.Available <= 0 || !Needs.Usable(sim, p)) continue;
+            if (!Needs.IsFood(pile.Type) || pile.Available <= 0 || !Needs.Usable(sim, p, Faction)) continue;
             if (sim.Connectivity.ComponentOf(p) != component) continue;
             options.Add((p, pile, Math.Abs(p.X - Position.X) + Math.Abs(p.Y - Position.Y) + 2 * Math.Abs(p.Z - Position.Z)));
         }
@@ -311,6 +311,11 @@ public sealed class Colonist
     /// <see cref="Society"/>), and a family lives together in one home (<see cref="Housing"/>).
     /// </summary>
     public int Household { get; internal set; }
+    /// <summary>The colony it belongs to (<see cref="ColonySim.Factions"/>): it only works, eats, sleeps and stores within it.</summary>
+    public int Faction { get; init; }
+    private Housing MyHousing(ColonySim sim) => sim.Factions[Faction].Housing;
+    /// <summary>Its faction as a filter, or <see cref="Owners.Any"/> when the world has one colony (no checks to pay for).</summary>
+    private int Filter(ColonySim sim) => sim.Factions.Count > 1 ? Faction : Owners.Any;
     public Colonist? Spouse { get; internal set; }
     /// <summary>Born in the colony and not grown yet: eats and sleeps, doesn't work.</summary>
     public bool IsChild { get; internal set; }
@@ -382,15 +387,15 @@ public sealed class Colonist
     /// </summary>
     private bool TryFurnish(ColonySim sim, int component)
     {
-        if (sim.Housing.All.Count == 0) return false;
+        if (MyHousing(sim).All.Count == 0) return false;
         var sources = new List<(TilePos Cell, ItemPile Pile)>();
         foreach (var (p, pile) in sim.Items.All)
-            if (pile.Type.Def.Fixture != null && pile.Available > 0 && Needs.Usable(sim, p) && sim.Rooms.RoomAt(p) is not { Type.IsHome: true }
+            if (pile.Type.Def.Fixture != null && pile.Available > 0 && Needs.Usable(sim, p, Faction) && sim.Rooms.RoomAt(p) is not { Type.IsHome: true }
                 && sim.Connectivity.ComponentOf(p) == component)
                 sources.Add((p, pile));
         if (sources.Count == 0) return false;
         int Dist(TilePos a, TilePos b) => Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y) + 2 * Math.Abs(a.Z - b.Z);
-        foreach (var (home, slot, tier, missing) in sim.Housing.Demands().OrderBy(d => Dist(d.Home.Room.Cells.First(), Position)).ThenBy(d => d.Home.Room.Id).ToList())
+        foreach (var (home, slot, tier, missing) in MyHousing(sim).Demands().OrderBy(d => Dist(d.Home.Room.Cells.First(), Position)).ThenBy(d => d.Home.Room.Id).ToList())
         {
             if (sim.PathBudgetExhausted)
             {
@@ -409,7 +414,7 @@ public sealed class Colonist
             }
             int amount = Math.Min(Math.Min(missing, match.Pile.Available), ItemInfo.CarryLimit(match.Pile.Type));
             if (!sim.Items.Reserve(match.Cell, amount)) continue;
-            sim.Housing.Promise(home, slot, amount);
+            MyHousing(sim).Promise(home, slot, amount);
             _furnish = (home, slot, match.Cell, match.Pile.Type, amount);
             Begin(ColonistTask.FurnishPickup, match.Cell, path);
             return true;
@@ -422,7 +427,7 @@ public sealed class Colonist
     private void FurnishPickUp(ColonySim sim)
     {
         int taken = sim.Items.TakeReserved(_furnish.Source, _furnish.Count);
-        if (taken < _furnish.Count) sim.Housing.Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count - taken);
+        if (taken < _furnish.Count) MyHousing(sim).Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count - taken);
         _furnish = _furnish with { Count = taken };
         if (taken == 0)
         {
@@ -444,8 +449,8 @@ public sealed class Colonist
 
     private void FurnishInstall(ColonySim sim)
     {
-        int installed = sim.Housing.Install(sim, _furnish.Home, CarryingType, CarryingCount);
-        sim.Housing.Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
+        int installed = MyHousing(sim).Install(sim, _furnish.Home, CarryingType, CarryingCount);
+        MyHousing(sim).Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
         if (installed < CarryingCount) sim.Items.Drop(Position, CarryingType, CarryingCount - installed); // surplus: hauled back to store
         CarryingCount = 0;
         Finish();
@@ -613,7 +618,7 @@ public sealed class Colonist
     private bool NothingNewSinceLastSearch(ColonySim sim) =>
         _searchedDesignations == sim.Designations.Version && _searchedConnectivity == sim.Connectivity.Version &&
         _searchedItems == sim.Items.Version && _searchedStockpiles == sim.Stockpiles.Version &&
-        _searchedRooms == sim.Rooms.Version && _searchedHousing == sim.Housing.Version;
+        _searchedRooms == sim.Rooms.Version && _searchedHousing == MyHousing(sim).Version;
 
     private int _searchedRooms = -1, _searchedHousing = -1;
 
@@ -626,7 +631,7 @@ public sealed class Colonist
         _searchedItems = sim.Items.Version;
         _searchedStockpiles = sim.Stockpiles.Version;
         _searchedRooms = sim.Rooms.Version;
-        _searchedHousing = sim.Housing.Version;
+        _searchedHousing = MyHousing(sim).Version;
         _deferred = false;
 
         if (_pathFailedConnectivity != sim.Connectivity.Version)
@@ -676,7 +681,7 @@ public sealed class Colonist
     private bool TryTakeJob(ColonySim sim, int component, int kinds)
     {
         var orders = sim.Designations;
-        foreach (var job in sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed, kinds))
+        foreach (var job in sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed, kinds, Filter(sim)))
         {
             if (sim.PathBudgetExhausted)
             {
@@ -704,7 +709,7 @@ public sealed class Colonist
 
     private bool TryHaul(ColonySim sim, int component)
     {
-        foreach (var plan in Hauling.Plans(sim.Items, sim.Stockpiles, sim.Rooms, sim.Connectivity, Position, component, _pathFailed, sim.Constructions))
+        foreach (var plan in Hauling.Plans(sim.Items, sim.Stockpiles, sim.Rooms, sim.Connectivity, Position, component, _pathFailed, sim.Constructions, Filter(sim)))
         {
             if (sim.PathBudgetExhausted)
             {
@@ -744,7 +749,7 @@ public sealed class Colonist
     /// </summary>
     private bool TryCraft(ColonySim sim, int component)
     {
-        foreach (var room in sim.Rooms.All)
+        foreach (var room in sim.Rooms.All.Where(r => r.Faction == Faction))
         foreach (var machine in FreeMachinesBiggestFirst(room))
         {
             var recipe = machine.Recipe!;
@@ -752,7 +757,7 @@ public sealed class Colonist
             if (MachineSpots(sim, machine, component).Count == 0) continue;
             var full = machine.Batch;
             int maxUnits = full.Units;
-            if (recipe.Kind == ItemKind.Education) maxUnits = Math.Min(maxUnits, sim.StudentsAvailable(recipe));
+            if (recipe.Kind == ItemKind.Education) maxUnits = Math.Min(maxUnits, sim.StudentsAvailable(recipe, Faction));
             if (maxUnits == 0) continue;
 
             // A full batch if the crates hold one; otherwise whatever they hold, as long as nothing more is on
@@ -822,7 +827,7 @@ public sealed class Colonist
                 for (int i = 0; i < reserved; i++) sim.Items.Unreserve(pickups[i].Cell, pickups[i].Count);
                 continue;
             }
-            if (recipe.Kind == ItemKind.Education) sim.ReserveStudents(recipe, batch.Units);
+            if (recipe.Kind == ItemKind.Education) sim.ReserveStudents(recipe, batch.Units, Faction);
             machine.ClaimedBy = Id;
             _craft = new CraftPlan(machine, batch, pickups, output);
             _fetchIndex = 0;
@@ -838,7 +843,7 @@ public sealed class Colonist
     /// </summary>
     private bool TryBuild(ColonySim sim, int component)
     {
-        foreach (var room in sim.Rooms.All)
+        foreach (var room in sim.Rooms.All.Where(r => r.Faction == Faction))
         foreach (var part in room.Blueprints)
         {
             if (part.BuilderId >= 0) continue;
@@ -884,7 +889,7 @@ public sealed class Colonist
     /// <summary>A structure blueprint (wall, wheel, pump) nobody is building whose material is in its cell.</summary>
     private bool TryBuildStructure(ColonySim sim, int component)
     {
-        foreach (var site in sim.Constructions.All)
+        foreach (var site in sim.Constructions.All.Where(s => s.Faction == Faction))
         {
             if (site.BuilderId >= 0) continue;
             var (_, cost) = site.Cost;
@@ -998,11 +1003,11 @@ public sealed class Colonist
         switch (batch.Recipe.Kind)
         {
             case ItemKind.Education:
-                sim.Graduate(batch.Recipe, batch.Units);
+                sim.Graduate(batch.Recipe, batch.Units, Faction);
                 Finish();
                 return;
             case ItemKind.Worker:
-                sim.AddWorkers(batch.Recipe, batch.Units, Position);
+                sim.AddWorkers(batch.Recipe, batch.Units, Position, Faction);
                 Finish();
                 return;
         }
@@ -1202,10 +1207,10 @@ public sealed class Colonist
                 break;
             case ColonistTask.FurnishPickup:
                 sim.Items.Unreserve(_furnish.Source, _furnish.Count);
-                sim.Housing.Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
+                MyHousing(sim).Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
                 break;
             case ColonistTask.FurnishDeliver:
-                sim.Housing.Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
+                MyHousing(sim).Unpromise(_furnish.Home, _furnish.Slot, _furnish.Count);
                 break;
         }
         if (_carried.Count > 0)
@@ -1228,7 +1233,7 @@ public sealed class Colonist
     private void ReleaseCraft(ColonySim sim)
     {
         if (_craft.OutputCell is { } o) sim.Items.ReleaseIncoming(o, _craft.Batch.OutCount);
-        if (_craft.Batch.Recipe.Kind == ItemKind.Education) sim.ReleaseStudents(_craft.Batch.Recipe, _craft.Batch.Units);
+        if (_craft.Batch.Recipe.Kind == ItemKind.Education) sim.ReleaseStudents(_craft.Batch.Recipe, _craft.Batch.Units, Faction);
         ReleaseMachine();
     }
 

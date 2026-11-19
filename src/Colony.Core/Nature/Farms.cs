@@ -17,6 +17,10 @@ public sealed class Farms
     private readonly VoxelWorld _world;
     private readonly Dictionary<TilePos, PlantKind> _plots = new();
     private readonly List<TilePos> _order = new();
+    private readonly Owners _owners = new();
+
+    /// <summary>The faction whose plot this is (its sow and harvest orders are theirs).</summary>
+    public int OwnerOf(TilePos p) => _owners.Of(p);
 
     public Farms(VoxelWorld world) => _world = world;
 
@@ -33,7 +37,7 @@ public sealed class Farms
     public static readonly PlantKind[] Crops = { PlantKind.Wheat, PlantKind.Herbs, PlantKind.Glowcap };
 
     /// <summary>Zones the floor in the box between two ground tiles for <paramref name="crop"/>. Returns how many cells.</summary>
-    public int AddFloorBox(PlantKind crop, TilePos a, TilePos b)
+    public int AddFloorBox(PlantKind crop, TilePos a, TilePos b, int faction = 0)
     {
         if (!PlantInfo.IsCrop(crop)) throw new ArgumentException($"{crop} is not a crop", nameof(crop));
         int n = 0;
@@ -43,6 +47,7 @@ public sealed class Farms
             if (!TileInfo.IsSolid(_world.Get(p)) || _plots.ContainsKey(cell) || IsBlocked?.Invoke(cell) == true) return;
             if (!PlantInfo.CanGrowAt(_world, cell, crop)) return;
             _plots[cell] = crop;
+            _owners.Set(cell, faction);
             _order.Add(cell);
             n++;
         });
@@ -51,15 +56,16 @@ public sealed class Farms
     }
 
     /// <summary>Removes plots standing on (or in) the box. Returns how many. Crops already growing stay until harvested or cleared.</summary>
-    public int RemoveBox(TilePos a, TilePos b)
+    public int RemoveBox(TilePos a, TilePos b, int faction = Owners.Any)
     {
         int n = 0;
         ForBox(a, b, p =>
         {
             foreach (var c in new[] { p.Offset(0, 0, 1), p })
-                if (_plots.Remove(c))
+                if (_plots.ContainsKey(c) && _owners.Matches(c, faction) && _plots.Remove(c))
                 {
                     _order.Remove(c);
+                    _owners.Clear(c);
                     n++;
                 }
         });
@@ -84,7 +90,7 @@ public sealed class Farms
             var crop = _plots[cell];
             if (!flora.TryGet(cell, out var plant))
             {
-                if (!orders.Contains(cell) && PlantInfo.CanGrowAt(_world, cell, crop)) orders.Designate(cell, DesignationKind.Sow);
+                if (!orders.Contains(cell) && PlantInfo.CanGrowAt(_world, cell, crop)) orders.Designate(cell, DesignationKind.Sow, _owners.Of(cell));
                 continue;
             }
             if (!PlantInfo.IsCrop(plant.Kind)) continue; // a wild plant got there first; leave it
@@ -94,7 +100,7 @@ public sealed class Farms
                 if (water is not null && Irrigated(water, cell)) step *= 2; // irrigated plots grow twice as fast
                 flora.Update(plant with { Growth = (byte)Math.Min(255, plant.Growth + step) });
             }
-            else if (!orders.Contains(cell)) orders.Designate(cell, DesignationKind.Gather);
+            else if (!orders.Contains(cell)) orders.Designate(cell, DesignationKind.Gather, _owners.Of(cell));
         }
     }
 

@@ -49,15 +49,18 @@ public static class Hauling
     }
 
     public static List<HaulPlan> Plans(ItemPiles items, Stockpiles stockpiles, Rooms rooms, Connectivity connectivity,
-        TilePos from, int component, IReadOnlySet<TilePos>? exclude = null, Orders.Constructions? sites = null)
+        TilePos from, int component, IReadOnlySet<TilePos>? exclude = null, Orders.Constructions? sites = null, int faction = 0)
     {
         var plans = new List<HaulPlan>();
         bool Usable(TilePos p) => (exclude is null || !exclude.Contains(p)) && connectivity.ComponentOf(p) == component;
+        // Goods a hauler of this colony may take: loose (anyone's), or in its own stockpiles and rooms.
+        bool Ours(TilePos p) => faction == Owners.Any || (!stockpiles.Contains(p) || stockpiles.OwnerOf(p) == faction) && (rooms.PartAt(p) is not { } part || part.Room.Faction == faction);
 
         // 1. Demand: input crates that want their machines' inputs.
         var demands = new Nearest<(TilePos Cell, ItemType Type, int Room)>(Considered);
         foreach (var room in rooms.All)
         {
+            if (faction != Owners.Any && room.Faction != faction) continue;
             foreach (var (cell, type, space) in InputDemands(room, items))
                 if (Usable(cell)) demands.Offer(Dist(cell, from), (cell, type, space));
             // Blueprints want their materials, spread over their footprint (one pile per cell).
@@ -81,6 +84,7 @@ public static class Hauling
         if (sites is not null)
             foreach (var bp in sites.All)
             {
+                if (faction != Owners.Any && bp.Faction != faction) continue;
                 var (material, cost) = bp.Cost;
                 int need = cost;
                 if (items.TryGet(bp.Cell, out var pile)) need = pile.Type == material ? cost - pile.Count - pile.Incoming : 0;
@@ -92,7 +96,7 @@ public static class Hauling
             var source = new Nearest<(TilePos Pos, int Available)>(1);
             foreach (var (p, pile) in items.All)
             {
-                if (pile.Type != type || pile.Available <= 0 || !Usable(p)) continue;
+                if (pile.Type != type || pile.Available <= 0 || !Usable(p) || !Ours(p)) continue;
                 if (RoleOf(p, pile.Type, stockpiles, rooms, sites) is StorageRole.Input or StorageRole.Construction) continue;
                 source.Offer(Dist(p, cell), (p, pile.Available));
             }
@@ -105,7 +109,7 @@ public static class Hauling
         var sources = new Nearest<(TilePos Pos, ItemPile Pile)>(Considered);
         foreach (var (p, pile) in items.All)
         {
-            if (pile.Available <= 0 || !Usable(p)) continue;
+            if (pile.Available <= 0 || !Usable(p) || !Ours(p)) continue;
             var role = RoleOf(p, pile.Type, stockpiles, rooms, sites);
             if (role is StorageRole.Loose or StorageRole.Output) sources.Offer(Dist(p, from), (p, pile));
         }
@@ -115,7 +119,7 @@ public static class Hauling
             foreach (var cell in stockpiles.Cells)
             {
                 int space = items.RoomAt(cell, pile.Type);
-                if (space > 0 && connectivity.ComponentOf(cell) == component) dest.Offer(Dist(cell, src), (cell, space), cell);
+                if (space > 0 && (faction == Owners.Any || stockpiles.OwnerOf(cell) == faction) && connectivity.ComponentOf(cell) == component) dest.Offer(Dist(cell, src), (cell, space), cell);
             }
             foreach (var (cell, space) in dest.Items)
                 plans.Add(new HaulPlan(src, cell, pile.Type, Math.Min(Math.Min(pile.Available, space), ItemInfo.CarryLimit(pile.Type))));
