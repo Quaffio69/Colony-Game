@@ -152,6 +152,29 @@ public class CombatTests
     }
 
     [Fact]
+    public void Fighters_FanOut_NeverStrikingFromOneTile()
+    {
+        var sim = Flat();
+        var nest = sim.Wildlife.AddNest(sim, CreatureKinds.GiantAnt, At(60, 50), 40);
+        var squad = Enumerable.Range(0, 8).Select(i => sim.AddColonist($"S{i}", At(44, 50))).ToList(); // all on one tile
+        foreach (var c in squad) c.PutOn(sim, Catalog.Item("spear"));
+        sim.Commands.Execute(new SetDrafted(-1, true));
+        sim.Commands.Execute(new SquadAttack(nest.Id));
+        int strikes = 0, bites = 0;
+        for (int i = 0; i < 3000 && sim.Wildlife.NestById(nest.Id) != null; i++)
+        {
+            sim.Step();
+            var striking = squad.Where(c => c.LastStrike == sim.Tick && sim.Colonists.Contains(c)).Select(c => c.Position).ToList();
+            Assert.Equal(striking.Count, striking.Distinct().Count());
+            strikes += striking.Count;
+            var biting = sim.Wildlife.Creatures.Where(a => a.LastStrike == sim.Tick).Select(a => a.Position).ToList();
+            Assert.Equal(biting.Count, biting.Distinct().Count());
+            bites += biting.Count;
+        }
+        Assert.True(strikes > 20 && bites > 5, $"a real fight ({strikes} strikes, {bites} bites)");
+    }
+
+    [Fact]
     public void AnUnarmedColonist_IsStruckDown_ThenRecovers()
     {
         // A lone colonist punching a nest: the swarm downs it; struck down, the ants leave it be; it gets back up.

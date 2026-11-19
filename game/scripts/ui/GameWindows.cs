@@ -466,7 +466,7 @@ public partial class HelpWindow : GlyphWindow
         ("LMB, RMB", "start/confirm a box or place; remove box"), ("Z X while boxing", "stretch the box over levels"),
         ("R, [ ]", "rotate, size of the part being placed"), ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor"),
         ("Esc", "cancel placing, close the window, main menu"), ("Ctrl+Tab", "next window"), ("Enter", "debug: finish all orders"),
-        ("F5 / F9", "quicksave / load the newest save"), ("F4", "play the next colony (hot-seat, several colonies)"),
+        ("F5 / F9", "quicksave / load the newest save"), ("F10", "tune the pixel-art look (Save keeps it)"), ("F4", "play the next colony (hot-seat, several colonies)"),
         ("G", "draft everyone, then click ground to march or a nest to attack (G again: done)"), ("Shift+G", "stand everyone down"),
         ("C I B L", "colonists, stocks, build, chronicle"), ("H J V M", "housing, work, inspect, military"), ("F1 F2 F3", "tests, appearance, this help"),
     ];
@@ -561,6 +561,14 @@ public partial class AppearanceWindow : GlyphWindow
         Content.AddChild(new GlyphSwitch("Frosted glass", o.Glass, on => GlyphTheme.Set(x => x.Glass = on)));
         Content.AddChild(new GlyphSwitch("Soft shadows", o.Shadow, on => GlyphTheme.Set(x => x.Shadow = on)));
         Content.AddChild(new GlyphSwitch("Icon chips", o.Chips, on => GlyphTheme.Set(x => x.Chips = on)));
+        Content.AddChild(G.Gap());
+        Content.AddChild(new GlyphSection("World"));
+        Content.AddChild(new GlyphSwitch("Pixel-art renderer (F10 tunes it)", o.PixelArt, on =>
+        {
+            GlyphTheme.Set(x => x.PixelArt = on);
+            GlyphTheme.Save();
+            Callable.From(_ui.Main.ReloadView).CallDeferred(); // views are built for one renderer: rebuild them on this world
+        }).WithTip("Pixel art, outlines, palettes, dithered trees and ASCII zoom (off: the classic smooth look)"));
         Content.AddChild(G.Gap());
         var buttons = new HBoxContainer();
         buttons.AddChild(G.Button(" Reset ", GlyphTheme.ResetAppearance, "Default font, size, frame and effects (keeps the theme)"));

@@ -99,6 +99,8 @@ public partial class ColonistView : Node3D
             Visible = false,
         };
         v.Root.AddChild(v.Marker);
+        if (Main.StyledRender) // zoomed far out (all symbols), colonists always show as ☺ in their colour
+            v.Root.AddChild(new DwarfRender.AsciiMarker { GlyphGroup = DwarfRender.GlyphAtlas.Dwarf, GlyphColour = Color.FromHsv(hue, 0.65f, 0.9f), Position = new Vector3(0, 0.5f, 0) });
         AddChild(v.Root);
         _views.Add(v);
     }

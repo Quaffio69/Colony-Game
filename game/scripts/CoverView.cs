@@ -32,7 +32,7 @@ public partial class CoverView : Node3D
     {
         _sim = sim;
         _world = world;
-        _shader = GD.Load<Shader>("res://shaders/flora.gdshader");
+        _shader = GameLooks.Shader("res://shaders/flora.gdshader");
         _roofs = new MeshInstance3D();
         AddChild(_roofs);
         _ghosts = new MultiMeshInstance3D
@@ -53,6 +53,8 @@ public partial class CoverView : Node3D
         m.SetShaderParameter("albedo", albedo);
         m.SetShaderParameter("tint_mix", 0.0f);
         m.SetShaderParameter("instanced", instanced);
+        m.SetShaderParameter("object_id", (float)GameLooks.Construction);
+        GameLooks.Styled(m);
         m.SetShaderParameter("cut_height", (float)(_drawnLevel + 1));
         _materials.Add(m);
         return m;
@@ -248,12 +250,13 @@ public partial class CoverView : Node3D
     private Material RoofMaterial(int roof)
     {
         if (_roofMats.TryGetValue(roof, out var m)) return m;
-        _roofShader ??= GD.Load<Shader>("res://shaders/roof.gdshader");
+        _roofShader ??= GameLooks.Shader("res://shaders/roof.gdshader");
         var mat = new ShaderMaterial { Shader = _roofShader };
         mat.SetShaderParameter("albedo", Rgb(RoofMaterials.All[roof].Color));
         mat.SetShaderParameter("course", roof switch { 1 => 11f, 4 => 5f, _ => 7f });
         mat.SetShaderParameter("joints", roof switch { 1 => 9f, 3 => 2.5f, 4 => 3.5f, _ => 3f });
         mat.SetShaderParameter("cut_height", (float)(_drawnLevel + 1));
+        GameLooks.Styled(mat);
         _materials.Add(mat);
         _roofMats[roof] = mat;
         return mat;

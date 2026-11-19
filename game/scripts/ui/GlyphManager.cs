@@ -24,6 +24,8 @@ public partial class GlyphManager : Control
     private readonly HBoxContainer _dockRow = new();
     private readonly GlyphPanel _status = new() { Pill = true };
     private readonly Label _statusText = new();
+    private readonly GlyphPanel _banner = new() { Pill = true };
+    private readonly Label _bannerText = new();
     private readonly Control _overlay = new() { MouseFilter = MouseFilterEnum.Ignore };
     private readonly Dictionary<Key, GlyphWindow> _hotkeys = new();
 
@@ -65,8 +67,15 @@ public partial class GlyphManager : Control
         _status.AddChild(_statusText);
         _status.MouseFilter = MouseFilterEnum.Ignore;
         AddChild(_status);
+        _bannerText.VerticalAlignment = VerticalAlignment.Center;
+        _bannerText.MouseFilter = MouseFilterEnum.Ignore;
+        _banner.AddChild(_bannerText);
+        _banner.MouseFilter = MouseFilterEnum.Ignore;
+        _banner.Visible = false;
+        _banner.ZIndex = 50;
         _overlay.SetAnchorsPreset(LayoutPreset.FullRect);
         AddChild(_overlay);
+        AddChild(_banner); // above everything, menu included
         GlyphTheme.Changed += OnThemeChanged;
         Theme = GlyphTheme.Theme;
     }
@@ -171,7 +180,7 @@ public partial class GlyphManager : Control
     {
         if (Cols == 0) return; // before the first frame: placed once the grid is known
         var s = w.State;
-        s.W = Math.Clamp(s.W, w.MinCols, Math.Max(w.MinCols, Cols - 2));
+        s.W = Math.Clamp(Math.Max(s.W, w.NeededCols()), w.MinCols, Math.Max(w.MinCols, Cols - 2)); // never narrower than its content
         s.H = Math.Clamp(s.H, w.MinRows, Math.Max(w.MinRows, DeskBottom - DeskTop));
         if (!s.Placed)
         {
@@ -287,11 +296,19 @@ public partial class GlyphManager : Control
                 {
                     long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                     w.Tick();
+                    if (!w.Maximized && w.NeededCols() > w.State.W && w.State.W < Cols - 2)
+                    {
+                        // Grown wider than the window (new rows, longer text): widen it, keeping it on screen.
+                        int need = Math.Min(w.NeededCols(), Cols - 2);
+                        w.State.X = Math.Max(1, Math.Min(w.State.X, Cols - 1 - need));
+                        Layout(w);
+                    }
                     double ms = System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
                     TickMs[w.Id] = Math.Max(TickMs.GetValueOrDefault(w.Id), ms);
                 }
         }
         UpdateStatus();
+        UpdateBanner();
 
         if (_saveIn > 0 && (_saveIn -= delta) <= 0) GlyphTheme.Save();
     }
@@ -311,6 +328,29 @@ public partial class GlyphManager : Control
         _dockRow.Size = new Vector2(width - 2 * GlyphTheme.Cw, GlyphTheme.Ch);
     }
 
+
+    /// <summary>The cursor banner: <see cref="GlyphStatus.Banner"/> in a pill just below and right of the mouse, at once.</summary>
+    private void UpdateBanner()
+    {
+        string? text = GlyphStatus.Banner;
+        _banner.Visible = !string.IsNullOrEmpty(text);
+        if (!_banner.Visible) return;
+        float cw = GlyphTheme.Cw, ch = GlyphTheme.Ch;
+        int maxCols = Math.Max(12, Cols / 2);
+        if (text!.Length > maxCols) text = text[..(maxCols - 1)] + "…";
+        _bannerText.Text = text;
+        G.Retone(_bannerText, "Hi");
+        float w = (text.Length + 2) * cw;
+        var mouse = GetViewport().GetMousePosition();
+        var size = GetViewportRect().Size;
+        var at = mouse + new Vector2(cw, ch * 1.1f);
+        at.X = Math.Clamp(at.X, 0, Math.Max(0, size.X - w));
+        if (at.Y + ch > size.Y) at.Y = mouse.Y - ch * 1.6f;
+        _banner.Size = new Vector2(w, ch);
+        _banner.Position = at;
+        _bannerText.Position = new Vector2(cw, 0);
+        _bannerText.Size = new Vector2(w - 2 * cw, ch);
+    }
     private void UpdateStatus()
     {
         string text;

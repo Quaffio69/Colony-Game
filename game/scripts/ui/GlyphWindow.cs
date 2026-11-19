@@ -151,6 +151,7 @@ public partial class GlyphWindow : GlyphPanel
         Visible = false;
 
         _body.MouseFilter = MouseFilterEnum.Ignore;
+        _body.ClipContents = true; // nothing draws outside the panel, whatever its content asks for
         AddChild(_body);
         var column = new VBoxContainer { MouseFilter = MouseFilterEnum.Ignore };
         column.AddThemeConstantOverride("separation", 0);
@@ -207,6 +208,14 @@ public partial class GlyphWindow : GlyphPanel
     }
 
     public bool IsShown => State.Open && !State.Min;
+
+    /// <summary>Cells wide the window must be for its header, content and footer to fit (chrome included).</summary>
+    internal int NeededCols()
+    {
+        if (!_built) return 0;
+        float inner = Math.Max(Header.GetCombinedMinimumSize().X, Math.Max(Content.GetCombinedMinimumSize().X, Footer.GetCombinedMinimumSize().X));
+        return (int)MathF.Ceiling(inner / GlyphTheme.Cw) + 4; // 2 cells of margin left, scrollbar and pad right
+    }
 
     internal void EnsureBuilt()
     {

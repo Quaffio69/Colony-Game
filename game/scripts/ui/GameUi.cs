@@ -102,9 +102,13 @@ public partial class GameUi : CanvasLayer
         row.AddChild(new GlyphChip("☼", "accent"));
         row.AddChild(Space(1));
         _colony = G.Text("", "Hi", bold: true);
+        _colony.MouseFilter = Control.MouseFilterEnum.Pass;
+        _colony.WithBanner(() => Sim.Factions.Count > 1 ? $"Your colony, {MyFaction.Name} · F4: play the next" : $"Your colony, {MyFaction.Name}");
         row.AddChild(_colony);
         row.AddChild(Space(2));
         _date = G.Text("", "Dim");
+        _date.MouseFilter = Control.MouseFilterEnum.Pass;
+        _date.WithBanner(() => $"Day {Sim.Tick / Needs.Day + 1} · a day is {Needs.Day / ColonySim.TicksPerSecond / 60} minutes at normal speed");
         row.AddChild(_date);
         row.AddChild(Space(2));
         _stats.Add(new HudStat("☺", "accent", () => Toggle("colonists")));
@@ -124,7 +128,7 @@ public partial class GameUi : CanvasLayer
         row.AddChild(G.Spacer());
         _net = G.Text("", "Info");
         _net.MouseFilter = Control.MouseFilterEnum.Pass;
-        _net.WithTip("Online play: Esc, Multiplayer to host, join or leave");
+        _net.WithBanner(() => "Online play · Esc, Multiplayer: host, join or leave");
         row.AddChild(_net);
         row.AddChild(Space(2));
         _terrain = G.Text("", "Faint");
@@ -132,7 +136,7 @@ public partial class GameUi : CanvasLayer
         row.AddChild(Space(2));
         _level = G.Text("", "Dim");
         _level.MouseFilter = Control.MouseFilterEnum.Pass;
-        _level.WithTip("View level · Z/X or PgDn/PgUp to go down/up");
+        _level.WithBanner(() => "View level · Z/X or PgDn/PgUp: down/up");
         row.AddChild(_level);
         row.AddChild(Space(2));
         _speed = new GlyphSegmented(["‖", "►", "►►", "►►►"], 1, i =>
@@ -146,6 +150,7 @@ public partial class GameUi : CanvasLayer
         })
         {
             Solid = true,
+            BannerTips = true,
             Tips = ["Pause (Space)", $"Normal speed (1)", $"Fast: {Main.SpeedSteps[1]}x (2)", $"Fastest: {Main.SpeedSteps[2]}x (3)"],
         };
         row.AddChild(_speed);
@@ -321,15 +326,15 @@ public partial class HudStat : GlyphControl
     {
         _glyph = glyph; _tone = tone; _click = click;
         MouseDefaultCursorShape = CursorShape.PointingHand;
-        MouseEntered += () => { _hover = true; GlyphStatus.Tip = _tip; QueueRedraw(); };
-        MouseExited += () => { _hover = false; GlyphStatus.Tip = null; QueueRedraw(); };
+        MouseEntered += () => { _hover = true; GlyphStatus.Tip = GlyphStatus.Banner = _tip; QueueRedraw(); };
+        MouseExited += () => { _hover = false; GlyphStatus.Tip = GlyphStatus.Banner = null; QueueRedraw(); };
     }
     public HudStat() : this("•", "dim", () => { }) { }
 
     public void Set(string value, int trend, bool warn, string tip)
     {
         _tip = tip;
-        if (_hover) GlyphStatus.Tip = tip;
+        if (_hover) GlyphStatus.Tip = GlyphStatus.Banner = tip;
         if (value == _value && trend == _trend && warn == _warn && !warn) return;
         bool resize = value.Length != _value.Length || (trend != 0) != (_trend != 0);
         _value = value; _trend = trend; _warn = warn;

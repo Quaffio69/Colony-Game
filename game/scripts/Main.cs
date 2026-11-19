@@ -41,6 +41,8 @@ public partial class Main : Node3D
 
     public override void _Ready()
     {
+        DwarfRender.DwarfMaterials.ClearTerrains(); // the views below register this scene's tile materials
+        GetViewport().Disable3D = false; // the pixel-art renderer turns it off; a reload into the classic look needs it back
         var env = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Color,
@@ -54,11 +56,12 @@ public partial class Main : Node3D
         // Distant terrain is mostly 1-tile terraces; without AA their edges alias into speckle.
         GetViewport().Msaa3D = Viewport.Msaa.Msaa4X;
 
-        AddChild(new DirectionalLight3D
+        AddChild(_sun = new DirectionalLight3D
         {
-            RotationDegrees = new Vector3(-55, 35, 0),
+            RotationDegrees = new Vector3(-55, 215, 0), // behind the default view (rig yaw 200): we see the lit faces
             LightEnergy = 1.1f,
             ShadowEnabled = true,
+            Name = "Sun",
         });
 
         ulong start = Time.GetTicksMsec();
@@ -128,6 +131,7 @@ public partial class Main : Node3D
         _ui = new GameUi(this) { Name = "GameUi" };
         AddChild(_ui);
         ReadyNet();
+        SetUpRenderer();
     }
 
     // ---- What the UI reads and drives ----------------------------------------------------------------
@@ -278,6 +282,8 @@ public partial class Main : Node3D
     public override void _Process(double delta)
     {
         HandleDevArgs(delta);
+        UpdateRenderer();
+        GameLooks.Tick(delta);
 
         // A client's sim runs only what the host confirms; everyone else runs at their own speed (a host also streams turns).
         if (!ClientFrame())

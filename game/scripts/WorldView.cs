@@ -56,7 +56,7 @@ public partial class WorldView : Node3D
         public int[] CurrentVersions() => Array.ConvertAll(Chunks, c => c.Version);
     }
 
-    private sealed record MeshResult(Section Section, int[] Versions, Vector3[] Verts, Vector3[] Normals, Color[] Colors, int[] Indices, int Quads);
+    private sealed record MeshResult(Section Section, int[] Versions, Vector3[] Verts, Vector3[] Normals, Color[] Colors, Vector2[] Uvs, int[] Indices, int Quads);
 
     private ColonySim _sim = null!;
     private readonly List<Section> _sections = new();
@@ -101,6 +101,16 @@ public partial class WorldView : Node3D
 
     public Vector3 Center => new(World.Width / 2f, World.Height * 0.4f, World.Depth / 2f);
 
+    /// <summary>The kit look: tile tables and the shared atlas/lighting values for a tile material (no-op when classic).</summary>
+    private static void StyleTiles(ShaderMaterial m)
+    {
+        if (!Main.StyledRender) return;
+        var (palette, groups) = GameLooks.TileTables();
+        m.SetShaderParameter("dr_palette", palette);
+        m.SetShaderParameter("dr_group", groups);
+        GameLooks.Styled(m);
+    }
+
     public static Color TileColor(TileType t) => t switch
     {
         TileType.Grass => new Color(0.36f, 0.62f, 0.28f),
@@ -139,7 +149,8 @@ public partial class WorldView : Node3D
         _sim = sim;
         _viewLevel = World.Height - 1;
 
-        _terrainMaterial = new ShaderMaterial { Shader = GD.Load<Shader>("res://shaders/terrain.gdshader") };
+        _terrainMaterial = new ShaderMaterial { Shader = GameLooks.Shader("res://shaders/terrain.gdshader") };
+        StyleTiles(_terrainMaterial);
 
         for (int z0 = 0; z0 < World.Height; z0 += SectionZ)
         for (int y0 = 0; y0 < World.Depth; y0 += SectionY)
@@ -313,6 +324,7 @@ public partial class WorldView : Node3D
         var verts = new Vector3[n * 4];
         var normals = new Vector3[n * 4];
         var colors = new Color[n * 4];
+        var uvs = new Vector2[n * 4]; // x = tile type (the styled terrain shader looks its texture and glyph up by it)
         var indices = new int[n * 6];
         for (int i = 0; i < n; i++)
         {
@@ -329,12 +341,13 @@ public partial class WorldView : Node3D
             {
                 normals[v + k] = normal;
                 colors[v + k] = color;
+                uvs[v + k] = new Vector2((int)q.Tile, 0);
             }
             int t = i * 6;
             indices[t] = v; indices[t + 1] = v + 1; indices[t + 2] = v + 2;
             indices[t + 3] = v; indices[t + 4] = v + 2; indices[t + 5] = v + 3;
         }
-        return new MeshResult(s, versions, verts, normals, colors, indices, n);
+        return new MeshResult(s, versions, verts, normals, colors, uvs, indices, n);
     }
 
     private void ApplyResults(Stopwatch clock)
@@ -358,6 +371,7 @@ public partial class WorldView : Node3D
             arrays[(int)Mesh.ArrayType.Vertex] = r.Verts;
             arrays[(int)Mesh.ArrayType.Normal] = r.Normals;
             arrays[(int)Mesh.ArrayType.Color] = r.Colors;
+            arrays[(int)Mesh.ArrayType.TexUV] = r.Uvs;
             arrays[(int)Mesh.ArrayType.Index] = r.Indices;
             var mesh = new ArrayMesh();
             mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
@@ -399,7 +413,8 @@ public partial class WorldView : Node3D
             palette[i] = new Vector4(c.R, c.G, c.B, c.A);
         }
 
-        _capMaterial = new ShaderMaterial { Shader = GD.Load<Shader>("res://shaders/cap.gdshader") };
+        _capMaterial = new ShaderMaterial { Shader = GameLooks.Shader("res://shaders/cap.gdshader") };
+        StyleTiles(_capMaterial);
         _capMaterial.SetShaderParameter("tiles", _capTexture);
         _capMaterial.SetShaderParameter("palette", palette);
 

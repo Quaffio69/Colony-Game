@@ -83,6 +83,32 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   hauling scans all piles and stockpile cells (spatial index); A* costs ~1-2 us/node; sim runs on the main
   thread.
 
+## Look (Dwarf Render kit, `game/addons/dwarf_render`)
+
+- **What:** a port of the user's Three.js diorama (`reference/voxel-diorama.html` is the answer key): the 3D world is drawn
+  into two low-res SubViewports sharing our World3D (art + ids), post-processed (outlines, grade, palette LUT, ordered
+  dither, foliage-aware silhouettes) and presented full-screen on CanvasLayer -100 under the UI; the main viewport's 3D is
+  off. Zoomed right in, art pixels dissolve into glyphs; far out (all symbols past ~450 tiles) the view becomes DF-style
+  object symbols with colonists always ☺ (`AsciiMarker`). F10 tunes everything (presets, Save to
+  `user://dwarf_render_settings.tres`). Appearance F2 "Pixel-art renderer" (`GlyphOptions.PixelArt`) switches to the classic
+  look by rebuilding the scene on the same world (`Main.ReloadView`); `--classic-render` forces classic. Needs Forward+ and
+  `screen_space_roughness_limiter` off (project.godot): every kit material writes its **glyph group** id into ROUGHNESS.
+- **Integration (`MainRender.cs`, `GameLooks.cs`):** kept our greedy `SectionMesher` and slicing (the kit's own mesher,
+  rounding, AO and sky light are unused): `WorldView` adds UV.x = tile type; `terrain_dr`/`cap_dr` (`tiles_dr.gdshaderinc`)
+  do the kit's toon bands, block-texture atlas (kit block ids = `TileType` values, `GameLooks.RegisterBlocks`) and glyph id.
+  `GameLooks.Shader(path)` picks a `*_dr.gdshader` variant when styled (terrain, cap, water and water cap: opaque, as
+  the post pass only sees opaque surfaces; flora, roofs); `GameLooks.Styled(m)` / `DwarfMaterials.RegisterTerrain` feed
+  them the atlas and lighting values. Trees and bushes are the kit's `TreeBuilder` meshes (canopy + bark in one mesh for
+  our MultiMeshes; the kit's foliage/object shaders gained a `cut_height` slice). Every other view keeps making plain
+  `StandardMaterial3D`s: `GameLooks.Watch` converts opaque lit ones to `DwarfMaterials.CreateObject` with a glyph group by
+  owning view (colonists Dwarf, CreatureView Creature, ItemView Item, HomeView furniture, Edge/Cover construction...) as
+  nodes are added plus a 1 s sweep; transparent/unshaded overlays are left alone and draw after the post quad
+  (`RenderPriorityMin`), so cursors, designations, ghosts and health bars stay visible, depth-tested. Label3Ds are taken out
+  of the 3D render and drawn crisp in 2D by `ScreenTags` (layer 1). The renderer zooms about the rig pivot
+  (`FocusOverride`); `GameDefaults` retunes zoom: reference 40 tiles, glyphs under ~13, symbols from 160. The sun faces
+  away from the default view (yaw 215) so we see lit faces (toon shade bands are dark). Render layers 19-20 are the kit's.
+- Not ported yet: per-vertex AO / cave sky light and edge rounding (would need mesher changes), tree variants per species.
+
 ## UI (Glyph UI, `game/scripts/ui`)
 
 - **Spec:** `docs/ui/GLYPH_UI.md` (approved direction; `glyph_ui_reference.html` is the live reference, when they disagree
@@ -96,10 +122,12 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   the game). Fonts in `game/fonts` (OFL): JetBrains Mono (default, variable weight), IBM Plex Mono, Space Mono, VT323.
 - **Controls:** `GlyphPanel`, `GlyphWindow` (title row, − □ ×, drag/resize in whole cells, double-click maximise,
   `Header`/`Content` (scrolls)/`Footer`, `Build()` on open and theme change, `Tick()` 4x a second while shown),
-  `GlyphManager` (z-order = child order, front = active, hotkeys, Esc order: placement, active window, main menu;
+  `GlyphManager` (z-order = child order, front = active, windows never narrower than their content (`NeededCols`, grown
+  on tick; the body clips), hotkeys, Esc order: placement, active window, main menu;
   Ctrl+Tab; dock; status pill; layout saved), `GlyphChip`, `GlyphBar`, `GlyphSwitch`, `GlyphSegmented`, `GlyphSection`,
   `GlyphKV`, `GlyphSparkline`, `GlyphRow`, `VRule`, factory `G` (labels in cell widths, pill buttons that never take
-  keyboard focus, so Space keeps pausing). Hover hints go to the status pill (`WithTip`), not tooltips.
+  keyboard focus, so Space keeps pausing). Hover hints go to the status pill (`WithTip`), not tooltips; HUD items also show
+  an instant themed banner at the cursor (`GlyphStatus.Banner`, `WithBanner`, `GlyphSegmented.BannerTips`).
   A click that rebuilds its own window must `AcceptEvent()` first (the control may be freed); theme changes rebuild
   deferred. Default window rects: negative X counts from the right edge, resolved on first layout.
 - **Game windows (`GameUi`):** HUD pill (colony, date, people, food days, logs, planks, stone, mood, beds/homeless with
@@ -460,7 +488,10 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   `EngageRange` (10) and strike the nest they were sent against; they eat when famished between fights and never
   collapse from tiredness; squadmates spread round a target. Undrafted, a bitten colonist fights back (task `Fight`), or
   flees below 35 health (children always flee), and goes back to work 80 ticks after the last blow. `Colonist.AdvanceMove`
-  is the shared walking step (normal tasks and combat chases). Every new combat field is in `SnapSaveCombat`/`Settle`.
+  is the shared walking step (normal tasks and combat chases). Fighters fan out (RimWorld-style: colonists squeeze past
+  each other anywhere, but never fight from one tile): a fighter on a tile a lower-id fighter holds walks to the nearest
+  free tile in reach (`FreeSpot`, `_fanningTo`); ants keep one biter per tile too. Every new combat field is in
+  `SnapSaveCombat`/`Settle`.
 - **Wildlife (`Combat.Wildlife`, `Nest`, `Creature`, `CreatureKind`, `FlowField`):** creature kinds are data
   (`CreatureKinds`: health, `Attack`, speed, `Temperament` Docile/Provokable/Hostile, drop, nest cap and mound health),
   so animals and other peoples' soldiers slot in later. **Giant ants** (the first): 8 health (one weapon blow; two
@@ -579,6 +610,8 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - [x] Combat and the first threat: health, struck down / rare death, four weapons and two-part armour from the catalog,
       drafting and squad orders (G, Military window M), giant ant nests (docile until provoked or crowded; defend, raid,
       spread; swarm flow fields), verified in tests, the `ants` bench and two processes (`--net-ants`).
+- [x] Look: the Dwarf Render kit (pixel art, outlines, palettes, dithered trees, ASCII zoom) on our terrain, water, flora
+      and every view; fighters fan out (one striker per tile); windows grow to fit; instant HUD hover banners.
 - [ ] Next for combat: war between colonies (colonists attacking colonists), more threats (wild animals, hostile and
       provokable peoples), medicine/bandages and carrying the downed to bed, ranged arrows drawn in flight, armour tiers.
 - [ ] Next for the demo: chat, trade between colonies, colonist pages (job clothing, titles by

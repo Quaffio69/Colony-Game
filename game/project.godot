@@ -23,3 +23,7 @@ window/size/viewport_height=900
 
 project/assembly_name="ColonyGame"
 project/solution_directory="../"
+
+[rendering]
+
+anti_aliasing/screen_space_roughness_limiter/enabled=false

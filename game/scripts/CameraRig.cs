@@ -9,6 +9,8 @@ public partial class CameraRig : Node3D
     [Export] public float RotateSpeed { get; set; } = 90f;
 
     private Camera3D _camera = null!;
+    public Camera3D Camera => _camera;
+    public float Distance => _distance;
     private float _yaw = 45f, _pitch = -50f, _distance = 120f;
     private bool _orbiting;
 

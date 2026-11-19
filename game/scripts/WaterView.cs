@@ -55,8 +55,9 @@ public partial class WaterView : Node3D
     {
         _sim = sim;
         _worldView = worldView;
-        _water = new ShaderMaterial { Shader = GD.Load<Shader>("res://shaders/water.gdshader") };
-        _flora = GD.Load<Shader>("res://shaders/flora.gdshader");
+        _water = new ShaderMaterial { Shader = GameLooks.Shader("res://shaders/water.gdshader") };
+        GameLooks.Styled(_water);
+        _flora = GameLooks.Shader("res://shaders/flora.gdshader");
         _wood = Mat(new Color(0.6f, 0.43f, 0.27f));
         _darkWood = Mat(new Color(0.4f, 0.29f, 0.18f));
         _metal = Mat(new Color(0.6f, 0.62f, 0.66f));
@@ -69,8 +70,9 @@ public partial class WaterView : Node3D
         _capData = new byte[world.Width * world.Depth];
         _capImage = Image.CreateFromData(world.Width, world.Depth, false, Image.Format.R8, _capData);
         _capTexture = ImageTexture.CreateFromImage(_capImage);
-        var capMaterial = new ShaderMaterial { Shader = GD.Load<Shader>("res://shaders/water_cap.gdshader") };
+        var capMaterial = new ShaderMaterial { Shader = GameLooks.Shader("res://shaders/water_cap.gdshader") };
         capMaterial.SetShaderParameter("cells", _capTexture);
+        GameLooks.Styled(capMaterial);
         _cap = new MeshInstance3D
         {
             Name = "WaterCap",
@@ -180,6 +182,8 @@ public partial class WaterView : Node3D
         var m = new ShaderMaterial { Shader = _flora };
         m.SetShaderParameter("albedo", c);
         m.SetShaderParameter("tint_mix", 0f);
+        m.SetShaderParameter("object_id", (float)DwarfRender.GlyphAtlas.Prop);
+        GameLooks.Styled(m);
         m.SetShaderParameter("instanced", false);
         _sliced.Add(m);
         return m;

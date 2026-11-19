@@ -45,6 +45,8 @@ public sealed partial class Colonist
     private bool _chasing;
     private TilePos _chaseGoal;
     private long _chasePlanned, _chaseRetry;
+    /// <summary>A free tile it is moving to so as not to fight from one another fighter holds.</summary>
+    private TilePos? _fanningTo;
     private readonly List<(TilePos To, float Cost)> _combatMoves = new(12);
 
     public Attack Attack => Gear.Of(Weapon);
@@ -149,6 +151,7 @@ public sealed partial class Colonist
     private void EndCombat()
     {
         StopMoving();
+        _fanningTo = null;
         Finish();
     }
 
@@ -161,17 +164,85 @@ public sealed partial class Colonist
         State = ColonistState.Idle;
     }
 
-    /// <summary>Strikes when in reach (and in sight, for a bow); otherwise closes in.</summary>
+    /// <summary>Strikes when in reach (and in sight, for a bow), from a tile of its own; otherwise closes in.</summary>
     private void Engage(ColonySim sim, TilePos target, Creature? foe, Nest? nest)
     {
         var a = Attack;
+        if (_fanningTo is { } spot)
+        {
+            // On its way to a free fighting spot: keep going until it gets there (or the spot is no use).
+            if (NextStep is null && (Position == spot || !Gear.InReach(spot, target, a.Reach))) _fanningTo = null;
+            else
+            {
+                Chase(sim, spot, exact: true);
+                if (!_chasing && NextStep is null) _fanningTo = null; // can't get there: fight from here
+                return;
+            }
+        }
         if (NextStep is null && Gear.InReach(Position, target, a.Reach) && (!a.Ranged || Gear.LineOfSight(sim.World, Position, target)))
         {
+            // Fighters fan out (RimWorld-style): colonists squeeze past each other anywhere, but never fight from one tile.
+            if (TileHeldByFighter(sim) && FreeSpot(sim, target, a) is { } free)
+            {
+                _fanningTo = free;
+                StopMoving();
+                Chase(sim, free, exact: true);
+                return;
+            }
             if (_chasing) StopMoving();
             if (_cooldown == 0) Strike(sim, foe, nest, a);
             return;
         }
         Chase(sim, target, exact: false);
+    }
+
+    private bool IsFighter => !Downed && (Drafted || Task is ColonistTask.Fight);
+
+    /// <summary>Another fighter (the lower id keeps a tile) stands on this tile.</summary>
+    private bool TileHeldByFighter(ColonySim sim)
+    {
+        foreach (var o in sim.Colonists)
+            if (o != this && o.Id < Id && o.Position == Position && o.NextStep is null && o.IsFighter) return true;
+        return false;
+    }
+
+    /// <summary>Tiles other fighters stand on or are heading to.</summary>
+    private HashSet<TilePos> FighterTiles(ColonySim sim)
+    {
+        var taken = new HashSet<TilePos>();
+        foreach (var o in sim.Colonists)
+        {
+            if (o == this || !o.IsFighter) continue;
+            taken.Add(o._fanningTo ?? (o._chasing ? o._path.LastOrDefault(o.Position) : o.Position));
+            if (o._fanningTo is not null || o._chasing) taken.Add(o.Position);
+        }
+        return taken;
+    }
+
+    /// <summary>The nearest standable tile in reach of the target (and in sight, for a bow) that no other fighter holds.</summary>
+    private TilePos? FreeSpot(ColonySim sim, TilePos target, Attack a)
+    {
+        int component = sim.Connectivity.ComponentOf(Position);
+        if (component < 0) return null;
+        var taken = FighterTiles(sim);
+        int r = Math.Min(a.Reach, 3);
+        TilePos? best = null;
+        int bestD = int.MaxValue;
+        // Ranged: look round itself (any spot in range will do); melee: round the target.
+        var centre = a.Ranged ? Position : target;
+        for (int dz = -1; dz <= 1; dz++)
+        for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++)
+        {
+            var p = centre.Offset(dx, dy, dz);
+            if (p == Position || taken.Contains(p) || !Gear.InReach(p, target, a.Reach)) continue;
+            if (sim.Connectivity.ComponentOf(p) != component) continue;
+            int d = Math.Max(Math.Abs(p.X - Position.X), Math.Abs(p.Y - Position.Y)) * 4 + Math.Abs(p.Z - Position.Z) * 3 + Math.Abs(p.X - target.X) + Math.Abs(p.Y - target.Y);
+            if (d >= bestD) continue;
+            if (a.Ranged && !Gear.LineOfSight(sim.World, p, target)) continue;
+            (best, bestD) = (p, d);
+        }
+        return best;
     }
 
     /// <summary>Walks towards a cell (next to it unless <paramref name="exact"/>), replanning as the target moves.</summary>
@@ -194,9 +265,7 @@ public sealed partial class Colonist
                 if (!exact && goals.Count > 1)
                 {
                     // Spread round the target rather than piling onto one tile with the rest of the squad.
-                    var taken = new HashSet<TilePos>();
-                    foreach (var o in sim.Colonists)
-                        if (o != this && o.Faction == Faction && o.Drafted) taken.Add(o._chasing ? o._path.LastOrDefault(o.Position) : o.Position);
+                    var taken = FighterTiles(sim);
                     var free = new HashSet<TilePos>(goals.Where(g => !taken.Contains(g)));
                     if (free.Count > 0) goals = free;
                 }
@@ -208,6 +277,7 @@ public sealed partial class Colonist
                     _chasing = true;
                     _chaseGoal = target;
                     _chasePlanned = t;
+                    _chaseRetry = 0; // only a failed plan waits before trying again
                     State = ColonistState.Moving;
                 }
             }
@@ -293,6 +363,7 @@ public sealed partial class Colonist
         if (on == Drafted) return;
         Drafted = on;
         _foe = null;
+        _fanningTo = null;
         if (on)
         {
             if (!Downed && (Task != ColonistTask.None || State != ColonistState.Idle || CarryingCount > 0)) Abandon(sim);
@@ -418,6 +489,7 @@ public sealed partial class Colonist
         _chasing = false;
         _chaseGoal = default;
         _chasePlanned = _chaseRetry = 0;
+        _fanningTo = null;
         _equip = default;
     }
 

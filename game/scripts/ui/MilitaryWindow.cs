@@ -93,7 +93,7 @@ public partial class MilitaryWindow : GlyphWindow
             row.AddChild(G.Text(" ", cols: 1));
             var gear = Clip(G.Text("", "Dim", cols: 30));
             row.AddChild(gear);
-            var doing = Clip(G.Text("", "Dim", expand: true));
+            var doing = Clip(G.Text("", "Dim", cols: 22, expand: true));
             row.AddChild(doing);
             var draft = new GlyphSwitch("", c.Drafted, on => _ui.Tool.Issue(new SetDrafted(colonist.Id, on)));
             row.AddChild(draft);

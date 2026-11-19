@@ -20,6 +20,19 @@ public static class GlyphStatus
         MessageUntil = Time.GetTicksMsec() / 1000.0 + seconds;
     }
 
+    /// <summary>A banner shown at the mouse cursor straight away (HUD pills: what a thing is, without opening it).</summary>
+    public static string? Banner;
+    private static Control? _bannerOwner;
+
+    /// <summary>Shows a hint in a banner at the cursor (and the status pill) while the mouse is over the control.</summary>
+    public static T WithBanner<T>(this T control, Func<string> tip) where T : Control
+    {
+        control.MouseEntered += () => { Banner = Tip = tip(); _bannerOwner = control; };
+        control.MouseExited += () => { if (_bannerOwner == control) { Banner = Tip = null; _bannerOwner = null; } };
+        control.TreeExiting += () => { if (_bannerOwner == control) { Banner = Tip = null; _bannerOwner = null; } };
+        return control;
+    }
+
     /// <summary>Shows a hint in the status pill while the mouse is over the control.</summary>
     public static T WithTip<T>(this T control, string? tip) where T : Control
     {
@@ -158,12 +171,20 @@ public partial class GlyphSegmented : GlyphControl
     private readonly Action<int> _picked;
     public bool Solid { get; init; }
     public string[]? Tips { get; init; }
+    /// <summary>Show the segment hints as a banner at the cursor too (HUD).</summary>
+    public bool BannerTips { get; init; }
 
     public GlyphSegmented(string[] labels, int index, Action<int> picked)
     {
         _labels = labels; _index = index; _picked = picked;
+        MouseExited += () =>
+        {
+            _hover = -1;
+            if (Tips != null) GlyphStatus.Tip = null;
+            if (BannerTips) GlyphStatus.Banner = null;
+            QueueRedraw();
+        };
         MouseDefaultCursorShape = CursorShape.PointingHand;
-        MouseExited += () => { _hover = -1; QueueRedraw(); };
     }
     public GlyphSegmented() : this([], 0, _ => { }) { }
 
@@ -202,6 +223,7 @@ public partial class GlyphSegmented : GlyphControl
                 _hover = h;
                 QueueRedraw();
                 GlyphStatus.Tip = h >= 0 && Tips != null && h < Tips.Length ? Tips[h] : null;
+                if (BannerTips) GlyphStatus.Banner = GlyphStatus.Tip;
             }
         }
         if (e is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } b && At(b.Position.X) is >= 0 and var i)

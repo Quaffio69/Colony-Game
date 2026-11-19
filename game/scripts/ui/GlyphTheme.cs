@@ -19,6 +19,8 @@ public sealed class GlyphOptions
     public bool Shadow { get; set; } = true;
     public bool Chips { get; set; } = true;
     public float Scale { get; set; } = 1f;
+    /// <summary>The Dwarf Render pixel-art look (off: the classic full-resolution renderer).</summary>
+    public bool PixelArt { get; set; } = true;
     public Dictionary<string, WindowState> Windows { get; set; } = new();
 }
 

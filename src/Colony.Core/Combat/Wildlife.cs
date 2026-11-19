@@ -44,6 +44,8 @@ public sealed class Wildlife
     private readonly List<(TilePos To, float Cost)> _moves = new(12);
     private readonly Dictionary<long, List<Creature>> _buckets = new();
     private readonly List<Colonist> _prey = new();
+    /// <summary>Tiles an ant bites from this tick (one biter per tile).</summary>
+    private readonly HashSet<TilePos> _biting = new();
     private readonly List<HashSet<long>> _land = new();
     private (int Rooms, int Stockpiles, int Farms, int Factions) _landSeen = (-1, -1, -1, -1);
 
@@ -127,6 +129,7 @@ public sealed class Wildlife
         _creatures.RemoveAll(c => c.Dead);
 
         _prey.Clear();
+        _biting.Clear();
         foreach (var c in sim.Colonists)
             if (!c.Downed) _prey.Add(c);
 
@@ -482,6 +485,20 @@ public sealed class Wildlife
 
         if (c.Target is { } tg && c.NextStep is null && Gear.InReach(c.Position, tg.Position, 1))
         {
+            // One biter per tile: a later ant on a held tile steps to a free one beside its prey (a swarm surrounds it).
+            if (!_biting.Add(c.Position))
+            {
+                Movement.GetMoves(w, c.Position, _moves);
+                foreach (var m in _moves)
+                    if (!_biting.Contains(m.To) && Gear.InReach(m.To, tg.Position, 1))
+                    {
+                        _biting.Add(m.To);
+                        c.NextStep = m.To;
+                        c.StepTotal = Math.Max(1, (int)MathF.Round(m.Cost * c.Kind.StepTicks));
+                        c.StepDone = 0;
+                        return;
+                    }
+            }
             if (c.Cooldown == 0) Bite(sim, c, tg);
             return;
         }

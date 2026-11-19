@@ -1,0 +1,2419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Voxel Pixel Shader Diorama</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: rgba(30,21,17,0.92);
+    --edge:#5a4030;
+    --ink:#f1e2c2;
+    --dim:#b9a283;
+    --accent:#e8a444;
+    --accent2:#c8643a;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#1a1410;color:var(--ink);
+    font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:12px}
+  canvas#view{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none;
+    image-rendering:pixelated}
+  #hud{position:fixed;left:10px;top:10px;padding:6px 9px;background:var(--bg);border:2px solid var(--edge);
+    font-family:"Silkscreen",monospace;font-size:11px;letter-spacing:.5px;pointer-events:none;line-height:1.5}
+  #hud b{color:var(--accent);font-weight:400}
+  #prof{display:none;margin:6px 0 0;font-family:"IBM Plex Mono",monospace;font-size:11px;line-height:1.45;color:var(--ink);white-space:pre}
+  #hint{position:fixed;left:10px;bottom:10px;padding:5px 8px;background:var(--bg);border:2px solid var(--edge);
+    color:var(--dim);font-size:11px;pointer-events:none}
+  #panel{position:fixed;right:10px;top:10px;bottom:10px;width:300px;overflow-y:auto;background:var(--bg);
+    border:2px solid var(--edge);padding:10px 12px 14px;scrollbar-width:thin;scrollbar-color:var(--edge) transparent}
+  #panel h1{font-family:"Silkscreen",monospace;font-weight:400;font-size:15px;margin:0 0 2px;color:var(--accent);letter-spacing:.5px}
+  #panel .sub{color:var(--dim);font-size:11px;margin-bottom:10px}
+  details{border-top:1px dashed var(--edge);padding:6px 0 2px}
+  summary{font-family:"Silkscreen",monospace;cursor:pointer;color:var(--ink);font-size:12px;list-style:none;padding:2px 0 6px;user-select:none}
+  summary::before{content:"▸ ";color:var(--accent)}
+  details[open] summary::before{content:"▾ "}
+  .row{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 8px;margin:0 0 8px}
+  .row label{color:var(--dim)}
+  .row .val{color:var(--ink);font-variant-numeric:tabular-nums;min-width:44px;text-align:right}
+  .row input[type=range]{grid-column:1 / -1;width:100%;accent-color:var(--accent);margin:2px 0 0;height:18px}
+  .row select,.preset select{background:#2a1e18;color:var(--ink);border:1px solid var(--edge);font:inherit;padding:4px 6px;width:100%}
+  .row.sel{grid-template-columns:1fr 1.2fr}
+  .row input[type=color]{width:44px;height:22px;border:1px solid var(--edge);background:none;padding:0}
+  .tog{display:flex;justify-content:space-between;align-items:center;margin:0 0 8px;cursor:pointer;color:var(--dim)}
+  .tog input{display:none}
+  .tog .sw{width:34px;height:16px;background:#3a2a20;border:1px solid var(--edge);position:relative;flex:none}
+  .tog .sw::after{content:"";position:absolute;left:2px;top:2px;width:10px;height:10px;background:var(--dim)}
+  .tog input:checked + .sw{background:#6a3e1e}
+  .tog input:checked + .sw::after{left:20px;background:var(--accent)}
+  .preset{margin:0 0 10px}
+  .preset label{display:block;font-family:"Silkscreen",monospace;color:var(--accent2);margin-bottom:4px}
+  #toggle{display:none}
+  @media (max-width:720px){
+    #panel{left:0;right:0;top:auto;bottom:0;width:auto;max-height:52vh;border-left:none;border-right:none;border-bottom:none;
+      transform:translateY(0);transition:transform .2s}
+    #panel.hidden{transform:translateY(100%)}
+    #toggle{display:block;position:fixed;right:10px;top:10px;z-index:3;background:var(--bg);color:var(--accent);
+      border:2px solid var(--edge);font-family:"Silkscreen",monospace;font-size:12px;padding:6px 10px}
+    #hint{display:none}
+  }
+  #err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px;color:var(--ink)}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="hud">FPS <b id="fps">--</b> · <span id="res">--</span> · <span id="tris"></span><pre id="prof"></pre></div>
+<div id="hint">Drag: orbit · Right-drag / two fingers: pan · Scroll / pinch: zoom</div>
+<button id="toggle">Tune ▾</button>
+<div id="panel">
+  <h1>Pixel Diorama</h1>
+  <div class="sub">Low-res render → outlines → grade → dither → palette → nearest upscale</div>
+  <div class="preset"><label for="preset">Style preset</label><select id="preset"></select></div>
+  <div id="controls"></div>
+</div>
+<div id="err"></div>
+
+<!-- =====================================================================
+     SHADERS (plain GLSL, kept separate so they port cleanly to Godot)
+     ===================================================================== -->
+
+<!-- Pass 1: scene material. Toon-banded sun + ambient + point lights,
+     per-voxel colour jitter, grass side strips, ore flecks, emissives. -->
+<script type="x-shader/x-vertex" id="toon-vs">
+  attribute vec3 aColor;   // base albedo (display-space RGB)
+  attribute vec4 aAux;     // x: vertex AO 0..1, y: sky exposure 0..1, z: emissive flag, w: material class
+  attribute float aType;   // block type (atlas row); 0 on props/dwarfs = untextured
+  attribute vec3 aTexPos;  // terrain: voxel-space position for texture UVs
+  attribute vec3 aLook;    // terrain: axis normal choosing projection + top/side/bottom tile
+  attribute vec3 aCell;    // terrain: owning voxel (+0.5), or -999 = derive from aTexPos
+  varying float vType;
+  varying vec3 vTexPos, vLook, vCell;
+  varying vec3 vColor;
+  varying vec4 vAux;
+  varying vec3 vWPos;
+  varying vec3 vWNrm;
+  invariant gl_Position;   // identical depth in the pre-pass and the colour pass
+  void main(){
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWPos = wp.xyz;
+    vWNrm = normalize(mat3(modelMatrix) * normal);
+    vColor = aColor;
+    vAux = aAux;
+    vType = aType; vTexPos = aTexPos; vLook = aLook; vCell = aCell;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }
+</script>
+<!-- Shared toon lighting (uniforms + helpers), prepended to the scene and foliage shaders. -->
+<script type="x-shader/x-fragment" id="toon-common">
+  uniform vec3  uSunDir;        // direction TO the light (sun or moon), world space
+  uniform vec3  uSunColor;      // colour * intensity
+  uniform vec3  uAmbientColor;
+  uniform float uAmbient;
+  uniform float uBands;         // number of toon bands
+  uniform float uTime;
+  uniform float uObjExposure;   // per-object sky exposure multiplier (dwarfs underground)
+  uniform float uShadowOn;
+  uniform float uTorch;         // global torch / forge multiplier
+  uniform sampler2D uShadowMap; // sun depth map
+  uniform mat4  uShadowMatrix;  // world -> sun clip
+  uniform vec3  uPointPos[4];
+  uniform vec3  uPointCol[4];
+  uniform float uPointRange[4];
+  uniform vec3  uDirtCol;
+  uniform vec3  uOreHost;
+  uniform vec3  uChunkOrigin;   // world position of voxel (0,0,0)
+  float hash3(vec3 p){
+    p = fract(p * 0.3183099 + 0.1);
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+  // Quantise a 0..1 light amount into uBands flat steps.
+  float band(float x){ return clamp(floor(x * uBands + 0.5) / uBands, 0.0, 1.0); }
+
+  float sunShadow(vec3 wp, vec3 n){
+    vec4 lp = uShadowMatrix * vec4(wp + n * 0.08, 1.0);   // normal offset vs acne
+    vec3 c = lp.xyz / lp.w * 0.5 + 0.5;
+    if (c.x < 0.0 || c.y < 0.0 || c.x > 1.0 || c.y > 1.0 || c.z > 1.0) return 1.0;
+    return (c.z - 0.0015 > texture2D(uShadowMap, c.xy).r) ? 0.0 : 1.0;
+  }
+
+  // Full toon light: ambient (scaled by sky exposure & AO) + banded, shadowed sun + banded point lights.
+  uniform float uRim, uSpec;   // cel rim light and hard specular highlight (0 = off)
+  vec3 toonLighting(vec3 N, vec3 wp, float ao, float sky){
+    vec3 light = uAmbientColor * uAmbient * mix(0.12, 1.0, sky) * ao;
+    float ndl = max(dot(N, uSunDir), 0.0);
+    // Faces turned away from the sun skip the shadow-map read (unless glints need it).
+    float sh  = (uShadowOn > 0.5 && (ndl > 0.0 || uSpec > 0.0)) ? sunShadow(wp, N) : 1.0;
+    float skyK = smoothstep(0.02, 0.35, sky);
+    light += uSunColor * band(ndl * sh) * mix(0.55, 1.0, ao) * skyK;
+    if (uRim > 0.0 || uSpec > 0.0) {
+      vec3 V = normalize(cameraPosition - wp);
+      float rim = step(0.62, 1.0 - max(dot(N, V), 0.0)) * (0.35 + 0.65 * ndl);
+      light += (uSunColor + uAmbientColor * 0.4) * rim * uRim * 0.7 * skyK;
+      float sp = pow(max(dot(N, normalize(uSunDir + V)), 0.0), 40.0);
+      light += uSunColor * step(0.55, sp) * sh * uSpec * 1.6 * skyK;
+    }
+    for (int i = 0; i < 4; i++) {
+      vec3 L = uPointPos[i] - wp;
+      float d = length(L);
+      if (d >= uPointRange[i]) continue;                 // most pixels are out of every torch's reach
+      float att = clamp(1.0 - d / uPointRange[i], 0.0, 1.0);
+      att *= att;
+      float pn = max(dot(N, L / max(d, 1e-3)), 0.0) * 0.7 + 0.3;
+      light += uPointCol[i] * band(att * pn * 1.6) * uTorch;
+    }
+    return light;
+  }
+  float bayer2(vec2 a){ a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
+  float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+</script>
+<script type="x-shader/x-fragment" id="toon-fs">
+  // Material classes (aAux.w): 0 generic voxel, 1 water, 2 prop (no jitter), 3 grass, 4 ore
+  uniform sampler2D uAtlas;      // block texture atlas: columns top/side/bottom, rows = block type
+  uniform vec2  uAtlasSize;
+  uniform float uTileT;          // tile resolution (4, 8, 16)
+  uniform float uTexStrength;    // 0 = flat colour
+  uniform float uObjAlpha;       // material ID for non-terrain objects (dwarf / trunk / torch)
+  varying float vType;
+  varying vec3 vTexPos, vLook, vCell;
+  varying vec3 vColor;
+  varying vec4 vAux;
+  varying vec3 vWPos;
+  varying vec3 vWNrm;
+
+  void main(){
+    vec3 N = normalize(vWNrm);               // smooth normal (rounded edges blend) for lighting
+  #ifdef MRT
+    outNormal = vec4(N * 0.5 + 0.5, vType > 0.5 ? (floor(vType + 0.5) + 1.0) * 8.0 / 255.0 : uObjAlpha);  // combined pass: normals + material ID
+  #endif
+    vec3 Ng = normalize(cross(dFdx(vWPos), dFdy(vWPos)));   // flat geometric normal for voxel lookups
+    if (dot(Ng, N) < 0.0) Ng = -Ng;
+    vec3 vp = vWPos - uChunkOrigin;          // voxel-space position
+    // Terrain carries baked lookup data (stable on bevels); props fall back to derivatives.
+    bool terrain = vType > 0.5;
+    vec3 Lk = terrain ? normalize(vLook) : Ng;           // axis normal for projection / tile choice
+    vec3 tp = terrain ? vTexPos : vp;                    // position for face UVs
+    vec3 cell = terrain ? (vCell.x > -100.0 ? floor(vCell) : floor(tp - Lk * 0.5))
+                        : floor(vp - Ng * 0.3);          // voxel this surface belongs to
+    float cls = vAux.w;
+    vec3 albedo = vColor;
+    float jitter = 0.93 + 0.14 * hash3(cell);
+    if (cls < 0.5 || cls > 2.5) albedo *= jitter;
+
+    // Grass: dirt sides with a ragged green lip, dirt underneath.
+    if (abs(cls - 3.0) < 0.5 && Lk.y < 0.5) {
+      vec2 fc = abs(Lk.x) > 0.5 ? tp.zy : tp.xy;
+      float lip = 0.70 - 0.14 * step(0.5, hash3(vec3(floor(fc.x * 4.0), cell.y, 3.0)));
+      if (Lk.y < -0.5 || fract(tp.y) < lip) albedo = uDirtCol * jitter;
+    }
+    // Ore: 4x4 grid of flecks per face over host stone.
+    if (abs(cls - 4.0) < 0.5) {
+      vec2 fc = abs(Lk.x) > 0.5 ? tp.zy : (abs(Lk.y) > 0.5 ? tp.xz : tp.xy);
+      vec2 g = floor(fract(fc) * 4.0);
+      if (hash3(vec3(g, dot(cell, vec3(1.0, 7.0, 13.0)))) < 0.6) albedo = uOreHost * jitter;
+    }
+    // Block textures. Face-local UVs come from world position, so greedy-merged quads
+    // tile correctly. Top/bottom tiles get a random 90° turn per voxel to hide repeats.
+    if (vType > 0.5 && uTexStrength > 0.0) {
+      vec3 an = abs(Lk);
+      vec2 fuv; float face = 1.0;
+      if (an.y >= an.x && an.y >= an.z) { fuv = tp.xz; face = Lk.y > 0.0 ? 0.0 : 2.0; }
+      else if (an.x >= an.z) fuv = tp.zy;
+      else fuv = tp.xy;
+      vec2 f = fract(fuv);
+      if (face != 1.0) {
+        float r = floor(hash3(cell + 5.3) * 4.0);
+        if (r == 1.0) f = vec2(f.y, 1.0 - f.x); else if (r == 2.0) f = 1.0 - f; else if (r == 3.0) f = vec2(1.0 - f.y, f.x);
+      }
+      vec2 texel = min(floor(f * uTileT), vec2(uTileT - 1.0));
+      vec2 apx = vec2(face * uTileT, floor(vType + 0.5) * uTileT) + texel + 0.5;
+      vec3 tex = texture2D(uAtlas, apx / uAtlasSize).rgb;
+      albedo = mix(albedo, tex * mix(1.0, jitter, 0.5), uTexStrength);
+    }
+
+    // Emissives (forge embers, torch flames): unlit, gentle flicker.
+    if (vAux.z > 0.5) {
+      float fl = 0.92 + 0.08 * sin(uTime * 11.0 + cell.x * 1.7 + cell.z) * sin(uTime * 7.3 + cell.y);
+      gl_FragColor = vec4(albedo * 1.2 * fl, 1.0);
+      return;
+    }
+
+    float ao  = vAux.x;
+    float sky = vAux.y * uObjExposure;
+
+    vec3 light = toonLighting(N, vWPos, ao, sky);
+
+    // Water: blocky animated glints on the surface.
+    if (abs(cls - 1.0) < 0.5 && Lk.y > 0.5) {
+      float w = sin(vp.x * 2.1 + uTime * 1.4) * sin(vp.z * 1.7 - uTime * 1.1) + 0.5 * sin((vp.x + vp.z) * 3.3 + uTime * 2.0);
+      albedo *= 0.92 + 0.08 * step(0.0, w);
+      albedo = mix(albedo, albedo * 1.35 + 0.08, step(0.95, w));
+    }
+
+    gl_FragColor = vec4(albedo * light, 1.0);
+  }
+</script>
+
+<!-- Foliage (tree canopies, bushes). One source, compiled three ways with
+     PASS_COLOR / PASS_NORMAL / PASS_DEPTH so the dithered holes match in the colour,
+     normal and shadow passes. Techniques (uFolMode):
+       0 = dithered shell: screen-door transparency from world-space leaf cells mixed
+           with a screen Bayer pattern; thins out toward the silhouette (edge fade).
+       1 = solid: opaque blobs, toon banded.
+       2 = leaf cards: many small alpha-tested quads with a procedural leaf shape.
+     Normals can blend from faceted to "spherical" (pointing out from the canopy
+     centre), the usual trick for soft, readable stylised foliage. -->
+<script type="x-shader/x-vertex" id="foliage-vs">
+  attribute vec3 aColor;
+  attribute vec3 aSphere;   // canopy-centred normal
+  attribute vec4 aAux;      // x: layer (0 outer, 1 inner core), y: sway weight, z: is leaf card, w: per-tree seed
+  uniform float uTime, uSway;
+  varying vec3 vColor, vWPos, vRest, vNFlat, vNSphere;
+  varying vec4 vAux;
+  varying vec2 vUv;
+  invariant gl_Position;
+  void main(){
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vRest = wp.xyz;                                   // un-swayed: leaf cells stick to the canopy
+    float s = aAux.y * uSway;
+    float ph = aAux.w * 6.283;
+    wp.x += (sin(uTime * 1.3 + wp.z * 0.35 + ph) + 0.4 * sin(uTime * 3.1 + wp.y)) * 0.12 * s;
+    wp.z += cos(uTime * 1.1 + wp.x * 0.35 + ph) * 0.10 * s;
+    wp.y += sin(uTime * 2.3 + wp.x + wp.z) * 0.03 * s;
+    vWPos = wp.xyz;
+    vNFlat = normalize(mat3(modelMatrix) * normal);
+    vNSphere = normalize(mat3(modelMatrix) * aSphere);
+    vColor = aColor; vAux = aAux; vUv = uv;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }
+</script>
+<script type="x-shader/x-fragment" id="foliage-fs">
+  uniform float uFolMode, uDensity, uLeafSize, uEdgeFade, uScreenMix, uSphere, uTransl, uInnerDark, uHueVar;
+  uniform vec2  uScreenOffset;    // whole-texel camera offset, keeps the screen pattern locked to the world
+  varying vec3 vColor, vWPos, vRest, vNFlat, vNSphere;
+  varying vec4 vAux;
+  varying vec2 vUv;
+
+  void main(){
+    vec3 Nf = normalize(vNFlat);
+    if (!gl_FrontFacing) Nf = -Nf;                     // leaf cards are double sided
+    vec3 Ns = normalize(vNSphere);
+    vec3 N  = normalize(mix(Nf, Ns, uSphere));
+    float layer = vAux.x;
+    vec3 leafCell = floor(vRest / uLeafSize);
+    float h = hash3(leafCell + vAux.w * 17.0);
+
+    if (vAux.z > 0.5) {
+      // Leaf card: teardrop leaf silhouette from UVs.
+      vec2 q = vUv * 2.0 - 1.0;
+      if (length(vec2(q.x / (0.62 * (1.0 - 0.4 * q.y)), q.y)) > 1.0) discard;
+    } else if (uFolMode < 0.5) {
+      // Dithered shell. Coverage drops toward the silhouette, the inner core is denser.
+      vec3 V = normalize(cameraPosition - vWPos);
+      float facing = abs(dot(Ns, V));
+      float a = uDensity * mix(1.0, smoothstep(0.05, 0.75, facing), uEdgeFade);
+      if (layer > 0.5) a = mix(a, 1.0, 0.55);
+  #ifdef PASS_DEPTH
+      float thr = h;                                   // world-only pattern: dappled, stable shadows
+  #else
+      float thr = mix(h, bayer4(gl_FragCoord.xy + uScreenOffset), uScreenMix);
+  #endif
+      if (thr > a) discard;
+    }
+
+  #if defined(PASS_COLOR) && defined(MRT)
+    outNormal = vec4(N * 0.5 + 0.5, (floor(vAux.w) + 1.0) / 255.0);   // foliage species ID
+  #endif
+  #if defined(PASS_NORMAL)
+    gl_FragColor = vec4(N * 0.5 + 0.5, (floor(vAux.w) + 1.0) / 255.0); // foliage species ID           // alpha 0 = foliage (post pass uses it)
+  #elif defined(PASS_DEPTH)
+    gl_FragColor = vec4(1.0);
+  #else
+    // Per-leaf colour variation toward yellow-green / blue-green, darker inner core.
+    float hv = hash3(leafCell + 3.1) - 0.5;
+    vec3 albedo = vColor * (1.0 + hv * 0.35 * uHueVar);
+    albedo = mix(albedo, albedo * vec3(1.15, 1.08, 0.7), max(hv, 0.0) * uHueVar);
+    albedo *= mix(1.0, 0.55, layer * uInnerDark);
+    vec3 light = toonLighting(N, vWPos, mix(1.0, 0.7, layer), 1.0);
+    // Back-light translucency: leaves glow when the sun is behind them.
+    light += uSunColor * band(max(dot(-N, uSunDir), 0.0) * uTransl) * 0.6;
+    gl_FragColor = vec4(albedo * light, 1.0);
+  #endif
+  }
+</script>
+
+<!-- Pass 1b: world-space normals for edge detection (rendered at the same low res).
+     World space (not view space) keeps crease decisions stable while orbiting. -->
+<script type="x-shader/x-vertex" id="normal-vs">
+  attribute float aType;   // block type (terrain only; 0 elsewhere)
+  varying vec3 vN;
+  varying float vType;
+  void main(){
+    vN = normalize(mat3(modelMatrix) * normal);
+    vType = aType;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+</script>
+<script type="x-shader/x-fragment" id="normal-fs">
+  // Alpha carries a material ID: 0 = foliage, (type+1)*8/255 = terrain block, 1 = props/dwarfs.
+  uniform float uObjAlpha;
+  varying vec3 vN;
+  varying float vType;
+  void main(){ gl_FragColor = vec4(normalize(vN) * 0.5 + 0.5, vType > 0.5 ? (floor(vType + 0.5) + 1.0) * 8.0 / 255.0 : uObjAlpha); }
+</script>
+
+<!-- Shared fullscreen-triangle vertex shader. -->
+<script type="x-shader/x-vertex" id="quad-vs">
+  varying vec2 vUv;
+  void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+</script>
+
+<!-- Pass 2 (low res): outlines -> colour grade -> Bayer dither -> palette snap. -->
+<script type="x-shader/x-fragment" id="post-fs">
+  uniform sampler2D tColor;
+  uniform sampler2D tDepth;
+  uniform sampler2D tNormal;
+  uniform vec2  uRes;            // low-res target size in texels
+  uniform float uNear, uFar, uOrtho;
+  uniform float uTexelWorld;     // ortho: world units per texel; perspective: per texel per unit depth
+  uniform float uOutlineOn, uOuter, uInner, uDepthThr, uNormalThr;
+  uniform vec3  uOutlineColor;
+  uniform float uSat, uContrast, uBright;
+  uniform float uPaletteOn, uDither, uBayer, uSpread;
+  uniform highp sampler3D uPalLUT;   // 32^3 lookup: any colour -> nearest palette entry (baked on CPU)
+  uniform vec2  uDitherOffset;   // whole-texel camera offset: keeps dither locked to the world
+  uniform float uFolOutline;     // foliage outlines: 0 none, 1 canopy silhouette only, 2 every leaf cluster
+  uniform float uOutlineW;       // outer outline width in texels (1 or 2)
+  // Art-style effects (all 0 = off)
+  uniform float uFog, uFogRef;   // depth fog amount; distance to the orbit target
+  uniform vec3  uFogColor;
+  uniform float uWobble;         // painterly UV jitter, in texels
+  uniform float uEdgeDarken;     // watercolour pigment pooling at colour edges
+  uniform float uHatch;          // ink cross-hatching
+  uniform vec3  uPaper;
+  uniform float uToneMix;        // duotone: luminance mapped from uToneA (dark) to uToneB (light)
+  uniform vec3  uToneA, uToneB;
+  uniform float uGrain, uGrainAnim, uTime;
+  uniform vec2  uUvScale;       // rendered sub-region / full target (far view renders fewer pixels)
+  varying vec2 vUv;
+
+  float hash2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float vnoise(vec2 p){
+    vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash2(i), hash2(i + vec2(1, 0)), f.x), mix(hash2(i + vec2(0, 1)), hash2(i + 1.0), f.x), f.y);
+  }
+
+  float rawDepth(vec2 uv){ return texture2D(tDepth, uv).r; }
+  float linFromRaw(float d){
+    if (uOrtho > 0.5) return uNear + d * (uFar - uNear);
+    float z = d * 2.0 - 1.0;
+    return 2.0 * uNear * uFar / (uFar + uNear - z * (uFar - uNear));
+  }
+  float linDepth(vec2 uv){ return linFromRaw(rawDepth(uv)); }
+  vec3 nrm(vec2 uv){ return texture2D(tNormal, uv).xyz * 2.0 - 1.0; }
+  float isFol(vec2 uv){ return step(texture2D(tNormal, uv).a, 0.02); }   // normal alpha ~0 marks foliage
+
+  // Outer silhouette along one screen axis. A neighbour must be farther than the
+  // threshold AND the second difference must agree — a tilted flat surface has a
+  // large first difference but ~zero second difference, so it no longer gets inked
+  // at grazing angles or when zoomed out.
+  float outerAxis(float d, float da, float db, float thr){
+    bool farther = (da - d > thr) || (db - d > thr);
+    return (farther && (da + db - 2.0 * d) > thr) ? 1.0 : 0.0;
+  }
+  // Inner crease against one neighbour. Normals are WORLD space, and the 1-px side
+  // is chosen with a fixed world bias (favours top faces), so the line never flips
+  // sides as the camera orbits.
+  float creaseN(float d, vec3 n, float dn, vec3 nn, float thr){
+    if (abs(dn - d) > thr || dot(n - nn, vec3(0.31, 1.0, 0.17)) <= 0.02) return 0.0;
+    return 1.0 - dot(n, nn);
+  }
+
+  float bayer2(vec2 a){ a = floor(a); return fract(dot(a, vec2(0.5, a.y * 0.75))); }
+  float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+  float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+
+
+  void main(){
+    vec2 uvq = vUv * uUvScale;
+    vec2 wp = floor(gl_FragCoord.xy) + uDitherOffset;            // world-locked pixel coords
+    vec2 cuv = uvq;
+    if (uWobble > 0.0) {                                           // painterly: broken, wobbly colour edges
+      vec2 w = vec2(vnoise(wp * 0.21), vnoise(wp * 0.21 + 17.3)) * 2.0 - 1.0;
+      cuv += w * uWobble / uRes;
+    }
+    vec3 col = texture2D(tColor, cuv).rgb;
+    float dC = rawDepth(uvq);
+
+    // --- Depth fog (aerial perspective) ---
+    if (uFog > 0.0 && dC < 0.99999) {
+      float f = smoothstep(-32.0, 56.0, linFromRaw(dC) - uFogRef);
+      col = mix(col, uFogColor, f * uFog);
+    }
+
+    // --- Watercolour edge darkening ---
+    if (uEdgeDarken > 0.0) {
+      vec2 px = 1.0 / uRes;
+      vec3 avg = (texture2D(tColor, cuv + vec2(px.x, 0.0)).rgb + texture2D(tColor, cuv - vec2(px.x, 0.0)).rgb +
+                  texture2D(tColor, cuv + vec2(0.0, px.y)).rgb + texture2D(tColor, cuv - vec2(0.0, px.y)).rgb) * 0.25;
+      col *= 1.0 - uEdgeDarken * 0.45 * smoothstep(0.04, 0.25, length(col - avg));
+    }
+
+    // --- Outlines ---
+    if (uOutlineOn > 0.5 && dC < 0.99999) {
+      float d = linFromRaw(dC);
+      vec4 nC = texture2D(tNormal, uvq);
+      vec3 n = nC.xyz * 2.0 - 1.0;
+      // World size of one low-res texel at this depth. Thresholds grow when a texel
+      // covers more world, so distant detail doesn't drown in outlines.
+      float tw = uOrtho > 0.5 ? uTexelWorld : d * uTexelWorld;
+      float thr = uDepthThr * max(1.0, tw * 6.0);
+      vec2 px = 1.0 / uRes;
+      vec2 ox = vec2(px.x, 0.0), oy = vec2(0.0, px.y);
+      float fol = step(nC.a, 0.02);
+      // 1-texel neighbours, sampled once and shared by the silhouette and crease tests.
+      // Normal RGBA is fetched once per neighbour: xyz = normal, a = foliage flag.
+      float d1R = linDepth(uvq + ox), d1L = linDepth(uvq - ox), d1U = linDepth(uvq + oy), d1D = linDepth(uvq - oy);
+      bool folSil = fol > 0.5 && uFolOutline < 1.5;
+      bool wantCrease = fol < 0.5 && uInner != 0.0;
+      vec4 qR = vec4(0.5, 0.5, 0.5, 1.0), qL = qR, qU = qR, qD = qR;
+      if (wantCrease || folSil) {
+        qR = texture2D(tNormal, uvq + ox); qL = texture2D(tNormal, uvq - ox);
+        qU = texture2D(tNormal, uvq + oy); qD = texture2D(tNormal, uvq - oy);
+      }
+      float inner = 0.0;
+      if (wantCrease) {
+        inner = max(max(creaseN(d, n, d1R, qR.xyz * 2.0 - 1.0, thr), creaseN(d, n, d1L, qL.xyz * 2.0 - 1.0, thr)),
+                    max(creaseN(d, n, d1U, qU.xyz * 2.0 - 1.0, thr), creaseN(d, n, d1D, qD.xyz * 2.0 - 1.0, thr)));
+      }
+      float outer = 0.0;
+      for (int k = 1; k <= 2; k++) {                     // width 2 also tests neighbours 2 texels out
+        if (float(k) > uOutlineW) break;
+        vec2 kx = ox * float(k), ky = oy * float(k);
+        float dR = k == 1 ? d1R : linDepth(uvq + kx), dL = k == 1 ? d1L : linDepth(uvq - kx);
+        float dU = k == 1 ? d1U : linDepth(uvq + ky), dD = k == 1 ? d1D : linDepth(uvq - ky);
+        if (folSil) {
+          // Silhouette mode: leaf-on-leaf depth jumps don't count, only leaves against
+          // terrain / sky. Without this every dither hole would get an outline.
+          if (k == 1) { dR = mix(dR, d, step(qR.a, 0.02)); dL = mix(dL, d, step(qL.a, 0.02)); dU = mix(dU, d, step(qU.a, 0.02)); dD = mix(dD, d, step(qD.a, 0.02)); }
+          else { dR = mix(dR, d, isFol(uvq + kx)); dL = mix(dL, d, isFol(uvq - kx)); dU = mix(dU, d, isFol(uvq + ky)); dD = mix(dD, d, isFol(uvq - ky)); }
+        }
+        outer = max(outer, max(outerAxis(d, dR, dL, thr), outerAxis(d, dU, dD, thr)));
+      }
+      float innerFade = clamp(1.6 - tw * 4.0, 0.0, 1.0);   // creases fade out when voxels get tiny on screen
+      if (fol > 0.5) { inner = 0.0; if (uFolOutline < 0.5) outer = 0.0; }
+      if (outer > 0.5) {
+        col = mix(col, uOutlineColor, uOuter);
+      } else if (inner > uNormalThr) {
+        float k = uInner * innerFade;
+        if (k >= 0.0) col = mix(col, uOutlineColor, k);                                // ink crease
+        else col = mix(col, min(col * 1.5 + 0.06, vec3(1.0)), -k);                     // highlight crease
+      }
+    }
+
+    // --- Colour grade ---
+    col = (col - 0.5) * uContrast + 0.5;
+    col *= uBright;
+    float l = dot(col, vec3(0.299, 0.587, 0.114));
+    col = clamp(mix(vec3(l), col, uSat), 0.0, 1.0);
+
+    // --- Duotone ---
+    if (uToneMix > 0.0) {
+      float lt = dot(col, vec3(0.299, 0.587, 0.114));
+      col = mix(col, mix(uToneA, uToneB, lt), uToneMix);
+    }
+
+    // --- Ink cross-hatching: line sets switch on as luminance drops ---
+    if (uHatch > 0.0) {
+      float lh = dot(col, vec3(0.299, 0.587, 0.114));
+      float ink = 0.0;
+      if (lh < 0.72 && mod(wp.x + wp.y, 4.0) < 1.0) ink = 1.0;
+      if (lh < 0.48 && mod(wp.x - wp.y, 4.0) < 1.0) ink = 1.0;
+      if (lh < 0.28 && mod(wp.y, 2.0) < 1.0) ink = 1.0;
+      if (lh < 0.12) ink = 1.0;
+      vec3 drawn = mix(uPaper, uOutlineColor, ink);
+      col = mix(col, drawn * mix(vec3(1.0), col / max(lh, 0.05), 0.15), uHatch);
+    }
+
+    // --- Film / paper grain ---
+    if (uGrain > 0.0) {
+      vec2 gp = wp + (uGrainAnim > 0.5 ? floor(uTime * 12.0) * vec2(37.0, 91.0) : vec2(0.0));
+      col += (hash2(gp) - 0.5) * uGrain * 0.22;
+      col = clamp(col, 0.0, 1.0);
+    }
+
+    // --- Ordered dither + palette quantisation ---
+    if (uPaletteOn > 0.5) {
+      vec2 p = floor(gl_FragCoord.xy) + uDitherOffset;
+      float b = uBayer < 3.0 ? bayer2(p) : (uBayer < 6.0 ? bayer4(p) : bayer8(p));
+      b -= 0.5 * (1.0 - 1.0 / (uBayer * uBayer));      // centre around zero
+      vec3 c = clamp(col + b * uDither * uSpread, 0.0, 1.0);
+      col = texture(uPalLUT, c * (31.0 / 32.0) + 0.5 / 32.0).rgb;   // one lookup instead of a 64-colour search
+    }
+    gl_FragColor = vec4(col, 1.0);
+  }
+</script>
+
+<!-- Pass 3 (screen res): nearest-neighbour upscale with sub-texel camera compensation. -->
+<script type="x-shader/x-fragment" id="upscale-fs">
+  // Screen-res pass: nearest upscale of the finished pixel art, with
+  //  - sub-texel camera compensation (from pixel snapping),
+  //  - MAGNIFICATION: past the ASCII zoom threshold the art is rendered at a fixed
+  //    resolution and this pass enlarges it, so zooming makes pixels bigger instead
+  //    of adding detail,
+  //  - ASCII: once an art pixel is big enough on screen, it is drawn as ONE character
+  //    (chosen by that pixel's brightness and material) in that pixel's colour,
+  //  - optional CRT + vignette.
+  uniform sampler2D tPost, tNormal, tDepth, tGlyphs;
+  uniform vec2  uLowRes;   // low-res target size (includes 1 texel margin on each side)
+  uniform float uPS;       // screen pixels per low-res texel (before magnification)
+  uniform float uMag;      // magnification (1 = none)
+  uniform vec2  uHalf;     // half the visible size in texels (screen / uPS / 2)
+  uniform vec2  uSub;      // leftover sub-texel camera offset from snapping
+  uniform vec2  uScreen;   // screen size in pixels
+  uniform float uCRT;      // CRT: curvature, scanlines, aperture grille, colour fringing
+  uniform float uVignette;
+  uniform float uGlyphAmt; // 0..1 share of pixels drawn as characters
+  uniform vec2  uOffFull;  // whole-texel camera offset (world-locks the per-pixel random order)
+  uniform float uGamma, uInvert, uColorAmt, uBgTint, uBoost, uEdgesOn, uEdgeThr, uMaterials, uTime;
+  uniform float uNear, uFar, uOrtho;
+  uniform float uMatch;    // 0 = stylised colours, 1 = each character cell averages to exactly the pixel's brightness
+  uniform float uSoft;     // 0 = hard random dissolve, 1 = pure crossfade
+  uniform float uStyle;    // 0 = brightness ramps per material, 1 = object symbols (Dwarf Fortress style)
+  uniform float uDwarfPri; // 1 = cells containing a visible dwarf always show ☺
+  uniform vec4  uDwarf[8]; // per dwarf: xy = art-pixel coords of its centre, z = view depth, w = 1 if on screen
+  uniform vec3  uDwarfCol[8];
+  uniform vec3  uMono, uBgColor;
+
+  float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
+  vec3 tap(vec2 t){ return texture2D(tPost, (floor(t) + 0.5) / uLowRes).rgb; }
+  float h21(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float lin(float d){
+    if (uOrtho > 0.5) return uNear + d * (uFar - uNear);
+    float z = d * 2.0 - 1.0;
+    return 2.0 * uNear * uFar / (uFar + uNear - z * (uFar - uNear));
+  }
+
+  // One art pixel -> one character. t = art-pixel coordinate (cell = floor, glyph uv = fract).
+  vec3 asciiPixel(vec2 t, vec3 c){
+    vec2 cell = floor(t);
+    // Per-pixel reveal: each pixel has its own threshold h; uSoft widens the window so
+    // pixels fade instead of popping (1 = every pixel crossfades together).
+    float h = h21(cell + uOffFull) * (1.0 - uSoft);
+    float k = smoothstep(h, h + uSoft + 1e-4, uGlyphAmt);
+    if (k <= 0.0) return c;
+    vec2 px = 1.0 / uLowRes, uv = (cell + 0.5) * px;
+    float dRaw = texture2D(tDepth, uv).r;
+    float a = texture2D(tNormal, uv).a;
+    // Material ID (normal alpha): ~0 foliage (species 1-4 / 255), (type+1)*8/255 terrain,
+    // 255/250/245/240 = generic prop / dwarf / tree trunk / torch.
+    // Ramp style rows: 0-19 types, 20 foliage, 21 props, 22 sky, 23 edges.
+    // Object style rows: 24-43 types, 44-47 oak/pine/birch/bush, 48-51 prop/dwarf/trunk/torch, 52 sky.
+    float row, orow;
+    if (dRaw >= 0.99999)  { row = 22.0; orow = 52.0; }
+    else if (a < 0.02)    { row = 20.0; orow = 44.0 + clamp(floor(a * 255.0 + 0.5) - 1.0, 0.0, 3.0); }
+    else if (a > 0.9)     { row = 21.0; orow = 48.0 + clamp(floor((255.0 - a * 255.0) / 5.0 + 0.5), 0.0, 3.0); }
+    else { row = clamp(floor(a * 255.0 / 8.0 + 0.5) - 1.0, 0.0, 19.0); orow = 24.0 + row; }
+    if (uMaterials < 0.5) row = dRaw >= 0.99999 ? 22.0 : 0.0;
+    float lum = dot(c, vec3(0.299, 0.587, 0.114));
+    float lt = uInvert > 0.5 ? 1.0 - lum : lum;
+    float lv = clamp(floor(pow(clamp(lt, 0.0, 1.0), uGamma) * 8.0), 0.0, 7.0);
+    bool water = abs(row - 11.0) < 0.5;
+    if (water)                                                       // water characters ripple
+      lv = clamp(lv + floor(h21(cell + uOffFull + floor(uTime * 3.0 + (cell.x + uOffFull.x) * 0.13)) * 3.0) - 1.0, 1.0, 7.0);
+    if (uStyle > 0.5) {
+      // Object style: the symbol belongs to the object, chosen by world position (brightness
+      // is carried by colour), so a tree stays a tree from every side.
+      row = orow;
+      lv = floor(h21(cell + uOffFull + orow * 7.31 + (water ? floor(uTime * 2.0) * 3.7 : 0.0)) * 8.0);
+    }
+    bool edge = false;
+    if (uStyle < 0.5 && uEdgesOn > 0.5 && dRaw < 0.99999) {                          // silhouette pixels become edge strokes (| / - and backslash)
+      float dc = lin(dRaw);
+      float dl = lin(texture2D(tDepth, uv - vec2(px.x, 0.0)).r), dr = lin(texture2D(tDepth, uv + vec2(px.x, 0.0)).r);
+      float dd = lin(texture2D(tDepth, uv - vec2(0.0, px.y)).r), du = lin(texture2D(tDepth, uv + vec2(0.0, px.y)).r);
+      float lx = abs(dr + dl - 2.0 * dc), ly = abs(du + dd - 2.0 * dc);
+      float thr = uEdgeThr * (uOrtho > 0.5 ? 1.0 : max(dc, 1.0) * 0.015);
+      if (max(lx, ly) > thr) {
+        edge = true; row = 23.0;
+        float gx = dr - dl, gy = du - dd;
+        if (lx > ly * 2.0) lv = 0.0; else if (ly > lx * 2.0) lv = 2.0; else lv = (gx * gy > 0.0) ? 3.0 : 1.0;
+      }
+    }
+    // Dwarf priority: a character cell that contains a visible dwarf always shows ☺ in that
+    // dwarf's colour, even when the dwarf is smaller than the cell and the low-res render
+    // missed it. Hidden if the scene at that cell is clearly in front of the dwarf.
+    bool dwarf = false; vec3 dcol = vec3(0.0);
+    if (uDwarfPri > 0.5) {
+      float sceneD = dRaw >= 0.99999 ? 1e9 : lin(dRaw);
+      for (int i = 0; i < 8; i++) {
+        vec4 dw = uDwarf[i];
+        if (dw.w > 0.5 && floor(dw.x) == cell.x && floor(dw.y) == cell.y && dw.z < sceneD + 1.2) { dwarf = true; dcol = uDwarfCol[i]; }
+      }
+      if (dwarf) { row = 49.0; lv = 0.0; edge = false; }
+    }
+    // Glyph coverage from a mip-mapped atlas: when a character is only a few screen px
+    // its strokes average to the glyph's coverage instead of aliasing, so a small character
+    // blends to one flat colour and larger ones resolve into crisp strokes.
+    vec2 atlas = vec2(64.0, 424.0);
+    float pps = uPS * uMag;
+    float lod = clamp(log2(8.0 / pps), 0.0, 3.0);
+    vec2 f = fract(t);
+    float on  = textureLod(tGlyphs, (vec2(lv, row) * 8.0 + f * 8.0) / atlas, lod).r;
+    float cov = textureLod(tGlyphs, (vec2(lv, row) * 8.0 + 4.0) / atlas, 3.0).r;   // whole-glyph ink coverage
+    // Stylised colours...
+    vec3 G = mix(uMono, c * uBoost, uColorAmt) * (edge ? 1.15 : 1.0);
+    vec3 B = uBgColor + c * uBgTint;
+    // ...and the exact-brightness solution: keep their hues, scale them so
+    // cov*luma(G) + (1-cov)*luma(B) == luma(c). Glyph first; if it would exceed white,
+    // clip it and lift the background instead.
+    float lc = luma(c), lg = max(luma(G), 1e-4), lb = luma(B);
+    vec3 Ge = G * clamp((lc - (1.0 - cov) * lb) / max(cov * lg, 1e-4), 0.0, 64.0);
+    float mx = max(max(Ge.r, Ge.g), Ge.b);
+    if (mx > 1.0) Ge /= mx;
+    float need = (lc - cov * luma(Ge)) / max(1.0 - cov, 1e-4);
+    vec3 Be = lb > 1e-3 ? B * clamp(need / lb, 0.0, 64.0) : c * clamp(need / max(lc, 1e-4), 0.0, 64.0);
+    G = mix(G, Ge, uMatch); B = mix(B, clamp(Be, 0.0, 1.0), uMatch);
+    if (dwarf) { G = min(dcol * 1.35 + 0.08, vec3(1.0)); B = c * 0.35; }   // dwarfs stand out, like in DF
+    return mix(c, mix(B, G, on), k);
+  }
+
+  void main(){
+    vec2 frag = gl_FragCoord.xy;
+    vec2 sp = frag / uScreen;
+    if (uCRT > 0.0) {                                   // barrel curvature
+      vec2 c = sp * 2.0 - 1.0;
+      c *= 1.0 + uCRT * 0.07 * dot(c, c);
+      sp = c * 0.5 + 0.5;
+      if (any(lessThan(sp, vec2(0.0))) || any(greaterThan(sp, vec2(1.0)))) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }
+      frag = sp * uScreen;
+    }
+    float pps = uPS * uMag;                             // screen px per art pixel after magnification
+    vec2 t = 1.0 + uHalf + (frag - uScreen * 0.5) / pps + uSub;
+    vec3 col;
+    if (uCRT > 0.0 && uGlyphAmt <= 0.0) {
+      float ca = uCRT * 0.8 / pps;                      // ~1 screen px of colour fringing
+      col = vec3(tap(t + vec2(ca, 0.0)).r, tap(t).g, tap(t - vec2(ca, 0.0)).b);
+    } else {
+      col = tap(t);
+    }
+    if (uGlyphAmt > 0.0) col = asciiPixel(t, col);
+    if (uCRT > 0.0) {
+      float scan = mix(1.0, 0.45 + 0.55 * sin(fract(t.y) * 3.14159), uCRT * (1.0 - uGlyphAmt));   // one scanline per art row
+      float m = mod(floor(frag.x), 3.0);
+      vec3 mask = mix(vec3(1.0), vec3(m < 0.5 ? 1.0 : 0.72, abs(m - 1.0) < 0.5 ? 1.0 : 0.72, m > 1.5 ? 1.0 : 0.72), uCRT * 0.6);
+      vec3 glow = (tap(t + vec2(1.0, 0.0)) + tap(t - vec2(1.0, 0.0)) + tap(t + vec2(0.0, 1.0)) + tap(t - vec2(0.0, 1.0))) * 0.25;
+      col = (col * scan * mask + glow * 0.18 * uCRT) * (1.0 + 0.3 * uCRT);
+    }
+    if (uVignette > 0.0) {
+      vec2 c = sp * 2.0 - 1.0;
+      col *= mix(1.0, smoothstep(1.45, 0.35, length(c * vec2(1.0, 0.85))), uVignette);
+    }
+    gl_FragColor = vec4(col, 1.0);
+  }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+THREE.ColorManagement.enabled = false;   // all colours are authored & displayed in raw display space
+const src = id => document.getElementById(id).textContent;
+const hex = h => { const n = parseInt(h.replace('#',''), 16); return [(n>>16&255)/255, (n>>8&255)/255, (n&255)/255]; };
+const lerp = (a,b,t) => a + (b-a)*t;
+const lerp3 = (a,b,t) => [lerp(a[0],b[0],t), lerp(a[1],b[1],t), lerp(a[2],b[2],t)];
+const smooth = (e0,e1,x) => { const t = Math.min(1, Math.max(0, (x-e0)/(e1-e0))); return t*t*(3-2*t); };
+const mod = (a,n) => ((a % n) + n) % n;
+
+/* =====================================================================
+   SETTINGS + PRESETS
+   ===================================================================== */
+const PALETTES = {
+  warm:   { name:'Warm SNES',    anchors:['#1e1424','#6e9a3c','#8a5232','#c88a48','#77707a','#f4e6c0','#4f86a0','#3e6a46','#4e2e2a','#ecc878'] },
+  autumn: { name:'Autumn Hearth',anchors:['#1c100c','#9a8a3a','#8a4222','#e8a640','#7a6a5e','#f4d8a0','#5a7480','#c86a2a','#4a2618','#5a6a3a'] },
+  faded:  { name:'Faded Cartridge',anchors:['#3a3236','#8e9a72','#8e7a64','#bca886','#9a929a','#e6dac0','#7a8a96','#6a7a6c','#62544e'] },
+  retro:  { name:'Chunky Retro', anchors:['#1a1018','#58902c','#b0602c','#e8b048','#7a7480','#f8ecc8','#3a6a84','#5c3020'] },
+  pocket: { name:'Pocket Mono',  anchors:['#0f2a1d','#d6e29a','#5a7f3a','#a8c068'] },
+  onebit: { name:'1-Bit',        anchors:['#18141c','#efe6d2'] },
+  pastel: { name:'Pastel Clear', anchors:['#2a2430','#9cc0a8','#e8c9a0','#d98a6a','#7fa3c0','#f3ead2','#b8a67a','#a35a4a','#6f8a5a'] },
+};
+const BASE = {
+  pixel:1.5, paletteOn:true, palette:'warm', palSize:32, dither:0.35, bayer:'4',
+  outlineOn:true, outlineColor:'#2b1a16', outer:0.75, inner:-0.35, depthThr:0.6, normalThr:0.35,
+  bands:3, sun:52, warmth:0.55, ambient:0.5, torch:1.2, shadows:true, cycle:false,
+  sat:1.15, contrast:1.05, bright:1.0,
+  rim:0, spec:0, fog:0, outlineW:'1', wobble:0, edgeDarken:0, hatch:0, paper:'#efe4c8',
+  toneMix:0, toneA:'#2a1e1a', toneB:'#f0e0c0', grain:0, grainAnim:false, crt:0, vignette:0,
+  ortho:true, snap:true, autoOrbit:false, round:0.25,
+  texPack:'painted', texStrength:0.85, resScale:'auto', shadowRes:'1024', shadowEvery:'2', gbuffer:false, profiler:false, prepass:true,
+  asciiPreset:'colour', asciiMode:'both', asciiStart:2.5, asciiInLen:3, asciiGlyph:8, asciiFarStart:0.9, asciiFarEnd:0.3, asciiFarGlyph:8, asciiFarLite:true, asciiMatch:1, asciiSoft:0.6, asciiNearStyle:'ramp', asciiFarStyle:'object', asciiDwarfPri:true, asciiGamma:0.8, asciiInvert:false, asciiColor:1,
+  asciiMono:'#9fe870', asciiBg:'#0b0a0d', asciiBgTint:0.12, asciiBoost:1.3, asciiMaterials:true, asciiEdges:true, asciiEdgeThr:0.7,
+  folPreset:'dither', folMode:'0', density:0.7, leafSize:0.2, edgeFade:0.55, screenMix:0.35, sphere:0.85,
+  transl:0.5, innerDark:0.6, hueVar:0.5, sway:0.35, cardSize:0.5, folOutline:'1',
+};
+/* Foliage technique presets (independent of the style presets above). */
+const FOL_PRESETS = {
+  dither:  { label:'Dithered canopy', v:{ folMode:'0', density:0.7, leafSize:0.2, edgeFade:0.55, screenMix:0.35, sphere:0.85, transl:0.5, innerDark:0.6, hueVar:0.5, sway:0.35, folOutline:'1' } },
+  wispy:   { label:'Wispy pixels',    v:{ folMode:'0', density:0.5, leafSize:0.12, edgeFade:0.85, screenMix:0.6, sphere:0.7, transl:0.7, innerDark:0.4, hueVar:0.6, sway:0.55, folOutline:'1' } },
+  chunky:  { label:'Chunky clumps',   v:{ folMode:'0', density:0.82, leafSize:0.42, edgeFade:0.3, screenMix:0, sphere:0.9, transl:0.35, innerDark:0.7, hueVar:0.7, sway:0.25, folOutline:'2' } },
+  cards:   { label:'Leaf cards',      v:{ folMode:'2', leafSize:0.3, sphere:1, transl:0.6, innerDark:0.7, hueVar:0.6, sway:0.5, cardSize:0.5, folOutline:'1' } },
+  solid:   { label:'Solid toon',      v:{ folMode:'1', leafSize:0.3, sphere:1, transl:0.3, innerDark:0, hueVar:0.25, sway:0.2, folOutline:'2' } },
+  faceted: { label:'Faceted low poly',v:{ folMode:'1', leafSize:0.3, sphere:0, transl:0, innerDark:0, hueVar:0.15, sway:0.1, folOutline:'2' } },
+};
+/* ASCII looks (independent of the style presets). */
+const ASCII_PRESETS = {
+  colour:   { label:'Colour glyphs',   v:{ asciiGamma:0.8, asciiInvert:false, asciiColor:1, asciiBg:'#0b0a0d', asciiBgTint:0.12, asciiBoost:1.3, asciiMaterials:true, asciiEdges:true } },
+  terminal: { label:'Green terminal',  v:{ asciiGamma:0.9, asciiInvert:false, asciiColor:0, asciiMono:'#9fe870', asciiBg:'#06120a', asciiBgTint:0, asciiMaterials:true, asciiEdges:true } },
+  amber:    { label:'Amber monitor',   v:{ asciiGamma:0.85, asciiInvert:false, asciiColor:0.15, asciiMono:'#ffb347', asciiBg:'#140a02', asciiBgTint:0.04, asciiBoost:1.2, asciiMaterials:true, asciiEdges:true } },
+  paper:    { label:'Ink on paper',    v:{ asciiGamma:1.0, asciiInvert:true, asciiColor:0.25, asciiMono:'#2a1c14', asciiBg:'#efe4c8', asciiBgTint:0, asciiBoost:0.55, asciiMaterials:true, asciiEdges:true } },
+  plain:    { label:'Classic ramp',    v:{ asciiGamma:0.8, asciiInvert:false, asciiColor:1, asciiBg:'#000000', asciiBgTint:0, asciiBoost:1.4, asciiMaterials:false, asciiEdges:false } },
+};
+const ASCII_KEYS = ['asciiGamma','asciiInvert','asciiColor','asciiMono','asciiBg','asciiBgTint','asciiBoost','asciiMaterials','asciiEdges'];
+const FOL_KEYS = ['folMode','density','leafSize','edgeFade','screenMix','sphere','transl','innerDark','hueVar','sway','cardSize','folOutline'];
+const PRESETS = {
+  snes:   { label:'Warm SNES', v:{} },
+  autumn: { label:'Autumn Hearth', v:{ pixel:1.5, palette:'autumn', palSize:24, dither:0.45, outlineColor:'#2a140c', outer:0.8, inner:0.25,
+            sun:22, warmth:0.95, ambient:0.38, torch:2.2, sat:1.2, contrast:1.1, bright:0.98 } },
+  faded:  { label:'Faded Cartridge', v:{ pixel:2, palette:'faded', palSize:16, dither:0.85, outlineColor:'#4a3e3a', outer:0.45, inner:0.15,
+            sun:60, warmth:0.45, ambient:0.65, torch:1.0, sat:0.65, contrast:0.82, bright:1.08 } },
+  clean:  { label:'Clean Low Poly', v:{ pixel:1, paletteOn:false, palSize:64, dither:0, outlineColor:'#1e1410', outer:1, inner:0.5,
+            depthThr:0.5, normalThr:0.3, sun:50, warmth:0.5, sat:1.05 } },
+  pocket: { label:'Pocket Mono', v:{ pixel:2.5, palette:'pocket', palSize:4, dither:0.55, outlineColor:'#0f2a1d', outer:1, inner:0.4,
+            sun:55, warmth:0.3, ambient:0.55, sat:1, contrast:1.1, toneMix:1, toneA:'#0f2a1d', toneB:'#d6e29a' } },
+  onebit: { label:'1-Bit Dither', v:{ pixel:2, palette:'onebit', palSize:2, dither:1.0, bayer:'8', outlineColor:'#18141c', outer:1, inner:-0.6,
+            bands:4, sun:50, ambient:0.45, contrast:1.15, bright:1.05, toneMix:1, toneA:'#000000', toneB:'#ffffff' } },
+  crt:    { label:'CRT Arcade', v:{ pixel:3, palSize:48, dither:0.3, outer:0.9, inner:-0.4, sun:58, warmth:0.5,
+            sat:1.35, contrast:1.15, bright:1.05, rim:0.4, crt:1, vignette:0.35 } },
+  ink:    { label:'Ink & Parchment', v:{ pixel:1.5, paletteOn:false, outlineColor:'#2a1c14', outer:1, inner:0.7, depthThr:0.45, bands:4,
+            sun:45, warmth:0.4, ambient:0.55, sat:0.9, contrast:1.0, hatch:1, paper:'#efe2c4', grain:0.3, vignette:0.3 } },
+  gouache:{ label:'Storybook Gouache', v:{ pixel:1.5, paletteOn:false, outlineColor:'#4a3020', outer:0.45, inner:0.15, bands:4,
+            sun:48, warmth:0.7, ambient:0.6, sat:1.15, contrast:0.95, bright:1.04, wobble:1.4, edgeDarken:0.8, grain:0.35, rim:0.25, fog:0.25, vignette:0.25 } },
+  ligne:  { label:'Ligne Claire', v:{ pixel:1, palette:'pastel', palSize:24, dither:0, outlineColor:'#141014', outer:1, inner:0.9, normalThr:0.25,
+            outlineW:'2', bands:2, sun:62, warmth:0.35, ambient:0.7, sat:0.95, contrast:1.05, bright:1.05, fog:0.3 } },
+  misty:  { label:'Misty Morning', v:{ pixel:2, palette:'faded', palSize:24, dither:0.6, outlineColor:'#5a5560', outer:0.5, inner:-0.25,
+            sun:24, warmth:0.75, ambient:0.65, sat:0.8, contrast:0.9, bright:1.06, fog:0.85, rim:0.5 } },
+  cel:    { label:'Cel Shaded', v:{ pixel:1, paletteOn:false, outlineColor:'#1a1216', outer:1, inner:0.55, outlineW:'2', bands:2,
+            sun:55, warmth:0.45, ambient:0.55, sat:1.25, contrast:1.08, rim:0.8, spec:0.9 } },
+  photo:  { label:'Old Photograph', v:{ pixel:1.5, paletteOn:false, outlineColor:'#2a2018', outer:0.5, inner:0.2, bands:5, sun:50, ambient:0.6,
+            contrast:1.2, toneMix:1, toneA:'#24180f', toneB:'#f2dcb0', grain:0.5, grainAnim:true, vignette:0.8 } },
+  retro:  { label:'Chunky Retro', v:{ pixel:3, palette:'retro', palSize:8, dither:1.0, outer:1, inner:0.3, bands:2, sun:48,
+            warmth:0.6, torch:1.4, sat:1.2, contrast:1.1, bright:1.02 } },
+};
+const PRESET_KEYS = ['pixel','paletteOn','palette','palSize','dither','bayer','outlineOn','outlineColor','outer','inner',
+  'depthThr','normalThr','bands','sun','warmth','ambient','torch','sat','contrast','bright',
+  'rim','spec','fog','outlineW','wobble','edgeDarken','hatch','paper','toneMix','toneA','toneB','grain','grainAnim','crt','vignette'];
+const S = { ...BASE };
+
+const sunLabel = v => { const s = Math.sin(v*Math.PI/180); return `${Math.round(v)}° ${s>0.25?'day':s>-0.05?'dusk':'night'}`; };
+/* Block texture packs (generator settings, see bakeAtlas). */
+const TEX_PACKS = {
+  painted: { label:'Hand-painted 8px', T:8,  noise:0.10, contrast:1.0,  sat:1.0,  lift:0,    moss:0,    bevel:0, cobble:false, flowers:true  },
+  crisp:   { label:'Crisp 16px',       T:16, noise:0.13, contrast:1.25, sat:1.05, lift:0,    moss:0,    bevel:0, cobble:false, flowers:true  },
+  ruins:   { label:'Mossy ruins',      T:8,  noise:0.12, contrast:1.1,  sat:0.85, lift:-0.03,moss:0.55, bevel:0, cobble:true,  flowers:false },
+  pastel:  { label:'Pastel tiles',     T:8,  noise:0.04, contrast:0.75, sat:0.8,  lift:0.07, moss:0,    bevel:1, cobble:false, flowers:true  },
+  chunky:  { label:'Chunky 4px',       T:4,  noise:0.16, contrast:1.35, sat:1.1,  lift:0,    moss:0,    bevel:0, cobble:false, flowers:false },
+  none:    { label:'Flat colour (off)',T:4 },
+};
+const CONTROLS = [
+  { g:'Pixels', id:'pixel', label:'Pixel size', type:'range', min:1, max:3, step:0.5,
+    fmt:v=>`${(+v).toFixed(2).replace(/\.?0+$/,'')}× · ${Math.max(1,Math.round(v*dpr))} screen px` },
+  { g:'Pixels', id:'snap', label:'Camera snapping', type:'toggle' },
+  { g:'Voxels', id:'texPack', label:'Texture pack', type:'select', options:Object.entries(TEX_PACKS).map(([k,p])=>[k,p.label]) },
+  { g:'Voxels', id:'texStrength', label:'Texture strength', type:'range', min:0, max:1, step:0.01 },
+  { g:'Voxels', id:'round', label:'Edge rounding', type:'range', min:0, max:0.45, step:0.05, fmt:v=>(+v===0?'off':(+v).toFixed(2)) },
+  { g:'Palette & dither', id:'paletteOn', label:'Palette', type:'toggle' },
+  { g:'Palette & dither', id:'palette', label:'Palette set', type:'select', options:Object.entries(PALETTES).map(([k,p])=>[k,p.name]) },
+  { g:'Palette & dither', id:'palSize', label:'Colours', type:'range', min:2, max:64, step:1 },
+  { g:'Palette & dither', id:'dither', label:'Dither strength', type:'range', min:0, max:1, step:0.01 },
+  { g:'Palette & dither', id:'bayer', label:'Dither pattern', type:'select', options:[['2','2×2'],['4','4×4'],['8','8×8']] },
+  { g:'Foliage', id:'folPreset', label:'Foliage preset', type:'select', options:[...Object.entries(FOL_PRESETS).map(([k,p])=>[k,p.label]), ['custom','Custom']] },
+  { g:'Foliage', id:'folMode', label:'Technique', type:'select', options:[['0','Dithered shell'],['1','Solid'],['2','Leaf cards']] },
+  { g:'Foliage', id:'density', label:'Leaf density', type:'range', min:0.1, max:1, step:0.01 },
+  { g:'Foliage', id:'leafSize', label:'Leaf size', type:'range', min:0.06, max:0.6, step:0.01 },
+  { g:'Foliage', id:'edgeFade', label:'Edge fade', type:'range', min:0, max:1, step:0.01 },
+  { g:'Foliage', id:'screenMix', label:'World ↔ screen dither', type:'range', min:0, max:1, step:0.01 },
+  { g:'Foliage', id:'cardSize', label:'Card size', type:'range', min:0.2, max:0.9, step:0.05 },
+  { g:'Foliage', id:'sphere', label:'Spherical normals', type:'range', min:0, max:1, step:0.01 },
+  { g:'Foliage', id:'transl', label:'Back-light glow', type:'range', min:0, max:1.5, step:0.01 },
+  { g:'Foliage', id:'innerDark', label:'Inner shade', type:'range', min:0, max:1, step:0.01 },
+  { g:'Foliage', id:'hueVar', label:'Leaf colour variety', type:'range', min:0, max:1, step:0.01 },
+  { g:'Foliage', id:'sway', label:'Wind sway', type:'range', min:0, max:1.5, step:0.01 },
+  { g:'Foliage', id:'folOutline', label:'Foliage outlines', type:'select', options:[['0','None'],['1','Silhouette'],['2','Every clump']] },
+  { g:'Outlines', id:'outlineOn', label:'Outlines', type:'toggle' },
+  { g:'Outlines', id:'outlineColor', label:'Outline colour', type:'color' },
+  { g:'Outlines', id:'outlineW', label:'Outline width', type:'select', options:[['1','1 px'],['2','2 px']] },
+  { g:'Outlines', id:'outer', label:'Outer silhouette', type:'range', min:0, max:1, step:0.01 },
+  { g:'Outlines', id:'inner', label:'Inner crease (− glint / + ink)', type:'range', min:-1, max:1, step:0.01 },
+  { g:'Outlines', id:'depthThr', label:'Depth threshold', type:'range', min:0.05, max:3, step:0.05 },
+  { g:'Outlines', id:'normalThr', label:'Normal threshold', type:'range', min:0.05, max:1.5, step:0.05 },
+  { g:'Lighting', id:'bands', label:'Shading bands', type:'range', min:1, max:8, step:1 },
+  { g:'Lighting', id:'sun', label:'Sun angle', type:'range', min:0, max:360, step:1, fmt:sunLabel },
+  { g:'Lighting', id:'warmth', label:'Sun warmth', type:'range', min:0, max:1, step:0.01 },
+  { g:'Lighting', id:'ambient', label:'Ambient', type:'range', min:0, max:1.5, step:0.01 },
+  { g:'Lighting', id:'torch', label:'Torch & forge glow', type:'range', min:0, max:3, step:0.05 },
+  { g:'Lighting', id:'rim', label:'Rim light', type:'range', min:0, max:1.5, step:0.01 },
+  { g:'Lighting', id:'spec', label:'Specular glints', type:'range', min:0, max:1.5, step:0.01 },
+  { g:'Lighting', id:'shadows', label:'Sun shadows', type:'toggle' },
+  { g:'Lighting', id:'cycle', label:'Day / night cycle', type:'toggle' },
+  { g:'Grade', id:'sat', label:'Saturation', type:'range', min:0, max:2, step:0.01 },
+  { g:'Grade', id:'contrast', label:'Contrast', type:'range', min:0.5, max:1.5, step:0.01 },
+  { g:'Grade', id:'bright', label:'Brightness', type:'range', min:0.5, max:1.5, step:0.01 },
+  { g:'Art effects', id:'fog', label:'Depth fog', type:'range', min:0, max:1, step:0.01 },
+  { g:'Art effects', id:'hatch', label:'Ink hatching', type:'range', min:0, max:1, step:0.01 },
+  { g:'Art effects', id:'paper', label:'Paper colour', type:'color' },
+  { g:'Art effects', id:'wobble', label:'Paint wobble', type:'range', min:0, max:3, step:0.05 },
+  { g:'Art effects', id:'edgeDarken', label:'Watercolour edges', type:'range', min:0, max:1, step:0.01 },
+  { g:'Art effects', id:'toneMix', label:'Duotone', type:'range', min:0, max:1, step:0.01 },
+  { g:'Art effects', id:'toneA', label:'Duotone dark', type:'color' },
+  { g:'Art effects', id:'toneB', label:'Duotone light', type:'color' },
+  { g:'Art effects', id:'grain', label:'Grain', type:'range', min:0, max:1, step:0.01 },
+  { g:'Art effects', id:'grainAnim', label:'Animated film grain', type:'toggle' },
+  { g:'Art effects', id:'crt', label:'CRT screen', type:'range', min:0, max:1, step:0.01 },
+  { g:'Art effects', id:'vignette', label:'Vignette', type:'range', min:0, max:1, step:0.01 },
+  { g:'Camera', id:'ortho', label:'Orthographic (iso)', type:'toggle' },
+  { g:'ASCII', id:'asciiMode', label:'ASCII mode', type:'select',
+    options:[['off','Off'],['in','When zoomed in'],['out','When zoomed out'],['both','Zoomed in and out'],['always','Always']] },
+  { g:'ASCII', id:'asciiPreset', label:'ASCII look', type:'select', options:[...Object.entries(ASCII_PRESETS).map(([k,p])=>[k,p.label]), ['custom','Custom']] },
+  { g:'ASCII', id:'asciiFarStyle', label:'Zoomed-out symbols', type:'select', options:[['object','Objects (Dwarf Fortress)'],['ramp','Brightness ramps']] },
+  { g:'ASCII', id:'asciiNearStyle', label:'Zoomed-in symbols', type:'select', options:[['ramp','Brightness ramps'],['object','Objects (Dwarf Fortress)']] },
+  { g:'ASCII', id:'asciiDwarfPri', label:'Dwarfs always show as ☺', type:'toggle' },
+  { g:'ASCII', id:'asciiMatch', label:'Brightness match', type:'range', min:0, max:1, step:0.01 },
+  { g:'ASCII', id:'asciiSoft', label:'Dissolve ↔ crossfade', type:'range', min:0, max:1, step:0.01 },
+  { g:'ASCII', id:'asciiStart', label:'Zoom in: pixels start growing at', type:'range', min:1, max:8, step:0.1, fmt:v=>(+v).toFixed(1)+'×' },
+  { g:'ASCII', id:'asciiInLen', label:'Zoom in: transition length', type:'range', min:1.2, max:10, step:0.1, fmt:v=>(+v).toFixed(1)+'× zoom' },
+  { g:'ASCII', id:'asciiFarStart', label:'Zoom out: transition starts at', type:'range', min:0.2, max:1.5, step:0.01, fmt:v=>(+v).toFixed(2)+'×' },
+  { g:'ASCII', id:'asciiFarEnd', label:'Zoom out: fully text at', type:'range', min:0.12, max:1.2, step:0.01, fmt:v=>(+v).toFixed(2)+'×' },
+  { g:'ASCII', id:'asciiFarGlyph', label:'Zoom out: final character size', type:'range', min:4, max:16, step:1, fmt:v=>v+' px' },
+  { g:'ASCII', id:'asciiFarLite', label:'Far: skip shadows when all text', type:'toggle' },
+  { g:'ASCII', id:'asciiGlyph', label:'Always mode: character size', type:'range', min:4, max:16, step:1, fmt:v=>v+' px' },
+  { g:'ASCII', id:'asciiGamma', label:'Glyph density', type:'range', min:0.3, max:2, step:0.01, fmt:v=>(1/(+v)).toFixed(2) },
+  { g:'ASCII', id:'asciiBoost', label:'Glyph brightness', type:'range', min:0.4, max:2.2, step:0.01 },
+  { g:'ASCII', id:'asciiColor', label:'Scene colour ↔ mono', type:'range', min:0, max:1, step:0.01 },
+  { g:'ASCII', id:'asciiMono', label:'Mono glyph colour', type:'color' },
+  { g:'ASCII', id:'asciiBg', label:'Background', type:'color' },
+  { g:'ASCII', id:'asciiBgTint', label:'Background tint', type:'range', min:0, max:0.6, step:0.01 },
+  { g:'ASCII', id:'asciiMaterials', label:'Per-surface symbols', type:'toggle' },
+  { g:'ASCII', id:'asciiEdges', label:'Edge strokes | / - \\', type:'toggle' },
+  { g:'ASCII', id:'asciiEdgeThr', label:'Edge threshold', type:'range', min:0.1, max:3, step:0.05 },
+  { g:'ASCII', id:'asciiInvert', label:'Invert (dark = dense)', type:'toggle' },
+  { g:'Performance', id:'resScale', label:'Screen resolution', type:'select',
+    options:[['auto','Auto'],['native','Native (sharpest steps)'],['2','Max 2×'],['1','1× (fastest)']] },
+  { g:'Performance', id:'shadowRes', label:'Shadow map', type:'select', options:[['512','512 (fast)'],['1024','1024'],['2048','2048 (crisp)']] },
+  { g:'Performance', id:'prepass', label:'Depth pre-pass (less overdraw)', type:'toggle' },
+  { g:'Performance', id:'gbuffer', label:'Single geometry pass (experimental)', type:'toggle' },
+  { g:'Performance', id:'profiler', label:'Show profiler', type:'toggle' },
+  { g:'Performance', id:'shadowEvery', label:'Shadow updates', type:'select', options:[['1','Every frame'],['2','Every 2nd frame'],['4','Every 4th frame']] },
+  { g:'Camera', id:'autoOrbit', label:'Auto orbit', type:'toggle' },
+];
+
+/* =====================================================================
+   VOXEL WORLD  (32 x 24 x 32)
+   ===================================================================== */
+const SX = 64, SY = 40, SZ = 64;
+const GY = 10;   // vertical offset: surface sits ~26, leaving a deep cross-section below
+const T = { AIR:0, GRASS:1, DIRT:2, PATH:3, STONE:4, DEEP:5, COPPER:6, GOLD:7, IRON:8, WOOD:9, LEAVES:10,
+            WATER:11, ROCK:12, BUSH:13, PLANK:14, BRICK:15, EMBER:16, SAND:17, METAL:18, CRYSTAL:19 };
+// [colour, class, emissive]   class: 0 generic, 1 water, 2 prop, 3 grass, 4 ore
+const MAT = [];
+MAT[T.GRASS]=['#6f9a3a',3,0]; MAT[T.DIRT]=['#8a5a34',0,0]; MAT[T.PATH]=['#b48a58',0,0];
+MAT[T.STONE]=['#77706a',0,0]; MAT[T.DEEP]=['#4d4650',0,0]; MAT[T.COPPER]=['#d0783a',4,0];
+MAT[T.GOLD]=['#f0c440',4,0]; MAT[T.IRON]=['#c89a8a',4,0]; MAT[T.WOOD]=['#6a4428',0,0];
+MAT[T.LEAVES]=['#4f7a32',0,0]; MAT[T.WATER]=['#4f86a0',1,0]; MAT[T.ROCK]=['#8a8378',0,0];
+MAT[T.BUSH]=['#5e8a34',0,0]; MAT[T.PLANK]=['#a8763c',0,0]; MAT[T.BRICK]=['#8a3c2a',0,0];
+MAT[T.EMBER]=['#ff8a2a',2,1]; MAT[T.SAND]=['#d8c08a',0,0]; MAT[T.METAL]=['#46424a',2,0];
+MAT[T.CRYSTAL]=['#7fe0d8',2,1];
+const MATRGB = MAT.map(m => m ? hex(m[0]) : null);
+
+const vox = new Uint8Array(SX*SY*SZ);
+const I = (x,y,z) => x + SX*(z + SZ*y);
+const inb = (x,y,z) => x>=0 && y>=0 && z>=0 && x<SX && y<SY && z<SZ;
+const get = (x,y,z) => inb(x,y,z) ? vox[I(x,y,z)] : 0;
+const set = (x,y,z,t) => { if (inb(x,y,z)) vox[I(x,y,z)] = t; };
+
+function mulberry32(a){ return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a>>>15, 1|a);
+  t = t + Math.imul(t ^ t>>>7, 61|t) ^ t; return ((t ^ t>>>14) >>> 0) / 4294967296; }; }
+const rng = mulberry32(1337);
+function h2(x,z,s){ let h = Math.imul(x|0,374761393) ^ Math.imul(z|0,668265263) ^ Math.imul(s,1442695041);
+  h = Math.imul(h ^ (h>>>13), 1274126177); h ^= h>>>16; return (h>>>0)/4294967296; }
+function vnoise(x,z,s){ const xi=Math.floor(x), zi=Math.floor(z); let xf=x-xi, zf=z-zi;
+  xf=xf*xf*(3-2*xf); zf=zf*zf*(3-2*zf);
+  const a=h2(xi,zi,s), b=h2(xi+1,zi,s), c=h2(xi,zi+1,s), d=h2(xi+1,zi+1,s);
+  return a + (b-a)*xf + (c-a)*zf + (a-b-c+d)*xf*zf; }
+
+// --- Layout (voxel x,z) -------------------------------------------------------------
+const PATH_PTS = [[55,57],[50,46],[47,37],[30,35],[24,22],[13,15],[3,5]];
+function distToPath(px,pz){
+  let best = 1e9;
+  for (let i=0;i<PATH_PTS.length-1;i++){
+    const [ax,az]=PATH_PTS[i], [bx,bz]=PATH_PTS[i+1];
+    const dx=bx-ax, dz=bz-az, t=Math.max(0,Math.min(1,((px-ax)*dx+(pz-az)*dz)/(dx*dx+dz*dz)));
+    best = Math.min(best, Math.hypot(px-(ax+dx*t), pz-(az+dz*t)));
+  }
+  return best;
+}
+const POND = { x:39, z:24, r:6.5 }, WL = 14 + GY;
+const streamX = z => 39 + 3.2*Math.sin(z/5.5);                 // stream runs from the pond out the back (z = 0) face
+const inStream = (x,z) => z < POND.z - 3 && Math.abs(x + 0.5 - streamX(z)) < 1.25;
+const CAVE = { x:13, y:13, z:57, rx:11, ry:4.8, rz:9 };       // natural cavern, sliced open by the front face
+const caveField = (x,y,z) => ((x+0.5-CAVE.x)/CAVE.rx)**2 + ((y+0.5-CAVE.y)/CAVE.ry)**2 + ((z+0.5-CAVE.z)/CAVE.rz)**2
+                            - 0.35*(vnoise(x/3+y*0.7, z/3, 9)-0.5);
+
+function generate(){
+  // Terrain columns + strata
+  for (let x=0;x<SX;x++) for (let z=0;z<SZ;z++){
+    let h = 26 + Math.round((vnoise(x/14,z/14,1)-0.5)*5 + (vnoise(x/6,z/6,2)-0.5)*2
+                          + 6*Math.max(0, 1 - Math.hypot(x-10, z-12)/17));        // a hill in the back-left
+    const pd = Math.hypot(x+0.5-POND.x, z+0.5-POND.z);
+    if (pd < POND.r+4 || (z < POND.z && Math.abs(x+0.5-streamX(z)) < 4)) h = Math.max(h, WL+1);
+    if (x>=28 && z>=46) h = Math.min(27, Math.max(26, h));       // plateau over the workshop + stairs
+    h = Math.max(22, Math.min(36, h));
+    const dirtT = 3 + (vnoise(x/5+20, z/5, 3) > 0.55 ? 1 : 0);
+    const deepY = Math.round(GY + 5 + (vnoise(x/9+50, z/9, 4)-0.5)*6);
+    for (let y=0;y<=h;y++) set(x,y,z, y===h ? T.GRASS : y>=h-dirtT ? T.DIRT : y>=deepY ? T.STONE : T.DEEP);
+    if (distToPath(x+0.5,z+0.5) < 1.6) set(x,h,z,T.PATH);
+    if (pd < POND.r){
+      const bottom = pd < POND.r-2.5 ? WL-3 : pd < POND.r-1.2 ? WL-2 : WL-1;
+      for (let y=bottom+1;y<=h;y++) set(x,y,z, y<=WL ? T.WATER : T.AIR);
+      set(x,bottom,z,T.SAND);
+    } else if (inStream(x,z)){
+      for (let y=WL-1;y<=h;y++) set(x,y,z, y<=WL ? T.WATER : T.AIR);
+      set(x,WL-2,z,T.SAND);
+    } else if ((pd < POND.r+1.6 || (z < POND.z-2 && Math.abs(x+0.5-streamX(z)) < 2.2)) && get(x,h,z)===T.GRASS) set(x,h,z,T.SAND);
+  }
+  // Ore veins hugging all four cut-away faces
+  const vein = (x,y,z,type,len,face) => {
+    for (let i=0;i<len;i++){
+      const t = get(x,y,z);
+      if (t===T.STONE || t===T.DEEP || t===T.DIRT) set(x,y,z,type);
+      const r = rng(), s = rng()<0.5 ? -1 : 1;
+      const depthAxis = face[0]==='x' ? 0 : 2;
+      let axis = r<0.15 ? depthAxis : r<0.55 ? 1 : (depthAxis===0 ? 2 : 0);
+      if (axis===0) x+=s; else if (axis===1) y+=s; else z+=s;
+      if (face==='x+') x=Math.max(SX-3,Math.min(SX-1,x)); if (face==='x-') x=Math.max(0,Math.min(2,x));
+      if (face==='z+') z=Math.max(SZ-3,Math.min(SZ-1,z)); if (face==='z-') z=Math.max(0,Math.min(2,z));
+      x=Math.max(0,Math.min(SX-1,x)); y=Math.max(0,Math.min(GY+13,y)); z=Math.max(0,Math.min(SZ-1,z));
+    }
+  };
+  for (const face of ['z+','x+','z-','x-']){
+    for (let k=0;k<7;k++){
+      const along = 2 + Math.floor(rng()*(SX-4));
+      const type = k%3===0 ? T.GOLD : k%3===1 ? T.IRON : T.COPPER;
+      const y = type===T.GOLD ? 1+Math.floor(rng()*9) : type===T.IRON ? 5+Math.floor(rng()*12) : 12+Math.floor(rng()*10);
+      const [x,z] = face==='z+' ? [along,SZ-1] : face==='z-' ? [along,0] : face==='x+' ? [SX-1,along] : [0,along];
+      vein(x,y,z,type,8+Math.floor(rng()*6),face);
+    }
+  }
+
+  // Natural cavern with a pool and glowing crystals
+  for (let x=0;x<30;x++) for (let y=4;y<24;y++) for (let z=40;z<SZ;z++){
+    if (caveField(x,y,z) < 1) set(x,y,z, (y <= CAVE.y - 3 && x < 10) ? T.WATER : T.AIR);   // pool in the left of the cave
+  }
+  for (let x=0;x<30;x++) for (let y=4;y<24;y++) for (let z=40;z<SZ;z++){
+    const t = get(x,y,z);
+    if (t===T.AIR || t===T.WATER || t===0) continue;
+    const exposed = !get(x,y-1,z) || !get(x,y+1,z) || !get(x-1,y,z) || !get(x+1,y,z) || !get(x,y,z-1);
+    if (exposed && caveField(x,y,z) < 1.5 && h2(x*7+y, z*3, 77) < 0.06) set(x,y,z,T.CRYSTAL);
+  }
+
+  // Workshop room (sliced open by the front face)
+  for (let x=25;x<=33;x++) for (let z=56;z<=63;z++){ set(x,GY+6,z,T.PLANK); for (let y=GY+7;y<=GY+10;y++) set(x,y,z,T.AIR); }
+  // Staircase from the surface down into the room
+  for (let i=0;i<=10;i++){ const x=44-i;
+    for (let z=62;z<=63;z++){ set(x,GY+16-i,z,T.PLANK); for (let y=GY+17-i;y<=GY+19-i;y++) set(x,y,z,T.AIR); } }
+  // Mine corridor: east from the room, then along the right-hand cut face
+  for (let x=34;x<=63;x++) for (let z=57;z<=58;z++) for (let y=GY+7;y<=GY+9;y++) set(x,y,z,T.AIR);
+  for (let x=62;x<=63;x++) for (let z=6;z<=58;z++) for (let y=GY+7;y<=GY+9;y++) set(x,y,z,T.AIR);
+  // Rich seam at the dead end
+  for (let x=59;x<=63;x++) for (let y=GY+6;y<=GY+10;y++) for (let z=0;z<=7;z++){
+    const t = get(x,y,z); if ((t===T.STONE||t===T.DEEP) && rng()<0.45) set(x,y,z, rng()<0.5 ? T.GOLD : T.IRON); }
+
+  // Furniture
+  set(25,GY+7,56,T.WOOD); set(25,GY+8,56,T.WOOD);              // barrels
+  set(26,GY+7,56,T.PLANK); set(27,GY+7,56,T.PLANK);            // workbench
+  set(29,GY+7,57,T.METAL);                                     // anvil
+  for (let x=31;x<=32;x++){ set(x,GY+7,56,T.BRICK); set(x,GY+7,57,T.BRICK); set(x,GY+8,56,T.BRICK);
+    set(x,GY+8,57,T.EMBER); set(x,GY+9,56,T.BRICK); set(x,GY+10,56,T.BRICK); }   // forge + chimney
+  for (const [x,z] of [[26,60],[27,60],[26,61],[27,61]]) set(x,GY+7,z,T.PLANK);   // table
+
+  // Surface dressing (trees and bushes are low-poly models, see FOLIAGE)
+  const surf = (x,z) => { for (let y=SY-1;y>=0;y--){ const t=get(x,y,z); if (t && t!==T.LEAVES && t!==T.WOOD && t!==T.BUSH) return y; } return 0; };
+  for (let k=0;k<12;k++){
+    const x = 2+Math.floor(rng()*(SX-4)), z = 2+Math.floor(rng()*(SZ-4));
+    if (distToPath(x+0.5,z+0.5) < 3 || get(x,surf(x,z),z)===T.WATER || (x>=28 && z>=46)) continue;
+    const g=surf(x,z); set(x,g+1,z,T.ROCK); if (rng()<0.5) set(x+1,surf(x+1,z)+1,z,T.ROCK); if (rng()<0.4) set(x,g+2,z,T.ROCK);
+  }
+  return surf;
+}
+const surfTop = generate();
+// Floor of the cavern at column (x,z): first air cell standing on solid, non-water ground.
+function caveFloor(x,z){
+  for (let y=CAVE.y+4; y>3; y--) if (get(x,y,z)===T.AIR && get(x,y+1,z)===T.AIR && get(x,y-1,z) && get(x,y-1,z)!==T.WATER) return y;
+  return null;
+}
+
+// Sky light: flood-fill from open sky and the cut-away boundary, decaying into caves.
+const light = new Float32Array(SX*SY*SZ);
+(function computeLight(){
+  const top = new Int16Array(SX*SZ).fill(-1);
+  for (let x=0;x<SX;x++) for (let z=0;z<SZ;z++) for (let y=SY-1;y>=0;y--) if (get(x,y,z)){ top[x+SX*z]=y; break; }
+  const q = [];
+  for (let y=0;y<SY;y++) for (let z=0;z<SZ;z++) for (let x=0;x<SX;x++){
+    if (get(x,y,z)) continue;
+    const i = I(x,y,z);
+    if (y > top[x+SX*z]) { light[i]=1; q.push(i); }
+    else if (x===0||z===0||x===SX-1||z===SZ-1) { light[i]=0.85; q.push(i); }
+  }
+  for (let h=0; h<q.length; h++){
+    const i=q[h], L=light[i]-0.13; if (L<=0) continue;
+    const x=i%SX, z=Math.floor(i/SX)%SZ, y=Math.floor(i/(SX*SZ));
+    for (const [dx,dy,dz] of [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]){
+      const nx=x+dx, ny=y+dy, nz=z+dz;
+      if (!inb(nx,ny,nz) || get(nx,ny,nz)) continue;
+      const n = I(nx,ny,nz); if (light[n] < L){ light[n]=L; q.push(n); }
+    }
+  }
+})();
+const lightAt = (x,y,z) => inb(x,y,z) ? light[I(x,y,z)] : (y<0 ? 0.5 : 1);
+
+/* Greedy mesher with optional edge rounding.
+   - Faces merge only when type, sky light, a *uniform* AO and the 4 edge-rounding
+     flags all match, so merged quads keep correct AO and insets.
+   - Out-of-bounds counts as air, which is what produces the cut-away faces.
+   - Rounding (r > 0): a face edge is "unconnected" when the voxel beside it, in the
+     face's plane, is air. Those edges are inset by r and bridged with a bevel strip
+     whose vertex normals blend from one face to the other (reads as a rounded edge
+     under toon banding). Voxel corners with three exposed faces get a corner triangle,
+     and a bevel that runs into a solid neighbour gets a small cap. Water is never rounded. */
+const DIRS = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];   // index = axis*2 + (negative ? 1 : 0)
+const ROUNDABLE = t => t && t !== T.WATER;
+function buildChunkGeometry(r = 0, noGreedy = false){
+  const pos=[], nor=[], col=[], aux=[], typ=[], tpos=[], look=[], cellA=[], ind=[];
+  const NO_CELL=[-999,-999,-999];
+  const dims=[SX,SY,SZ];
+  const occ = (x,y,z) => { const t=get(x,y,z); return t && t!==T.WATER ? 1 : 0; };
+  const AOB = [0.5, 0.68, 0.84, 1.0];
+  const CORN = [[0,0],[1,0],[1,1],[0,1]];
+  // Texture lookup data is baked per vertex so the shader never has to guess a face
+  // direction from screen derivatives (which flickers on 45° bevels):
+  //   tp   = position used for texture UVs, ln = axis normal deciding projection/tile,
+  //   cell = voxel the surface belongs to (+0.5), or NO_CELL to derive it from tp.
+  const vert = (p, n, t, ao, L, tp=p, ln=n, cell=NO_CELL) => { const m=MAT[t], c=MATRGB[t];
+    pos.push(p[0],p[1],p[2]); nor.push(n[0],n[1],n[2]); col.push(c[0],c[1],c[2]); aux.push(ao, L, m[2], m[1]); typ.push(t);
+    tpos.push(tp[0],tp[1],tp[2]); look.push(ln[0],ln[1],ln[2]); cellA.push(cell[0],cell[1],cell[2]); return pos.length/3-1; };
+  // Triangle / quad wound so its face points along `out`.
+  const sub3=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+  const facing=(p0,p1,p2,out)=>{ const e1=sub3(p1,p0), e2=sub3(p2,p0);
+    return (e1[1]*e2[2]-e1[2]*e2[1])*out[0] + (e1[2]*e2[0]-e1[0]*e2[2])*out[1] + (e1[0]*e2[1]-e1[1]*e2[0])*out[2] >= 0; };
+  const tri=(P,N,t,L,out,tx)=>{ const o = facing(P[0],P[1],P[2],out) ? [0,1,2] : [0,2,1];
+    for (const k of o) ind.push(vert(P[k],N[k],t,1,L, tx.tp[k], tx.ln, tx.cell)); };
+  const quad=(P,N,t,L,out,tx)=>{ const fw=facing(P[0],P[1],P[2],out);
+    const v=P.map((p,k)=>vert(p,N[k],t,1,L, tx.tp[k], tx.ln, tx.cell));
+    fw ? ind.push(v[0],v[1],v[2], v[0],v[2],v[3]) : ind.push(v[0],v[2],v[1], v[0],v[3],v[2]); };
+
+  // ---- 1. Greedy faces (inset along rounded edges) ----
+  for (let d=0; d<3; d++){
+    const u=(d+1)%3, v=(d+2)%3, nu=dims[u], nv=dims[v];
+    const mask=new Float64Array(nu*nv), mT=new Uint8Array(nu*nv), mAO=new Uint8Array(nu*nv*4), mL=new Uint8Array(nu*nv), mF=new Uint8Array(nu*nv);
+    const x=[0,0,0], a=[0,0,0], b=[0,0,0];
+    for (const side of [-1,1]){
+      for (x[d]=0; x[d]<dims[d]; x[d]++){
+        let n=0;
+        for (x[v]=0; x[v]<nv; x[v]++) for (x[u]=0; x[u]<nu; x[u]++, n++){
+          mask[n]=0;
+          const t=get(x[0],x[1],x[2]); if (!t) continue;
+          a[0]=x[0]; a[1]=x[1]; a[2]=x[2]; a[d]+=side;
+          if (get(a[0],a[1],a[2])) continue;
+          let uniform=true;
+          for (let k=0;k<4;k++){
+            const su=CORN[k][0]?1:-1, sv=CORN[k][1]?1:-1;
+            b[0]=a[0]; b[1]=a[1]; b[2]=a[2]; b[u]+=su; const s1=occ(b[0],b[1],b[2]);
+            b[u]-=su; b[v]+=sv; const s2=occ(b[0],b[1],b[2]);
+            b[u]+=su; const c=occ(b[0],b[1],b[2]);
+            mAO[n*4+k] = (s1&&s2) ? 0 : 3-(s1+s2+c);
+            if (mAO[n*4+k]!==mAO[n*4]) uniform=false;
+          }
+          // Edge flags: bit0 -u, bit1 +u, bit2 -v, bit3 +v  (in-plane neighbour is air)
+          let fl=0;
+          if (r>0 && ROUNDABLE(t)){
+            b[0]=x[0]; b[1]=x[1]; b[2]=x[2];
+            b[u]-=1; if (!get(b[0],b[1],b[2])) fl|=1;
+            b[u]+=2; if (!get(b[0],b[1],b[2])) fl|=2;
+            b[u]-=1; b[v]-=1; if (!get(b[0],b[1],b[2])) fl|=4;
+            b[v]+=2; if (!get(b[0],b[1],b[2])) fl|=8;
+          }
+          const L = Math.round(lightAt(a[0],a[1],a[2])*7);
+          mT[n]=t; mL[n]=L; mF[n]=fl;
+          mask[n] = 1 + t + 32*(mAO[n*4] + 4*mAO[n*4+1] + 16*mAO[n*4+2] + 64*mAO[n*4+3]) + 8192*L + 65536*fl
+                  + ((uniform && !noGreedy) ? 0 : 1048576*(n+1));
+        }
+        n=0;
+        for (let j=0;j<nv;j++) for (let i=0;i<nu;){
+          const k=mask[n];
+          if (!k){ i++; n++; continue; }
+          let w=1; while (i+w<nu && mask[n+w]===k) w++;
+          let h=1, stop=false;
+          for (; j+h<nv; h++){ for (let m=0;m<w;m++) if (mask[n+m+h*nu]!==k){ stop=true; break; } if (stop) break; }
+          const t=mT[n], fl=mF[n], base=pos.length/3;
+          const i0=i+(fl&1?r:0), i1=i+w-(fl&2?r:0), j0=j+(fl&4?r:0), j1=j+h-(fl&8?r:0);
+          const P=(uu,vv)=>{ const p=[0,0,0]; p[d]=x[d]+(side>0?1:0); p[u]=uu; p[v]=vv; return p; };
+          const corners=[P(i0,j0),P(i1,j0),P(i1,j1),P(i0,j1)];
+          const nrm=[0,0,0]; nrm[d]=side;
+          const ao=[0,1,2,3].map(c=>mAO[n*4+c]);
+          for (let c=0;c<4;c++) vert(corners[c], nrm, t, AOB[ao[c]], mL[n]/7);
+          const flip = ao[0]+ao[2] < ao[1]+ao[3];
+          if (side>0) flip ? ind.push(base,base+1,base+3, base+1,base+2,base+3) : ind.push(base,base+1,base+2, base,base+2,base+3);
+          else        flip ? ind.push(base,base+3,base+1, base+1,base+3,base+2) : ind.push(base,base+2,base+1, base,base+3,base+2);
+          for (let hh=0;hh<h;hh++) for (let ww=0;ww<w;ww++) mask[n+ww+hh*nu]=0;
+          i+=w; n+=w;
+        }
+      }
+    }
+  }
+
+  // ---- 2. Bevel strips, corner triangles and caps ----
+  if (r>0){
+    const ex=new Array(6);
+    const fc=k=>(k&1)?0:1, ic=k=>(k&1)?r:1-r;           // face plane / inset coordinate for direction k
+    for (let y=0;y<SY;y++) for (let z=0;z<SZ;z++) for (let x=0;x<SX;x++){
+      const t=get(x,y,z); if (!ROUNDABLE(t)) continue;
+      let any=false;
+      for (let k=0;k<6;k++){ const D=DIRS[k]; ex[k]=!get(x+D[0],y+D[1],z+D[2]); any=any||ex[k]; }
+      if (!any) continue;
+      const V=[x,y,z], at=(l)=>[x+l[0],y+l[1],z+l[2]];
+      const Lof=(...ks)=>Math.round(Math.max(...ks.map(k=>{ const D=DIRS[k]; return lightAt(x+D[0],y+D[1],z+D[2]); }))*7)/7;
+      for (let ia=0; ia<3; ia++) for (let ib=ia+1; ib<3; ib++){
+        const icx=3-ia-ib;
+        for (const ka of [ia*2, ia*2+1]) for (const kb of [ib*2, ib*2+1]){
+          if (!ex[ka] || !ex[kb]) continue;
+          const nA=DIRS[ka], nB=DIRS[kb], out=[nA[0]+nB[0],nA[1]+nB[1],nA[2]+nB[2]], L=Lof(ka,kb);
+          const kcp=icx*2, kcm=icx*2+1;
+          const PA=c=>{ const l=[0,0,0]; l[ia]=fc(ka); l[ib]=ic(kb); l[icx]=c; return at(l); };
+          const PB=c=>{ const l=[0,0,0]; l[ia]=ic(ka); l[ib]=fc(kb); l[icx]=c; return at(l); };
+          const PK=c=>{ const l=[0,0,0]; l[ia]=fc(ka); l[ib]=fc(kb); l[icx]=c; return at(l); };
+          const c0 = ex[kcm] ? r : 0, c1 = ex[kcp] ? 1-r : 1;
+          // Texture the bevel as the top face if it touches one, else as face A, and take
+          // UVs from that face's edge line so the strip continues the face's border texels.
+          const useB = nB[1] > 0 && !(nA[1] > 0);
+          const E = useB ? PB : PA, cellC=[x+0.5,y+0.5,z+0.5];
+          quad([PA(c0),PA(c1),PB(c1),PB(c0)], [nA,nA,nB,nB], t, L, out,
+               { tp:[E(c0),E(c1),E(c1),E(c0)], ln: useB ? nB : nA, cell:cellC });
+          // Caps where the bevel runs into a solid neighbour that doesn't continue it.
+          for (const [kc, cc, sgn] of [[kcm,0,-1],[kcp,1,1]]){
+            if (ex[kc]) continue;
+            const D=DIRS[kc], N=[x+D[0],y+D[1],z+D[2]], tn=get(...N);
+            const cont = ROUNDABLE(tn) && !get(N[0]+nA[0],N[1]+nA[1],N[2]+nA[2]) && !get(N[0]+nB[0],N[1]+nB[1],N[2]+nB[2]);
+            if (cont) continue;
+            const capN=[-D[0],-D[1],-D[2]];
+            const pk=PK(cc);
+            tri([PA(cc),PB(cc),pk], [capN,capN,capN], tn, L, capN, { tp:[pk,pk,pk], ln:capN, cell:[N[0]+0.5,N[1]+0.5,N[2]+0.5] });
+          }
+        }
+      }
+      // Corner triangles where three exposed faces meet.
+      for (const kx of [0,1]) for (const ky of [2,3]) for (const kz of [4,5]){
+        if (!ex[kx]||!ex[ky]||!ex[kz]) continue;
+        const n0=DIRS[kx], n1=DIRS[ky], n2=DIRS[kz];
+        const py = at([ic(kx),fc(ky),ic(kz)]);
+        tri([at([fc(kx),ic(ky),ic(kz)]), py, at([ic(kx),ic(ky),fc(kz)])],
+            [n0,n1,n2], t, Lof(kx,ky,kz), [n0[0]+n1[0]+n2[0], n0[1]+n1[1]+n2[1], n0[2]+n1[2]+n2[2]],
+            { tp:[py,py,py], ln:n1, cell:[x+0.5,y+0.5,z+0.5] });
+      }
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos,3));
+  g.setAttribute('normal',   new THREE.Float32BufferAttribute(nor,3));
+  g.setAttribute('aColor',   new THREE.Float32BufferAttribute(col,3));
+  g.setAttribute('aAux',     new THREE.Float32BufferAttribute(aux,4));
+  g.setAttribute('aType',    new THREE.Float32BufferAttribute(typ,1));
+  g.setAttribute('aTexPos',  new THREE.Float32BufferAttribute(tpos,3));
+  g.setAttribute('aLook',    new THREE.Float32BufferAttribute(look,3));
+  g.setAttribute('aCell',    new THREE.Float32BufferAttribute(cellA,3));
+  g.setIndex(ind);
+  g.computeBoundingSphere();
+  return g;
+}
+
+/* =====================================================================
+   BLOCK TEXTURES: procedural low-res tiles baked into one atlas.
+   Atlas layout: column = face (0 top, 1 side, 2 bottom), row = block type.
+   Each texture pack is a set of generator settings; switching packs re-bakes.
+   ===================================================================== */
+function bakeAtlas(packKey){
+  const P = TEX_PACKS[packKey], T = P.T, NT = 20, W = 3*T, H = NT*T;
+  const data = new Uint8Array(W*H*4).fill(255);
+  if (packKey === 'none') return { data, W, H, T };
+  const th = (i,j,s) => { const v = Math.sin(i*127.1 + j*311.7 + s*74.7 + T*3.1) * 43758.5453; return v - Math.floor(v); };
+  const sc = (c,k) => [c[0]*k, c[1]*k, c[2]*k];
+  const nz = (c,i,j,s,amt=1) => sc(c, 1 + (th(i,j,s)-0.5)*2*P.noise*amt);
+  const vn = (x,y,s) => { const xi=Math.floor(x), yi=Math.floor(y), fx=x-xi, fy=y-yi;   // tileable-ish value noise
+    const g=(a,b)=>th(((a%T)+T)%T, ((b%T)+T)%T, s);
+    return lerp(lerp(g(xi,yi),g(xi+1,yi),fx), lerp(g(xi,yi+1),g(xi+1,yi+1),fx), fy); };
+  const MOSS = hex('#5d7a35'), MORTAR = hex('#7a6c5e'), GRAVEL = hex('#a89c88');
+  const q = Math.max(1, Math.round(T/8));                          // feature scale
+
+  // Crack mask for stone-like tiles: a short random walk.
+  const crack = (s) => { const m = new Set(); let x = Math.floor(th(1,2,s)*T), y = Math.floor(th(3,4,s)*T);
+    for (let k=0;k<T*0.9;k++){ m.add(((x%T+T)%T)+','+((y%T+T)%T)); const r=th(k,s,9); x += r<0.5?1:0; y += r<0.5?0:1; if (th(k,s,10)<0.25) x-=1; }
+    return m; };
+
+  const stoneLike = (b, i, j, s, f) => {
+    let c = nz(b,i,j,s);
+    if (P.cobble){
+      const cs = Math.max(2, T/2), row = Math.floor(j/cs), off = (row%2)*cs/2;
+      const ci = (i+off)%cs, cj = j%cs;
+      if (ci===0 || cj===0) c = sc(b, 0.62);
+      else if (ci===1 || cj===1) c = sc(c, 1.12);
+      else c = sc(c, 0.94 + 0.12*th(Math.floor((i+off)/cs), row, s+5));
+    } else {
+      const cr = crack(s + f);
+      if (cr.has(i+','+j)) c = sc(b, 0.68);
+      else if (cr.has((i+1)+','+(j+1))) c = sc(b, 1.14);
+      else if (th(i,j,s+7) < 0.07) c = sc(b, 1.12);
+    }
+    if (P.moss>0){
+      const m = vn(i/(2*q), j/(2*q), s+11);
+      if (f===0 && m > 1-P.moss) c = nz(MOSS,i,j,s+12);
+      if (f===1 && j < Math.round(T*0.18) + Math.floor(th(i,0,s+13)*T*0.35*P.moss*2) && m > 0.35) c = nz(MOSS,i,j,s+12);
+    }
+    return c;
+  };
+  const dirtLike = (b, i, j, s) => {
+    let c = nz(b,i,j,s);
+    const r = th(i,j,s+1);
+    if (r < 0.08) c = sc(b, 0.72); else if (r < 0.14) c = sc(b, 1.2);
+    return c;
+  };
+  const grassTop = (b, i, j, s) => {
+    let c = nz(b,i,j,s);
+    const r = th(i,j,s+1);
+    if (r < 0.16) c = sc(b, 1.2); else if (r < 0.3) c = sc(b, 0.82);
+    if (P.flowers && th(i,j,s+2) < 0.03) c = th(i,j,s+3) < 0.5 ? hex('#f0e070') : hex('#e890a8');
+    if (P.moss>0 && vn(i/2,j/2,s+4) > 0.7) c = sc(c, 0.85);
+    return c;
+  };
+  const oreTile = (t, i, j, s, f) => {
+    const host = U_ORE_HOST, ore = MATRGB[t];
+    let c = stoneLike(host, i, j, s, f);
+    for (let k=0;k<3;k++){
+      const cx = th(k,1,s+t)*T, cy = th(k,2,s+t)*T, r = T*(0.14 + 0.08*th(k,3,s));
+      const dx = i+0.5-cx, dy = j+0.5-cy, d = Math.hypot(dx,dy);
+      if (d < r) c = d < r*0.5 && dx<0 && dy<0 ? sc(ore,1.3) : (dx>0 && dy>0 && d > r*0.6 ? sc(ore,0.72) : nz(ore,i,j,s+k));
+    }
+    return c;
+  };
+
+  const tile = (t, f, i, j) => {
+    const b = MATRGB[t], s = t*13 + f*3;
+    switch (t){
+      case T_.GRASS: {
+        if (f===0) return grassTop(b,i,j,s);
+        const dirt = MATRGB[T_.DIRT];
+        if (f===2) return dirtLike(dirt,i,j,s);
+        const lip = Math.max(1, Math.round(T*0.22)) + Math.floor(th(i,0,s+6)*(T*0.22+1));
+        if (j < lip) return j===lip-1 ? sc(b,0.78) : grassTop(b,i,j,s);
+        return dirtLike(dirt,i,j,s);
+      }
+      case T_.DIRT: return dirtLike(b,i,j,s);
+      case T_.PATH: { let c = nz(b,i,j,s,0.6); const r=th(i,j,s+1); if (r<0.12) c = nz(GRAVEL,i,j,s+2); else if (r<0.2) c = sc(b,0.85); return c; }
+      case T_.STONE: case T_.ROCK: return stoneLike(b,i,j,s,f);
+      case T_.DEEP: { let c = stoneLike(b,i,j,s,f); if (f===1 && (j + Math.floor(th(i,0,s)*2)) % Math.max(3,Math.round(T/2)) === 0) c = sc(b,0.76); return c; }
+      case T_.COPPER: case T_.GOLD: case T_.IRON: return oreTile(t,i,j,s,f);
+      case T_.WOOD: {
+        if (f===1){ let c = sc(b, 0.9 + 0.2*th(Math.floor(i/q),0,s)); if (th(i,Math.floor(j/(2*q)),s+1)<0.15) c = sc(b,0.7); return c; }
+        const d = Math.hypot(i+0.5-T/2, j+0.5-T/2); return sc(hex('#b08a5a'), Math.floor(d/q)%2 ? 0.85 : 1.0);
+      }
+      case T_.PLANK: {
+        const bh = Math.max(2, Math.round(T/4)), r = Math.floor(j/bh);
+        if (j%bh === bh-1) return sc(b,0.6);
+        if ((i + Math.floor(th(r,0,s)*T)) % T === 0) return sc(b,0.65);
+        return sc(nz(b,i,j,s,0.5), th(Math.floor(i/(2*q)), r, s+2) < 0.3 ? 0.9 : 1.0);
+      }
+      case T_.BRICK: {
+        const rh = Math.max(2, Math.round(T/4)), r = Math.floor(j/rh), bw = Math.max(2, T/2);
+        if (j%rh === rh-1 || (i + (r%2)*bw/2) % bw === 0) return nz(MORTAR,i,j,s,0.5);
+        return sc(nz(b,i,j,s,0.6), 0.88 + 0.24*th(Math.floor((i+(r%2)*bw/2)/bw), r, s+1));
+      }
+      case T_.EMBER: { const n = vn(i/q,j/q,s); return n < 0.25 ? hex('#8a2a10') : lerp3(b, hex('#ffe070'), n); }
+      case T_.SAND: { let c = nz(b,i,j,s,0.7); if (th(i,j,s+1) < 0.1) c = sc(b,1.12); else if (th(i,j,s+2) < 0.06) c = sc(b,0.86); return c; }
+      case T_.WATER: { let c = nz(b,i,j,s,0.4); if (th(Math.floor((i + j*2)/2), Math.floor(j/2), s) < 0.12) c = sc(b,1.3); return c; }
+      case T_.METAL: {
+        const e = (i===0||j===0) ? 1.45 : (i===T-1||j===T-1) ? 0.7 : 1.0;
+        const rv = (i===q||i===T-1-q) && (j===q||j===T-1-q);
+        return sc(nz(b,i,j,s,0.5), rv ? 1.7 : e);
+      }
+      default: return nz(b,i,j,s);
+    }
+  };
+
+  for (let t=1;t<NT;t++){
+    if (!MAT[t]) continue;
+    for (let f=0;f<3;f++){
+     const px = [], mean = [0,0,0];
+     for (let j=0;j<T;j++) for (let i=0;i<T;i++){ const c = tile(t,f,i,j); px.push(c); for (let k=0;k<3;k++) mean[k] += c[k]/(T*T); }
+     for (let j=0;j<T;j++) for (let i=0;i<T;i++){
+      let c = px[j*T+i];
+      c = c.map((v,k)=>mean[k] + (v-mean[k])*P.contrast);                 // pattern contrast around the tile's own mean
+      const l = c[0]*0.299 + c[1]*0.587 + c[2]*0.114;
+      c = c.map(v=>l + (v-l)*P.sat + P.lift);                              // saturation / lift
+      if (P.bevel){ if (i===0||j===0) c = sc(c,1.14); else if (i===T-1||j===T-1) c = sc(c,0.8); }
+      const idx = ((t*T + (T-1-j))*W + f*T + i)*4;                         // j=0 is the tile's top row
+      data[idx]=Math.max(0,Math.min(255,c[0]*255)); data[idx+1]=Math.max(0,Math.min(255,c[1]*255)); data[idx+2]=Math.max(0,Math.min(255,c[2]*255));
+     }
+    }
+  }
+  return { data, W, H, T };
+}
+const T_ = T;
+const U_ORE_HOST = hex('#6f6a66');
+
+/* =====================================================================
+   ASCII GLYPHS: a hand-drawn 5x7 pixel font (drawn in 8x8 cells) and
+   per-material brightness ramps (sparse -> dense), baked into one atlas.
+   Atlas: 8 columns (ramp levels) x 24 rows (block types 0-19, 20 foliage,
+   21 props/dwarfs, 22 sky, 23 edge strokes), 8x8 texels per glyph.
+   ===================================================================== */
+const FONT5x7 = {
+  ' ': ['.....','.....','.....','.....','.....','.....','.....'],
+  '.': ['.....','.....','.....','.....','.....','.....','..#..'],
+  ',': ['.....','.....','.....','.....','.....','..#..','.#...'],
+  "'": ['..#..','..#..','.#...','.....','.....','.....','.....'],
+  '`': ['.#...','..#..','.....','.....','.....','.....','.....'],
+  '"': ['.#.#.','.#.#.','.....','.....','.....','.....','.....'],
+  ':': ['.....','.....','..#..','.....','.....','..#..','.....'],
+  ';': ['.....','.....','..#..','.....','.....','..#..','.#...'],
+  '-': ['.....','.....','.....','.###.','.....','.....','.....'],
+  '_': ['.....','.....','.....','.....','.....','.....','#####'],
+  '=': ['.....','.....','#####','.....','#####','.....','.....'],
+  '+': ['.....','..#..','..#..','#####','..#..','..#..','.....'],
+  '*': ['.....','..#..','#.#.#','.###.','#.#.#','..#..','.....'],
+  '^': ['..#..','.#.#.','#...#','.....','.....','.....','.....'],
+  '~': ['.....','.....','.#...','#.#.#','...#.','.....','.....'],
+  '|': ['..#..','..#..','..#..','..#..','..#..','..#..','..#..'],
+  '/': ['....#','....#','...#.','..#..','.#...','#....','#....'],
+  '\\':['#....','#....','.#...','..#..','...#.','....#','....#'],
+  'v': ['.....','.....','#...#','#...#','.#.#.','.#.#.','..#..'],
+  'w': ['.....','.....','#...#','#...#','#.#.#','#.#.#','.#.#.'],
+  'W': ['#...#','#...#','#...#','#.#.#','#.#.#','##.##','#...#'],
+  'o': ['.....','.....','.###.','#...#','#...#','#...#','.###.'],
+  'O': ['.###.','#...#','#...#','#...#','#...#','#...#','.###.'],
+  '0': ['.###.','#..##','#.#.#','#.#.#','#.#.#','##..#','.###.'],
+  '8': ['.###.','#...#','#...#','.###.','#...#','#...#','.###.'],
+  '#': ['.#.#.','#####','.#.#.','.#.#.','#####','.#.#.','.....'],
+  '%': ['##..#','##..#','...#.','..#..','.#...','#..##','#..##'],
+  '&': ['.##..','#..#.','#.#..','.#...','#.#.#','#..#.','.##.#'],
+  '$': ['..#..','.####','#.#..','.###.','..#.#','####.','..#..'],
+  '@': ['.###.','#...#','#.###','#.#.#','#.###','#....','.###.'],
+  'H': ['#...#','#...#','#...#','#####','#...#','#...#','#...#'],
+  'M': ['#...#','##.##','#.#.#','#.#.#','#...#','#...#','#...#'],
+  '!': ['..#..','..#..','..#..','..#..','..#..','.....','..#..'],
+  // Code-page-437 style symbols (the classic Dwarf Fortress set)
+  '☺': ['.###.','#####','#.#.#','#####','#...#','.###.','.....'],
+  '♣': ['.###.','.###.','##.##','#####','##.##','..#..','.###.'],
+  '♠': ['..#..','.###.','#####','#####','#.#.#','..#..','.###.'],
+  '≈': ['.....','.#...','#.#.#','...#.','.#...','#.#.#','...#.'],
+  '▒': ['#.#.#','.#.#.','#.#.#','.#.#.','#.#.#','.#.#.','#.#.#'],
+  '▓': ['####.','#.###','###.#','.####','##.##','####.','#.###'],
+  '•': ['.....','.....','.###.','.###.','.###.','.....','.....'],
+  '£': ['..##.','.#..#','.#...','###..','.#...','.#..#','####.'],
+  '☼': ['..#..','#.#.#','.###.','##.##','.###.','#.#.#','..#..'],
+  '■': ['.....','#####','#####','#####','#####','#####','.....'],
+  'τ': ['.....','.....','#####','..#..','..#..','..#..','...##'],
+};
+/* Object glyphs (Dwarf Fortress style): one symbol set per object, picked by position
+   (repeats weight the mix), not by brightness, so a tree is always a tree. */
+const OBJ_GLYPHS = {
+  grass:"`,.\",.',\"", dirt:".,.,.,`.", path:".:.:.,.:", sand:".,`.,.`,", stone:"▒▒▒▒▒▒▒▒", deep:"▓▓▓▓▓▓▓▓",
+  rock:"••••••••", ore:"££££££££", wood:"OOOOOOOO", plank:"++++++++", brick:"########", ember:"☼☼☼☼☼☼☼☼",
+  metal:"■■■■■■■■", water:"≈≈≈~≈≈≈~", crystal:"*☼**☼***",
+  oak:"♣♣♣♣♣♣♣♣", pine:"♠♠♠♠♠♠♠♠", birch:"♣♣♣♣♣♣♣τ", bush:"\"\"\"\"\"\"\"\"",
+  prop:"oooooooo", dwarf:"☺☺☺☺☺☺☺☺", trunk:"OOOOOOOO", torch:"!!!!!!!!", sky:"        ",
+};
+const RAMPS = {
+  base:    " .:-=+#@",
+  grass:   " .,'\"vwW",
+  foliage: " .,*&%8@",
+  water:   " .-~~~==",
+  stone:   " .:+=#%@",
+  dirt:    " .,:;+o%",
+  sand:    " ..,:;+o",
+  wood:    " .-==#HH",
+  brick:   " .-==#H8",
+  ore:     " .*o$%0@",
+  ember:   " .'^*%#@",
+  metal:   " .-+=#HM",
+  prop:    " .:oO0@@",
+  sky:     "    . .`",
+  edges:   "|/-\\    ",
+};
+// Atlas rows. Ramp style: 0-19 block types, 20 foliage, 21 props, 22 sky, 23 edge strokes.
+// Object style: 24-43 block types, 44-47 oak/pine/birch/bush, 48-51 prop/dwarf/trunk/torch, 52 sky.
+const GLYPH_ROWS = 53;
+function buildGlyphAtlas(){
+  const W = 64, H = GLYPH_ROWS*8, data = new Uint8Array(W*H*4);
+  const rowRamp = new Array(24).fill('base');
+  const byType = { GRASS:'grass', DIRT:'dirt', PATH:'sand', STONE:'stone', DEEP:'stone', ROCK:'stone', COPPER:'ore', GOLD:'ore',
+    IRON:'ore', WOOD:'wood', PLANK:'wood', LEAVES:'foliage', BUSH:'foliage', WATER:'water', BRICK:'brick', EMBER:'ember',
+    SAND:'sand', METAL:'metal' };
+  for (const [k, r] of Object.entries(byType)) rowRamp[T[k]] = r;
+  rowRamp[20]='foliage'; rowRamp[21]='prop'; rowRamp[22]='sky'; rowRamp[23]='edges';
+  byType.CRYSTAL = 'ore'; rowRamp[T.CRYSTAL] = 'ore';
+  const objRow = new Array(GLYPH_ROWS).fill(null);
+  const objByType = { GRASS:'grass', DIRT:'dirt', PATH:'path', STONE:'stone', DEEP:'deep', ROCK:'rock', COPPER:'ore', GOLD:'ore',
+    IRON:'ore', WOOD:'wood', PLANK:'plank', LEAVES:'oak', BUSH:'bush', WATER:'water', BRICK:'brick', EMBER:'ember',
+    SAND:'sand', METAL:'metal', CRYSTAL:'crystal' };
+  for (let t=0;t<20;t++) objRow[24+t] = 'dirt';
+  for (const [k, g] of Object.entries(objByType)) objRow[24+T[k]] = g;
+  ['oak','pine','birch','bush','prop','dwarf','trunk','torch','sky'].forEach((g,i) => objRow[44+i] = g);
+  for (let row=0; row<GLYPH_ROWS; row++){
+    const ramp = row < 24 ? RAMPS[rowRamp[row]] : OBJ_GLYPHS[objRow[row]];
+    for (let lv=0; lv<8; lv++){
+      const glyph = FONT5x7[ramp[lv]] || FONT5x7[' '];
+      for (let gy=0; gy<7; gy++) for (let gx=0; gx<5; gx++){
+        if (glyph[gy][gx] !== '#') continue;
+        const x = lv*8 + 1 + gx, y = row*8 + (7 - gy);         // glyph rows top->bottom, texture y up; 1px left margin
+        const i = (y*W + x)*4; data[i]=data[i+1]=data[i+2]=data[i+3]=255;
+      }
+    }
+  }
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  // Mip-mapped (8x8 tiles stay aligned down to 1x1 at level 3) so small characters average to their ink coverage.
+  tex.magFilter = THREE.NearestFilter; tex.minFilter = THREE.NearestMipmapLinearFilter; tex.generateMipmaps = true; tex.needsUpdate = true;
+  return tex;
+}
+
+/* =====================================================================
+   RENDERER, MATERIALS, SCENE
+   ===================================================================== */
+const canvas = document.getElementById('view');
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias:false, powerPreference:'high-performance' });
+} catch (e) {
+  const el=document.getElementById('err'); el.style.display='flex'; el.textContent='WebGL2 is required to run this diorama.'; throw e;
+}
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+renderer.autoClear = false;   // every pass clears explicitly (the colour pass keeps its pre-pass depth)
+
+const CHUNK_ORIGIN = new THREE.Vector3(-SX/2, -SY/2, -SZ/2);
+const U = {   // shared uniform objects (referenced by every toon material)
+  uSunDir:{value:new THREE.Vector3(0,1,0)}, uSunColor:{value:new THREE.Vector3(1,1,1)},
+  uAmbientColor:{value:new THREE.Vector3(1,1,1)}, uAmbient:{value:0.5}, uBands:{value:3}, uTime:{value:0},
+  uShadowOn:{value:1}, uTorch:{value:1}, uShadowMap:{value:null}, uShadowMatrix:{value:new THREE.Matrix4()},
+  uPointPos:{value:[0,1,2,3].map(()=>new THREE.Vector3())}, uPointCol:{value:[0,1,2,3].map(()=>new THREE.Vector3())},
+  uPointRange:{value:[1,1,1,1]}, uDirtCol:{value:new THREE.Vector3(...hex('#8a5a34'))},
+  uRim:{value:0}, uSpec:{value:0}, uAtlas:{value:null}, uAtlasSize:{value:new THREE.Vector2(1,1)}, uTileT:{value:8}, uTexStrength:{value:0.85}, uOreHost:{value:new THREE.Vector3(...hex('#6f6a66'))}, uChunkOrigin:{value:CHUNK_ORIGIN.clone()},
+};
+// Combined-pass ("G-buffer") variants write colour to target 0 and world normals to target 1,
+// so the scene is drawn once instead of twice. GLSL3 mode: we declare the outputs ourselves.
+const MRT_HEAD = 'layout(location = 0) out highp vec4 pc_fragColor;\nlayout(location = 1) out highp vec4 outNormal;\n#define gl_FragColor pc_fragColor\n';
+const HAS_MRT = typeof THREE.WebGLMultipleRenderTargets === 'function';
+const toonMaterial = (exposure=1, objId=255) => {
+  const uniforms = { ...U, uObjExposure:{value:exposure}, uObjAlpha:{value:objId/255} };
+  const m = new THREE.ShaderMaterial({ uniforms, vertexShader:src('toon-vs'), fragmentShader:src('toon-common')+src('toon-fs') });
+  m.userData.mrt = new THREE.ShaderMaterial({ uniforms, defines:{ MRT:'' }, glslVersion:THREE.GLSL3,
+    vertexShader:src('toon-vs'), fragmentShader:MRT_HEAD+src('toon-common')+src('toon-fs') });
+  return m;
+};
+const terrainMat = toonMaterial(1);
+// Depth pre-pass material: same vertex shader (invariant gl_Position), no colour. Laying
+// down depth first means the expensive toon shader runs once per pixel, not once per
+// overlapping surface.
+const toonPreMat = new THREE.ShaderMaterial({ vertexShader:src('toon-vs'), fragmentShader:'void main(){ gl_FragColor = vec4(0.0); }', colorWrite:false });
+let atlasTex = null;
+function applyTexturePack(){
+  const a = bakeAtlas(S.texPack);
+  atlasTex?.dispose();
+  atlasTex = new THREE.DataTexture(a.data, a.W, a.H, THREE.RGBAFormat);
+  atlasTex.magFilter = atlasTex.minFilter = THREE.NearestFilter; atlasTex.generateMipmaps = false; atlasTex.needsUpdate = true;
+  U.uAtlas.value = atlasTex; U.uAtlasSize.value.set(a.W, a.H); U.uTileT.value = a.T;
+  U.uTexStrength.value = S.texPack === 'none' ? 0 : S.texStrength;
+}
+const OBJ_ID = { prop:255, dwarf:250, trunk:245, torch:240 };   // material IDs read by the ASCII object glyphs
+const propMat = toonMaterial(0.25, OBJ_ID.torch);
+const normalMats = {};   // one normal-pass material per object ID
+const normalMatFor = id => normalMats[id] || (normalMats[id] = new THREE.ShaderMaterial({ uniforms:{ uObjAlpha:{value:id/255} }, vertexShader:src('normal-vs'), fragmentShader:src('normal-fs') }));
+const normalMat = normalMatFor(255);
+const depthOnlyMat = new THREE.MeshBasicMaterial({ colorWrite:false });
+
+const scene = new THREE.Scene();
+const chunk = new THREE.Group(); chunk.position.copy(CHUNK_ORIGIN); scene.add(chunk);
+const terrain = new THREE.Mesh(buildChunkGeometry(BASE.round), terrainMat); chunk.add(terrain);
+function rebuildTerrain(){ terrain.geometry.dispose(); terrain.geometry = buildChunkGeometry(S.round); updateTriCount(); }
+function updateTriCount(){
+  let t=0; scene.traverseVisible(o => { if (o.isMesh && o.geometry.attributes.position) t += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count)/3; });
+  const el=document.getElementById('tris'); if (el) el.textContent = (t/1000).toFixed(1)+'k tris';
+}
+
+// Box helper for props/dwarfs: carries the same attributes as the voxel mesh.
+function box(w,h,d, x,y,z, color, emissive=0, cls=2){
+  const g = new THREE.BoxGeometry(w,h,d); g.translate(x,y,z); g.deleteAttribute('uv');
+  const n=g.attributes.position.count, c=hex(color), C=new Float32Array(n*3), A=new Float32Array(n*4);
+  for (let i=0;i<n;i++){ C.set(c,i*3); A.set([1,1,emissive,cls],i*4); }
+  g.setAttribute('aColor', new THREE.BufferAttribute(C,3)); g.setAttribute('aAux', new THREE.BufferAttribute(A,4));
+  return g;
+}
+
+// Torches (wall-mounted) + point light table: [voxel position, colour, intensity, range]
+const LIGHTS = [
+  { p:[32.0, GY+8.6, 58.6], c:'#ff7a2a', k:1.7, r:7.5 },   // forge
+  { p:[28.5, GY+9.5, 56.5], c:'#ffb060', k:1.2, r:6.0 },   // workshop wall torch
+  { p:[39.5, GY+13.6, 62.5], c:'#ffb060', k:1.2, r:6.0 },  // stair torch
+  { p:[62.5, GY+8.6, 30.5], c:'#ffb060', k:1.2, r:6.0 },   // mine corridor torch
+];
+[[28.5,GY+8.6,56.02,0],[39.5,GY+12.7,62.02,0],[62.02,GY+7.7,30.5,Math.PI/2]].forEach(([x,y,z,ry]) => {
+  const g = mergeGeometries([ box(0.12,0.5,0.12, 0,0.25,0.08, '#5a3a22'), box(0.2,0.22,0.2, 0,0.6,0.1, '#ffc860', 1) ]);
+  const m = new THREE.Mesh(g, propMat); m.position.set(x,y,z); m.rotation.y = ry; chunk.add(m);
+});
+
+/* =====================================================================
+   FOLIAGE: trees & bushes as simple low-poly models (not voxels).
+   Canopies are jittered icosphere blobs (outer shell + darker inner core) or cones,
+   plus an optional set of leaf cards. All share the foliage shader, whose look is
+   driven by the Foliage panel / presets.
+   ===================================================================== */
+const FOL_U = { uFolMode:{value:0}, uDensity:{value:0.7}, uLeafSize:{value:0.2}, uEdgeFade:{value:0.55},
+  uScreenMix:{value:0.35}, uSphere:{value:0.85}, uTransl:{value:0.5}, uInnerDark:{value:0.6}, uHueVar:{value:0.5},
+  uSway:{value:0.35}, uScreenOffset:{value:new THREE.Vector2()} };
+function foliageMaterial(pass, side=THREE.FrontSide, mrt=false){
+  const defines = { ['PASS_'+pass]:'' }; if (mrt) defines.MRT = '';
+  return new THREE.ShaderMaterial({ uniforms:{ ...U, ...FOL_U, uObjExposure:{value:1} }, defines, side,
+    colorWrite: pass!=='DEPTH', vertexShader:src('foliage-vs'),
+    fragmentShader:(mrt ? MRT_HEAD : '')+src('toon-common')+src('foliage-fs'), ...(mrt ? { glslVersion:THREE.GLSL3 } : {}) });
+}
+const foliagePre = side => { const m = foliageMaterial('NORMAL', side); m.colorWrite = false; return m; };  // same discard as colour
+const foliagePasses = side => ({ color:foliageMaterial('COLOR',side), colorMRT:foliageMaterial('COLOR',side,true),
+  normal:foliageMaterial('NORMAL',side), depth:foliageMaterial('DEPTH',side), pre:foliagePre(side) });
+
+// Procedural placement: keep clear of the path, water, the workshop plateau and each other.
+const TREES = [], BUSHES = [];   // [x, z, species, scale] / [x, z, scale]
+(function placePlants(){
+  const r = mulberry32(2024);
+  const clear = (x, z, pad) => distToPath(x+0.5, z+0.5) > pad + 1.6
+    && Math.hypot(x+0.5-POND.x, z+0.5-POND.z) > POND.r + pad
+    && !(z < POND.z && Math.abs(x+0.5-streamX(z)) < pad + 1.5)
+    && !(x >= 26 && z >= 44) && get(x, surfTop(x,z), z) !== T.WATER;
+  for (let tries=0; tries<900 && TREES.length<26; tries++){
+    const x = 2 + Math.floor(r()*(SX-4)), z = 2 + Math.floor(r()*(SZ-4));
+    if (!clear(x, z, 2.5) || TREES.some(t => Math.hypot(t[0]-x, t[1]-z) < 6.5)) continue;
+    const q = r(), sp = q < 0.45 ? 'oak' : q < 0.8 ? 'pine' : 'birch';
+    TREES.push([x, z, sp, 0.7 + r()*0.7]);
+  }
+  for (let tries=0; tries<900 && BUSHES.length<24; tries++){
+    const x = 2 + Math.floor(r()*(SX-4)), z = 2 + Math.floor(r()*(SZ-4));
+    if (!clear(x, z, 1) || TREES.some(t => Math.hypot(t[0]-x, t[1]-z) < 3) || BUSHES.some(b => Math.hypot(b[0]-x, b[1]-z) < 3.5)) continue;
+    BUSHES.push([x, z, 0.7 + r()*0.5]);
+  }
+})();
+const SPECIES = {
+  oak:   { bark:'#6a4428', leaf:'#5f8a32' },
+  pine:  { bark:'#5a3a24', leaf:'#3f6c3a' },
+  birch: { bark:'#d8cfbc', leaf:'#8aa640' },
+  bush:  { bark:'#5a3a24', leaf:'#5e8a34' },
+};
+const jhash = (x,y,z) => { const v = Math.sin(x*127.1 + y*311.7 + z*74.7) * 43758.5453; return v - Math.floor(v); };
+
+// Give a foliage geometry the attributes the foliage shader expects.
+function foliageAttrs(g, color, sphereC, layer, baseY, height, card, seed, sphereSquash=1){
+  const p=g.attributes.position, n=p.count, C=new Float32Array(n*3), Sph=new Float32Array(n*3), A=new Float32Array(n*4);
+  for (let i=0;i<n;i++){
+    const x=p.getX(i), y=p.getY(i), z=p.getZ(i);
+    const v=new THREE.Vector3(x-sphereC.x, (y-sphereC.y)*sphereSquash, z-sphereC.z).normalize();
+    C.set(color,i*3); Sph.set([v.x,v.y,v.z],i*3);
+    A.set([layer, Math.min(1, Math.max(0, (y-baseY)/height)), card, seed], i*4);
+  }
+  g.setAttribute('aColor',new THREE.BufferAttribute(C,3)); g.setAttribute('aSphere',new THREE.BufferAttribute(Sph,3));
+  g.setAttribute('aAux',new THREE.BufferAttribute(A,4));
+  return g;
+}
+// Lumpy low-poly blob: icosphere with deterministic per-vertex radial jitter, flat-shaded.
+function blobGeo(c, r, squashY, seed){
+  const g = new THREE.IcosahedronGeometry(r, 1), p = g.attributes.position;   // non-indexed
+  for (let i=0;i<p.count;i++){
+    const x=p.getX(i), y=p.getY(i), z=p.getZ(i);
+    const k = 1 + (jhash(Math.round(x*100)+seed, Math.round(y*100), Math.round(z*100)) - 0.5) * 0.32;
+    p.setXYZ(i, x*k, y*k*squashY, z*k);
+  }
+  g.computeVertexNormals(); g.translate(c.x, c.y, c.z);
+  return g;
+}
+function coneGeo(c, r, h, seed){
+  const g = new THREE.ConeGeometry(r, h, 7, 2).toNonIndexed(), p = g.attributes.position;
+  for (let i=0;i<p.count;i++){
+    const x=p.getX(i), y=p.getY(i), z=p.getZ(i);
+    const k = 1 + (jhash(Math.round(x*100)+seed, Math.round(y*100), Math.round(z*100)) - 0.5) * 0.22;
+    p.setXYZ(i, x*k, y, z*k);
+  }
+  g.computeVertexNormals(); g.translate(c.x, c.y, c.z);
+  return g;
+}
+// Cards: small quads scattered over a blob's surface, facing roughly outward.
+function cardGeos(c, r, squashY, size, seed, rand){
+  const out=[], count=Math.round(18*r*r);
+  for (let k=0;k<count;k++){
+    const dir = new THREE.Vector3(rand()*2-1, rand()*2-1, rand()*2-1).normalize();
+    const pos = c.clone().add(new THREE.Vector3(dir.x, dir.y*squashY, dir.z).multiplyScalar(r*(0.78+0.3*rand())));
+    const nrm = dir.clone().add(new THREE.Vector3(rand()-0.5, rand()-0.5, rand()-0.5).multiplyScalar(1.2)).normalize();
+    const g = new THREE.PlaneGeometry(size*0.7, size).toNonIndexed();
+    g.rotateZ(rand()*Math.PI*2);
+    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), nrm));
+    g.translate(pos.x, pos.y, pos.z);
+    out.push(g);
+  }
+  return out;
+}
+function cylinderBetween(a, b, r0, r1){
+  const d=b.clone().sub(a), L=d.length();
+  const g=new THREE.CylinderGeometry(r1, r0, L, 6, 1);
+  g.translate(0, L/2, 0);
+  g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,1,0), d.normalize()));
+  g.translate(a.x, a.y, a.z);
+  return g;
+}
+function barkAttrs(g, color){
+  g.deleteAttribute('uv');
+  const n=g.attributes.position.count, c=hex(color), C=new Float32Array(n*3), A=new Float32Array(n*4);
+  for (let i=0;i<n;i++){ C.set(c,i*3); A.set([1,1,0,2],i*4); }
+  g.setAttribute('aColor',new THREE.BufferAttribute(C,3)); g.setAttribute('aAux',new THREE.BufferAttribute(A,4));
+  return g;
+}
+
+function buildFoliage(cardSize){
+  const rand = mulberry32(4242);
+  const bark=[], outer=[], inner=[], cards=[];
+  const plant = (x, z, species, s, seed) => {
+    const seedW = ({ oak:0, pine:1, birch:2, bush:3 })[species] + seed;   // integer part = species (read by the ASCII object glyphs)
+    const sp = SPECIES[species], tint = 0.9 + rand()*0.2;
+    const leaf = hex(sp.leaf).map((v,i)=>v*tint*(i===0 ? 0.95+rand()*0.1 : 1));
+    const base = new THREE.Vector3(x+0.5, surfTop(x,z)+0.85, z+0.5);
+    const blobs = [];   // {c, r, sq, sphereC}
+    const addBark = g => bark.push(barkAttrs(g, sp.bark));
+    let H = 1, cones = false;
+    if (species==='oak'){
+      const h=3.0*s, top=base.clone().add(new THREE.Vector3(0,h,0));
+      addBark(cylinderBetween(base, top, 0.32*s, 0.2*s));
+      const C = top.clone().add(new THREE.Vector3(0,0.8*s,0));
+      blobs.push({ c:top.clone().add(new THREE.Vector3(0,1.0*s,0)), r:1.8*s, sq:0.85, sphereC:C });
+      const n = 3 + Math.floor(rand()*2);
+      for (let i=0;i<n;i++){
+        const a = seed*6.283 + i*6.283/n + rand()*0.6;
+        const c = top.clone().add(new THREE.Vector3(Math.cos(a)*1.35*s, (rand()*0.7-0.15)*s, Math.sin(a)*1.35*s));
+        blobs.push({ c, r:(1.05+rand()*0.4)*s, sq:0.85, sphereC:C });
+        addBark(cylinderBetween(top.clone().add(new THREE.Vector3(0,-0.7*s,0)), c, 0.13*s, 0.07*s));
+      }
+      H = h + 2.8*s;
+    } else if (species==='birch'){
+      const h=3.8*s, top=base.clone().add(new THREE.Vector3(0,h,0));
+      addBark(cylinderBetween(base, top, 0.17*s, 0.11*s));
+      const C = top.clone().add(new THREE.Vector3(0,0.5*s,0));
+      blobs.push({ c:top.clone().add(new THREE.Vector3(0,0.9*s,0)), r:1.15*s, sq:1.35, sphereC:C });
+      blobs.push({ c:top.clone().add(new THREE.Vector3(0.5*s,-0.4*s,0.2*s)), r:0.9*s, sq:1.25, sphereC:C });
+      blobs.push({ c:top.clone().add(new THREE.Vector3(-0.4*s,-0.1*s,-0.4*s)), r:0.85*s, sq:1.25, sphereC:C });
+      H = h + 2.4*s;
+    } else if (species==='pine'){
+      const h=4.6*s, top=base.clone().add(new THREE.Vector3(0,h,0));
+      addBark(cylinderBetween(base, top, 0.24*s, 0.1*s));
+      cones = true;
+      let y = 1.4*s;
+      [[1.75,2.1],[1.35,1.9],[0.95,1.7],[0.55,1.3]].forEach(([r,hh],i) => {
+        const c = base.clone().add(new THREE.Vector3(0, y + hh*s/2, 0));
+        blobs.push({ c, r:r*s, h:hh*s, sphereC:base.clone().add(new THREE.Vector3(0, y - 0.4*s, 0)) });
+        y += hh*s*0.62;
+      });
+      H = y + 1.0*s;
+    } else { // bush
+      base.y = surfTop(x,z)+1;
+      blobs.push({ c:base.clone().add(new THREE.Vector3(0,0.45*s,0)), r:0.75*s, sq:0.75, sphereC:base.clone() });
+      if (rand()<0.7) blobs.push({ c:base.clone().add(new THREE.Vector3((rand()-0.5)*0.9*s,0.35*s,(rand()-0.5)*0.9*s)), r:0.55*s, sq:0.8, sphereC:base.clone() });
+      H = 1.8*s;
+    }
+    for (const b of blobs){
+      if (cones){
+        outer.push(foliageAttrs(coneGeo(b.c, b.r, b.h, seed*97), leaf, b.sphereC, 0, base.y, H, 0, seedW, 0.6));
+        inner.push(foliageAttrs(coneGeo(b.c, b.r*0.62, b.h*0.8, seed*53), leaf, b.sphereC, 1, base.y, H, 0, seedW, 0.6));
+        for (const g of cardGeos(b.c.clone().add(new THREE.Vector3(0,-b.h*0.15,0)), b.r*0.8, b.h/b.r*0.4, cardSize*0.85, seed, rand))
+          cards.push(foliageAttrs(g, leaf, b.sphereC, 0, base.y, H, 1, seedW, 0.6));
+      } else {
+        outer.push(foliageAttrs(blobGeo(b.c, b.r, b.sq, seed*97), leaf, b.sphereC, 0, base.y, H, 0, seedW));
+        inner.push(foliageAttrs(blobGeo(b.c, b.r*0.66, b.sq, seed*53), leaf, b.sphereC, 1, base.y, H, 0, seedW));
+        for (const g of cardGeos(b.c, b.r, b.sq, cardSize*Math.min(1, 0.6+s*0.4), seed, rand))
+          cards.push(foliageAttrs(g, leaf, b.sphereC, 0, base.y, H, 1, seedW));
+      }
+    }
+  };
+  TREES.forEach(([x,z,sp,s],i) => plant(x, z, sp, s, (i+1)*0.137 % 1));
+  BUSHES.forEach(([x,z,s],i) => plant(x, z, 'bush', s, (i+3)*0.291 % 1));
+  return { bark:mergeGeometries(bark), outer:mergeGeometries(outer), inner:mergeGeometries(inner), cards:mergeGeometries(cards) };
+}
+
+const folMeshes = {
+  bark:  new THREE.Mesh(new THREE.BufferGeometry(), toonMaterial(1, OBJ_ID.trunk)),
+  outer: new THREE.Mesh(new THREE.BufferGeometry()),
+  inner: new THREE.Mesh(new THREE.BufferGeometry()),
+  cards: new THREE.Mesh(new THREE.BufferGeometry()),
+};
+folMeshes.outer.userData.passes = foliagePasses(THREE.FrontSide);
+folMeshes.inner.userData.passes = foliagePasses(THREE.FrontSide);
+folMeshes.cards.userData.passes = foliagePasses(THREE.DoubleSide);
+for (const k of ['outer','inner','cards']) folMeshes[k].material = folMeshes[k].userData.passes.color;
+Object.values(folMeshes).forEach(m => chunk.add(m));
+function rebuildFoliage(){
+  const g = buildFoliage(S.cardSize);
+  for (const k in folMeshes){ folMeshes[k].geometry.dispose(); folMeshes[k].geometry = g[k]; }
+  updateTriCount();
+}
+// Visibility per technique: dithered = shell + core, solid = shell, cards = cards + core.
+function applyFoliage(){
+  const mode = +S.folMode;
+  FOL_U.uFolMode.value=mode; FOL_U.uDensity.value=S.density; FOL_U.uLeafSize.value=S.leafSize; FOL_U.uEdgeFade.value=S.edgeFade;
+  FOL_U.uScreenMix.value=S.screenMix; FOL_U.uSphere.value=S.sphere; FOL_U.uTransl.value=S.transl;
+  FOL_U.uInnerDark.value=S.innerDark; FOL_U.uHueVar.value=S.hueVar; FOL_U.uSway.value=S.sway;
+  folMeshes.outer.visible = mode!==2; folMeshes.inner.visible = mode!==1; folMeshes.cards.visible = mode===2;
+  postMat.uniforms.uFolOutline.value = +S.folOutline;
+  updateTriCount();
+}
+
+/* Render passes swap materials per mesh (instead of scene.overrideMaterial) so foliage
+   can keep its dither/alpha cut-outs in the normal and shadow passes. */
+let passMeshes = [], currentPass = 'color';
+function registerPasses(){
+  scene.traverse(o => { if (o.isMesh && !o.userData.passes)
+    o.userData.passes = { color:o.material, colorMRT:o.material.userData.mrt || o.material, normal:normalMatFor(Math.round((o.material.uniforms?.uObjAlpha?.value ?? 1)*255)), depth:depthOnlyMat, pre:toonPreMat }; });
+  passMeshes = []; scene.traverse(o => { if (o.isMesh && o.userData.passes) passMeshes.push(o); });
+}
+function setPass(pass){
+  if (pass === currentPass) return;
+  for (const o of passMeshes) o.material = o.userData.passes[pass];
+  currentPass = pass;
+}
+
+/* Dwarfs: blocky figures with swinging legs/arms walking ping-pong along waypoints. */
+class Dwarf {
+  constructor(path, tunic, beard, hat, speed=1.1, work=false){
+    this.tunicRGB = hex(tunic);
+    this.path = path.map(p => new THREE.Vector3(...p));
+    this.cum=[0]; for (let i=1;i<this.path.length;i++) this.cum.push(this.cum[i-1]+this.path[i].distanceTo(this.path[i-1]));
+    this.len=this.cum[this.cum.length-1]; this.s=rng()*this.len; this.dir=1; this.pause=0; this.speed=speed; this.work=work;
+    this.phase=rng()*6; this.yaw=0; this.mat=toonMaterial(1, OBJ_ID.dwarf);
+    const skin='#e8b48a', pants='#4a3428';
+    this.root=new THREE.Group();
+    this.body=new THREE.Mesh(mergeGeometries([
+      box(0.5,0.5,0.38, 0,0.6,0, tunic), box(0.52,0.07,0.4, 0,0.5,0, '#3a2418'),
+      box(0.36,0.36,0.36, 0,1.03,0, skin), box(0.38,0.34,0.12, 0,0.86,0.2, beard), box(0.08,0.08,0.06, 0,1.02,0.21, '#d89a74'),
+      box(0.4,0.12,0.4, 0,1.27,0, hat), box(0.24,0.16,0.24, 0,1.4,-0.03, hat) ]), this.mat);
+    const limb = (w,h,d,c,x,y) => { const m=new THREE.Mesh(box(w,h,d, 0,-h/2,0, c), this.mat); m.position.set(x,y,0); return m; };
+    this.legL=limb(0.18,0.35,0.2,pants,-0.11,0.35); this.legR=limb(0.18,0.35,0.2,pants,0.11,0.35);
+    this.armL=limb(0.12,0.4,0.14,tunic,-0.31,0.82); this.armR=limb(0.12,0.4,0.14,tunic,0.31,0.82);
+    this.root.add(this.body,this.legL,this.legR,this.armL,this.armR);
+    chunk.add(this.root);
+  }
+  sample(s){
+    let i=1; while (i<this.cum.length-1 && this.cum[i]<s) i++;
+    const a=this.path[i-1], b=this.path[i], t=(s-this.cum[i-1])/Math.max(1e-6,this.cum[i]-this.cum[i-1]);
+    return { p:a.clone().lerp(b,Math.min(1,Math.max(0,t))), d:b.clone().sub(a) };
+  }
+  update(dt, time){
+    let moving = false;
+    if (this.pause>0) this.pause-=dt;
+    else {
+      this.s += this.dir*this.speed*dt; moving=true;
+      if (this.s>=this.len){ this.s=this.len; this.dir=-1; this.pause=this.work?4:1.2+rng()*1.5; }
+      if (this.s<=0){ this.s=0; this.dir=1; this.pause=this.work?3:1.2+rng()*1.5; }
+    }
+    const {p,d} = this.sample(Math.min(this.len-1e-4, Math.max(1e-4,this.s)));
+    // Face the direction of travel; while paused, keep facing the way we arrived
+    // (path ends are authored so that means facing the bench / forge).
+    if (moving){
+      const target=Math.atan2(d.x*this.dir, d.z*this.dir);
+      let dy=target-this.yaw; dy=Math.atan2(Math.sin(dy),Math.cos(dy)); this.yaw+=dy*Math.min(1,dt*8);
+    }
+    this.root.position.copy(p); this.root.rotation.y=this.yaw;
+    if (moving) this.phase += dt*this.speed*7;
+    const sw = moving ? Math.sin(this.phase)*0.6 : 0;
+    this.legL.rotation.x=sw; this.legR.rotation.x=-sw; this.armL.rotation.x=-sw*0.8; this.armR.rotation.x=sw*0.8;
+    if (!moving && this.work) this.armR.rotation.x = -1.2 - Math.abs(Math.sin(time*5))*0.9;  // hammering
+    this.body.position.y = moving ? Math.abs(Math.sin(this.phase))*0.05 : 0;
+    this.mat.uniforms.uObjExposure.value = lightAt(Math.floor(p.x), Math.floor(p.y+0.8), Math.floor(p.z));
+  }
+}
+// Surface walker: sample the path densely and follow the terrain height.
+const surfacePath = [];
+for (let i=0;i<PATH_PTS.length-1;i++){
+  const [ax,az]=PATH_PTS[i], [bx,bz]=PATH_PTS[i+1], n=Math.ceil(Math.hypot(bx-ax,bz-az)*2);
+  for (let k=0;k<n;k++){ const t=k/n, x=lerp(ax,bx,t), z=lerp(az,bz,t); surfacePath.push([x, surfTop(Math.floor(x),Math.floor(z))+1, z]); }
+}
+// Pond-side wanderer: a loop around the pond at ground height.
+const pondPath = [];
+for (let k=0;k<=48;k++){ const a = k/48*Math.PI*2, x = POND.x + Math.cos(a)*(POND.r+2.6), z = POND.z + Math.sin(a)*(POND.r+2.6);
+  if (inStream(Math.floor(x), Math.floor(z))) continue; pondPath.push([x, surfTop(Math.floor(x),Math.floor(z))+1, z]); }
+// Cavern explorer: along the cave floor near the open face.
+const cavePath = [];
+for (let x=10; x<=23; x++){ const z = 60, y = caveFloor(x, z); if (y !== null) cavePath.push([x+0.5, y, z+0.5]); }
+const dwarfs = [
+  new Dwarf(surfacePath, '#b0402a', '#e0a040', '#6a3a22', 1.0),
+  new Dwarf([[44.5,GY+17,62.6],[34.5,GY+7,62.6],[29.5,GY+7,62.6]], '#3a6a8a', '#6a4a30', '#8a2a20', 1.1),
+  new Dwarf([[27,GY+7,57.5],[27,GY+7,58.3],[31.5,GY+7,58.8],[31.5,GY+7,58.5]], '#5a7a3a', '#e8e0d0', '#4a3a6a', 0.9, true),
+  new Dwarf([[33.5,GY+7,57.5],[62.5,GY+7,57.5],[62.5,GY+7,8.5]], '#a07028', '#2a1a10', '#5a6a3a', 1.2),
+  new Dwarf(pondPath, '#7a3a6a', '#c8a070', '#3a5a6a', 0.8),
+  ...(cavePath.length > 3 ? [new Dwarf(cavePath, '#3a7a6a', '#8a5a2a', '#6a2a2a', 0.7)] : []),
+];
+
+/* =====================================================================
+   CAMERAS: logic cameras (driven by OrbitControls) + render cameras
+   (copied each frame, pixel-snapped, with a custom low-res frustum).
+   ===================================================================== */
+const orthoCam = new THREE.OrthographicCamera(-1,1,1,-1,0.1,800);
+const perspCam = new THREE.PerspectiveCamera(35,1,0.5,3000);
+const renderOrtho = new THREE.OrthographicCamera(), renderPersp = new THREE.PerspectiveCamera();
+const ctrlO = new OrbitControls(orthoCam, canvas), ctrlP = new OrbitControls(perspCam, canvas);
+for (const c of [ctrlO, ctrlP]){ c.enableDamping=true; c.dampingFactor=0.08; c.target.set(0,-2,0); c.maxPolarAngle=Math.PI*0.52; c.autoRotateSpeed=0.6; }
+// Deep zoom both ways: in, so pixels can grow big enough for characters; out, for the far ASCII view.
+ctrlO.minZoom=0.12; ctrlO.maxZoom=40; ctrlP.minDistance=4; ctrlP.maxDistance=1200;
+const ISO_DIR = new THREE.Vector3(Math.sin(Math.PI/4)*Math.cos(0.6155), Math.sin(0.6155), Math.cos(Math.PI/4)*Math.cos(0.6155));
+orthoCam.position.copy(ISO_DIR).multiplyScalar(180).add(ctrlO.target);
+let orthoS = 22;
+function switchCamera(toOrtho){
+  const [from, to, cf, ct] = toOrtho ? [perspCam, orthoCam, ctrlP, ctrlO] : [orthoCam, perspCam, ctrlO, ctrlP];
+  const dir = from.position.clone().sub(cf.target).normalize();
+  const half = Math.tan(THREE.MathUtils.degToRad(perspCam.fov/2));
+  ct.target.copy(cf.target);
+  if (toOrtho){ const viewH = 2*from.position.distanceTo(cf.target)*half; to.zoom = 2*orthoS/viewH; to.position.copy(dir.multiplyScalar(180)).add(ct.target); }
+  else { const viewH = 2*orthoS/from.zoom; to.position.copy(dir.multiplyScalar(viewH/2/half)).add(ct.target); }
+  to.updateProjectionMatrix(); cf.enabled=false; ct.enabled=true; ct.autoRotate=S.autoOrbit; ct.update();
+}
+ctrlP.enabled=false;
+perspCam.position.copy(ISO_DIR).multiplyScalar(140);
+
+/* =====================================================================
+   RENDER TARGETS
+   ===================================================================== */
+let shadowRT = null, shadowDirty = true;
+function rebuildShadowTarget(){
+  const n = +S.shadowRes;
+  if (shadowRT){ shadowRT.depthTexture.dispose(); shadowRT.dispose(); }
+  shadowRT = new THREE.WebGLRenderTarget(n, n, { minFilter:THREE.NearestFilter, magFilter:THREE.NearestFilter });
+  shadowRT.depthTexture = new THREE.DepthTexture(n, n);
+  U.uShadowMap.value = shadowRT.depthTexture;
+  shadowDirty = true;
+}
+const shadowCam = new THREE.OrthographicCamera(-58,58,58,-58,1,300);
+
+let W=1, H=1, dpr=1, ps=1, lw=1, lh=1, colorRT, normalRT, postRT, gbufRT, asciiAmt=0, magnify=1, farLite=false, psF=1, rw=1, rh=1;
+const rtOpts = { minFilter:THREE.NearestFilter, magFilter:THREE.NearestFilter, generateMipmaps:false, type:THREE.UnsignedByteType };
+function rebuildTargets(){
+  ps = Math.max(1, Math.round(S.pixel*dpr));
+  if (S.asciiMode === 'always') ps = Math.max(ps, Math.round(S.asciiGlyph*dpr));   // pixels always big enough to hold a character
+  lw = Math.ceil(W/ps)+2; lh = Math.ceil(H/ps)+2;       // +1 texel margin each side for sub-texel shift
+  [colorRT, normalRT, postRT, gbufRT].forEach(rt => { if (rt){ rt.depthTexture?.dispose(); rt.dispose(); } });
+  colorRT = normalRT = gbufRT = null;
+  if (S.gbuffer && HAS_MRT){
+    gbufRT = new THREE.WebGLMultipleRenderTargets(lw, lh, 2, rtOpts); gbufRT.depthTexture = new THREE.DepthTexture(lw,lh);
+    postMat.uniforms.tColor.value=gbufRT.texture[0]; postMat.uniforms.tNormal.value=gbufRT.texture[1];
+    postMat.uniforms.tDepth.value=gbufRT.depthTexture;
+  } else {
+    colorRT = new THREE.WebGLRenderTarget(lw,lh,rtOpts); colorRT.depthTexture = new THREE.DepthTexture(lw,lh);
+    normalRT = new THREE.WebGLRenderTarget(lw,lh,rtOpts);
+    postMat.uniforms.tColor.value=colorRT.texture; postMat.uniforms.tDepth.value=colorRT.depthTexture;
+    postMat.uniforms.tNormal.value=normalRT.texture;
+  }
+  postRT = new THREE.WebGLRenderTarget(lw,lh,{ ...rtOpts, depthBuffer:false });
+  upMat.uniforms.tDepth.value = postMat.uniforms.tDepth.value; upMat.uniforms.tNormal.value = postMat.uniforms.tNormal.value;
+  upMat.uniforms.uHalf.value.set(W/ps/2, H/ps/2);
+  postMat.uniforms.uRes.value.set(lw,lh);
+  upMat.uniforms.tPost.value=postRT.texture; upMat.uniforms.uLowRes.value.set(lw,lh); upMat.uniforms.uPS.value=ps;
+  upMat.uniforms.uScreen.value.set(W,H);
+  document.getElementById('res').textContent = `${lw-2}×${lh-2} · ${ps}px`;
+}
+
+const quadCam = new THREE.Camera();
+const postMat = new THREE.ShaderMaterial({ vertexShader:src('quad-vs'), fragmentShader:src('post-fs'), depthTest:false, depthWrite:false,
+  uniforms:{ tColor:{value:null}, tDepth:{value:null}, tNormal:{value:null}, uRes:{value:new THREE.Vector2()},
+    uNear:{value:0.1}, uFar:{value:400}, uOrtho:{value:1}, uTexelWorld:{value:0.1}, uOutlineOn:{value:1}, uOuter:{value:1}, uInner:{value:0},
+    uDepthThr:{value:0.6}, uNormalThr:{value:0.35}, uOutlineColor:{value:new THREE.Vector3()},
+    uSat:{value:1}, uContrast:{value:1}, uBright:{value:1}, uPaletteOn:{value:1}, uDither:{value:0.3}, uBayer:{value:4},
+    uSpread:{value:0.3}, uPalLUT:{value:null},
+    uDitherOffset:{value:new THREE.Vector2()}, uFolOutline:{value:1}, uOutlineW:{value:1}, uUvScale:{value:new THREE.Vector2(1,1)},
+    uFog:{value:0}, uFogRef:{value:90}, uFogColor:{value:new THREE.Vector3()}, uWobble:{value:0}, uEdgeDarken:{value:0},
+    uHatch:{value:0}, uPaper:{value:new THREE.Vector3()}, uToneMix:{value:0}, uToneA:{value:new THREE.Vector3()},
+    uToneB:{value:new THREE.Vector3()}, uGrain:{value:0}, uGrainAnim:{value:0}, uTime:{value:0} } });
+const upMat = new THREE.ShaderMaterial({ vertexShader:src('quad-vs'), fragmentShader:src('upscale-fs'), depthTest:false, depthWrite:false,
+  uniforms:{ tPost:{value:null}, uLowRes:{value:new THREE.Vector2()}, uPS:{value:1}, uSub:{value:new THREE.Vector2()},
+    tNormal:{value:null}, tDepth:{value:null}, tGlyphs:{value:buildGlyphAtlas()}, uMag:{value:1}, uHalf:{value:new THREE.Vector2()},
+    uGlyphAmt:{value:0}, uOffFull:{value:new THREE.Vector2()}, uGamma:{value:0.8}, uInvert:{value:0}, uColorAmt:{value:1},
+    uBgTint:{value:0.12}, uBoost:{value:1.3}, uEdgesOn:{value:1}, uEdgeThr:{value:0.7}, uMaterials:{value:1}, uTime:{value:0},
+    uNear:{value:0.1}, uFar:{value:400}, uOrtho:{value:1}, uMono:{value:new THREE.Vector3()}, uBgColor:{value:new THREE.Vector3()},
+    uMatch:{value:1}, uSoft:{value:0.6}, uStyle:{value:0}, uDwarfPri:{value:1},
+    uDwarf:{value:Array.from({length:8},()=>new THREE.Vector4())}, uDwarfCol:{value:Array.from({length:8},()=>new THREE.Vector3())},
+    uScreen:{value:new THREE.Vector2(1,1)}, uCRT:{value:0}, uVignette:{value:0} } });
+const postScene = new THREE.Scene(); postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2), postMat));
+function applyAscii(){
+  const a = upMat.uniforms;
+  a.uGamma.value=S.asciiGamma; a.uInvert.value=+S.asciiInvert; a.uColorAmt.value=S.asciiColor;
+  a.uBgTint.value=S.asciiBgTint; a.uBoost.value=S.asciiBoost; a.uEdgesOn.value=+S.asciiEdges; a.uEdgeThr.value=S.asciiEdgeThr;
+  a.uMaterials.value=+S.asciiMaterials; a.uMatch.value=S.asciiMatch; a.uSoft.value=S.asciiSoft; a.uMono.value.set(...hex(S.asciiMono)); a.uBgColor.value.set(...hex(S.asciiBg));
+}
+const upScene = new THREE.Scene(); upScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2), upMat));
+[postScene, upScene].forEach(s => s.children[0].frustumCulled=false);
+
+/* Palette: hue-shifted ramps (plum shadows -> anchor -> warm cream highlights) around each anchor colour. */
+let paletteLUT = null, paletteLUTData = null;
+function buildPalette(){
+  const anchors = PALETTES[S.palette].anchors.map(hex), N = S.palSize;
+  const SHADOW = hex('#2a1430'), LIGHT = hex('#fff0c8'), out = [];
+  const k = Math.min(anchors.length, N), base = Math.floor(N/k), rem = N%k;
+  for (let a=0;a<k;a++){
+    const c = anchors[a], m = base + (a<rem?1:0), step = 0.7/m;
+    for (let i=0;i<m;i++){
+      const t = 0.5 + (i-(m-1)/2)*step;
+      out.push(t<0.5 ? lerp3(lerp3(c.map(x=>x*0.3), SHADOW, 0.5), c, Math.pow(t/0.5, 0.8)) : lerp3(c, LIGHT, (t-0.5)/0.5*0.75));
+    }
+  }
+  // Bake a 32x32x32 lookup: every quantised colour -> its nearest palette entry
+  // ("redmean" weighting). The post shader then does one texture read per pixel
+  // instead of looping over up to 64 colours.
+  const L = 32, lut = paletteLUTData || (paletteLUTData = new Uint8Array(L*L*L*4));
+  for (let bz=0; bz<L; bz++) for (let gy=0; gy<L; gy++) for (let rx=0; rx<L; rx++){
+    const r=rx/(L-1), g=gy/(L-1), b=bz/(L-1);
+    let best=0, bd=1e9;
+    for (let i=0;i<out.length;i++){
+      const p=out[i], dr=r-p[0], dg=g-p[1], db=b-p[2], rm=(r+p[0])*0.5;
+      const d=(2+rm)*dr*dr + 4*dg*dg + (3-rm)*db*db;
+      if (d<bd){ bd=d; best=i; }
+    }
+    const o=(rx + L*(gy + L*bz))*4, c=out[best];
+    lut[o]=Math.round(Math.min(1,Math.max(0,c[0]))*255); lut[o+1]=Math.round(Math.min(1,Math.max(0,c[1]))*255);
+    lut[o+2]=Math.round(Math.min(1,Math.max(0,c[2]))*255); lut[o+3]=255;
+  }
+  if (!paletteLUT){
+    paletteLUT = new THREE.Data3DTexture(lut, L, L, L);
+    paletteLUT.format = THREE.RGBAFormat; paletteLUT.type = THREE.UnsignedByteType;
+    paletteLUT.minFilter = paletteLUT.magFilter = THREE.NearestFilter; paletteLUT.unpackAlignment = 1;
+    postMat.uniforms.uPalLUT.value = paletteLUT;
+  }
+  paletteLUT.needsUpdate = true;
+  postMat.uniforms.uSpread.value = 0.6/Math.cbrt(out.length);
+}
+
+/* =====================================================================
+   SUN / DAY-NIGHT
+   ===================================================================== */
+let skyColor = [0,0,0];
+function updateSun(){
+  const r = S.sun*Math.PI/180, sinE = Math.sin(r);
+  const dir = new THREE.Vector3(Math.cos(r)*0.94, sinE, Math.cos(r)*0.34).normalize();
+  const day = smooth(-0.08, 0.2, sinE), low = (1-smooth(0.05,0.55,sinE))*day;
+  let lc;
+  if (sinE >= 0){
+    lc = lerp3(lerp3(hex('#fff4e0'), hex('#ffb868'), S.warmth), hex('#ff8048'), low*0.7).map(x=>x*day*1.05);
+  } else {
+    dir.negate(); lc = hex('#7080b0').map(x=>x*0.45*smooth(0,0.25,-sinE));
+  }
+  U.uSunDir.value.copy(dir); U.uSunColor.value.set(...lc);
+  const dayAmb = lerp3(hex('#c8c4b8'), hex('#e0c098'), S.warmth);
+  U.uAmbientColor.value.set(...lerp3(lerp3(hex('#3a4466'), dayAmb, day), hex('#e09a70'), low*0.4));
+  skyColor = lerp3(lerp3(hex('#1c1a2a'), hex('#e6d2a4'), day), hex('#e8945c'), low*0.75);
+  shadowCam.position.copy(dir).multiplyScalar(140); shadowCam.lookAt(0,0,0); shadowCam.updateMatrixWorld();
+  U.uShadowMatrix.value.multiplyMatrices(shadowCam.projectionMatrix, shadowCam.matrixWorldInverse);
+}
+
+/* =====================================================================
+   UNIFORM SYNC FROM SETTINGS
+   ===================================================================== */
+function applySettings(){
+  const p = postMat.uniforms;
+  p.uOutlineOn.value=+S.outlineOn; p.uOuter.value=S.outer; p.uInner.value=S.inner; p.uDepthThr.value=S.depthThr;
+  p.uNormalThr.value=S.normalThr; p.uOutlineColor.value.set(...hex(S.outlineColor));
+  p.uSat.value=S.sat; p.uContrast.value=S.contrast; p.uBright.value=S.bright;
+  p.uPaletteOn.value=+S.paletteOn; p.uDither.value=S.dither; p.uBayer.value=+S.bayer;
+  U.uBands.value=S.bands; U.uAmbient.value=S.ambient; U.uTorch.value=S.torch; U.uShadowOn.value=+S.shadows;
+  U.uRim.value=S.rim; U.uSpec.value=S.spec;
+  p.uOutlineW.value=+S.outlineW; p.uFog.value=S.fog; p.uWobble.value=S.wobble; p.uEdgeDarken.value=S.edgeDarken;
+  p.uHatch.value=S.hatch; p.uPaper.value.set(...hex(S.paper)); p.uToneMix.value=S.toneMix;
+  p.uToneA.value.set(...hex(S.toneA)); p.uToneB.value.set(...hex(S.toneB)); p.uGrain.value=S.grain; p.uGrainAnim.value=+S.grainAnim;
+  upMat.uniforms.uCRT.value=S.crt; upMat.uniforms.uVignette.value=S.vignette;
+}
+function sideEffects(id){
+  if (id==='pixel') rebuildTargets();
+  if (id.startsWith('ascii')) applyAscii();
+  if (id==='asciiMode' || id==='asciiGlyph') rebuildTargets();
+  if (id==='round'){ rebuildTerrain(); shadowDirty = true; }
+  if (id==='resScale') resize();
+  if (id==='gbuffer' || id==='prepass'){ if (id==='gbuffer') rebuildTargets(); prof.avg = {}; }
+  if (id==='profiler'){ document.getElementById('prof').style.display = S.profiler ? 'block' : 'none'; prof.avg = {}; }
+  if (id==='shadowRes') rebuildShadowTarget();
+  if (id==='shadows' || id==='sun' || id==='cardSize' || id==='folMode') shadowDirty = true;
+  if (id==='texPack' || id==='texStrength') applyTexturePack();
+  if (id==='cardSize') rebuildFoliage();
+  if (FOL_KEYS.includes(id)) applyFoliage();
+  if (id==='palette' || id==='palSize') buildPalette();
+  if (id==='ortho') switchCamera(S.ortho);
+  if (id==='autoOrbit'){ ctrlO.autoRotate = ctrlP.autoRotate = S.autoOrbit; }
+}
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+const inputs = {}, valEls = {};
+(function buildUI(){
+  const root=document.getElementById('controls'), groups={};
+  for (const c of CONTROLS){
+    if (!groups[c.g]){ const d=document.createElement('details'); d.open = c.g!=='Camera' || innerWidth>720;
+      d.innerHTML=`<summary>${c.g}</summary>`; root.appendChild(d); groups[c.g]=d; }
+    const g=groups[c.g]; let el;
+    if (c.type==='toggle'){
+      el=document.createElement('label'); el.className='tog';
+      el.innerHTML=`<span>${c.label}</span><input type="checkbox"><span class="sw"></span>`;
+      const inp=el.querySelector('input'); inputs[c.id]=inp;
+      inp.addEventListener('change',()=>onInput(c.id, inp.checked));
+    } else if (c.type==='select'){
+      el=document.createElement('div'); el.className='row sel';
+      el.innerHTML=`<label>${c.label}</label><select>${c.options.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>`;
+      const inp=el.querySelector('select'); inputs[c.id]=inp; inp.addEventListener('change',()=>onInput(c.id, inp.value));
+    } else if (c.type==='color'){
+      el=document.createElement('div'); el.className='row';
+      el.innerHTML=`<label>${c.label}</label><input type="color">`;
+      const inp=el.querySelector('input'); inputs[c.id]=inp; inp.addEventListener('input',()=>onInput(c.id, inp.value));
+    } else {
+      el=document.createElement('div'); el.className='row';
+      el.innerHTML=`<label>${c.label}</label><span class="val"></span><input type="range" min="${c.min}" max="${c.max}" step="${c.step}">`;
+      const inp=el.querySelector('input'); inputs[c.id]=inp; valEls[c.id]=el.querySelector('.val');
+      inp.addEventListener('input',()=>onInput(c.id, parseFloat(inp.value)));
+    }
+    g.appendChild(el);
+  }
+  const ps=document.getElementById('preset');
+  ps.innerHTML = Object.entries(PRESETS).map(([k,p])=>`<option value="${k}">${p.label}</option>`).join('') + `<option value="custom" hidden>Custom</option>`;
+  ps.addEventListener('change',()=>applyPreset(ps.value));
+  document.getElementById('toggle').addEventListener('click',()=>{
+    const p=document.getElementById('panel'); p.classList.toggle('hidden');
+    document.getElementById('toggle').textContent = p.classList.contains('hidden') ? 'Tune ▴' : 'Tune ▾';
+  });
+})();
+function fmtVal(id){ const c=CONTROLS.find(c=>c.id===id); const v=S[id]; return c.fmt ? c.fmt(v) : (Number.isInteger(c.step) ? v : (+v).toFixed(2)); }
+function refreshUI(id){
+  const ids = id ? [id] : Object.keys(inputs);
+  for (const k of ids){ const inp=inputs[k]; if (inp.type==='checkbox') inp.checked=!!S[k]; else inp.value=S[k]; if (valEls[k]) valEls[k].textContent=fmtVal(k); }
+}
+function onInput(id, v){
+  S[id]=v; if (valEls[id]) valEls[id].textContent=fmtVal(id);
+  if (id==='folPreset'){ applyFolPreset(v); return; }
+  if (id==='asciiPreset'){ applyAsciiPreset(v); return; }
+  if (ASCII_KEYS.includes(id)){ S.asciiPreset='custom'; refreshUI('asciiPreset'); }
+  if (PRESET_KEYS.includes(id)) document.getElementById('preset').value='custom';
+  if (FOL_KEYS.includes(id)){ S.folPreset='custom'; refreshUI('folPreset'); }
+  applySettings(); sideEffects(id);
+}
+function applyAsciiPreset(key){
+  if (!ASCII_PRESETS[key]) return;
+  Object.assign(S, BASE_ASCII_DEFAULTS(), ASCII_PRESETS[key].v); S.asciiPreset = key;
+  refreshUI(); applyAscii();
+}
+const BASE_ASCII_DEFAULTS = () => Object.fromEntries(ASCII_KEYS.map(k=>[k, BASE[k]]));
+function applyFolPreset(key){
+  if (!FOL_PRESETS[key]) return;
+  const v = { ...BASE, ...FOL_PRESETS[key].v }, oldCard = S.cardSize;
+  for (const k of FOL_KEYS) S[k]=v[k];
+  S.folPreset = key;
+  refreshUI(); if (S.cardSize!==oldCard) rebuildFoliage(); applyFoliage();
+}
+function applyPreset(key){
+  const v = { ...BASE, ...PRESETS[key].v };
+  for (const k of PRESET_KEYS) S[k]=v[k];
+  document.getElementById('preset').value=key;
+  refreshUI(); applySettings(); rebuildTargets(); buildPalette();
+}
+
+/* =====================================================================
+   RESIZE + FRAME LOOP
+   ===================================================================== */
+function resize(){
+  // Use the real device ratio so every art pixel is a whole number of screen pixels,
+  // and let the pixel-size slider step by exactly one screen pixel.
+  // "Auto": on very dense phone screens (>2x) render at 1x and let the browser
+  // integer-scale the canvas (crisp with image-rendering: pixelated); this cuts the
+  // screen-res work ~9x. Otherwise use the native ratio (capped at 3).
+  const dev = window.devicePixelRatio||1;
+  const cap = { auto: dev > 2.01 ? 1 : 3, native:3, '2':2, '1':1 }[S.resScale] ?? 3;
+  dpr = Math.max(1, Math.min(dev, cap));
+  const stepPx = 1/Math.max(1, Math.round(dpr));
+  if (inputs.pixel){ inputs.pixel.step = stepPx; inputs.pixel.value = S.pixel; if (valEls.pixel) valEls.pixel.textContent = fmtVal('pixel'); }
+  renderer.setPixelRatio(dpr); renderer.setSize(innerWidth, innerHeight, false);
+  W = renderer.domElement.width; H = renderer.domElement.height;
+  const aspect = W/H; orthoS = Math.max(44, 50/aspect);
+  Object.assign(orthoCam, { left:-orthoS*aspect, right:orthoS*aspect, top:orthoS, bottom:-orthoS }); orthoCam.updateProjectionMatrix();
+  perspCam.aspect = aspect; perspCam.updateProjectionMatrix();
+  rebuildTargets();
+}
+window.addEventListener('resize', resize);
+
+const tmpR = new THREE.Vector3(), tmpU = new THREE.Vector3(), tmpP = new THREE.Vector3(), tmpQ = new THREE.Vector3();
+function setupRenderCamera(){
+  const L = S.ortho ? orthoCam : perspCam, R = S.ortho ? renderOrtho : renderPersp, ctrl = S.ortho ? ctrlO : ctrlP;
+  // ASCII zoom: past the start zoom, keep the art resolution fixed (render as if at the start
+  // zoom) and let the upscale pass magnify, so pixels grow instead of detail increasing.
+  const zoomF = S.ortho ? L.zoom : 140/L.position.distanceTo(ctrl.target);
+  const asciiIn = S.asciiMode === 'in' || S.asciiMode === 'both';
+  const asciiOut = S.asciiMode === 'out' || S.asciiMode === 'both';
+  magnify = asciiIn ? Math.max(1, zoomF / S.asciiStart) : 1;
+  R.position.copy(L.position); R.quaternion.copy(L.quaternion);
+  if (!S.ortho && magnify > 1) R.position.sub(ctrl.target).multiplyScalar(magnify).add(ctrl.target);   // perspective: back off
+  R.updateMatrixWorld();
+  // Zoom out: the art pixel size grows CONTINUOUSLY (geometric in zoom, so every scroll
+  // step changes it by the same ratio) toward the final character size. The targets
+  // keep their size; we render into a shrinking sub-region of them instead of rebuilding.
+  let farK = 0;
+  if (asciiOut){
+    const hi = Math.max(S.asciiFarStart, S.asciiFarEnd + 0.01), lo = Math.min(S.asciiFarEnd, hi - 0.01);
+    farK = Math.min(1, Math.max(0, Math.log(hi / zoomF) / Math.log(hi / lo)));
+  }
+  psF = farK > 0 ? ps * Math.pow(Math.max(1, S.asciiFarGlyph*dpr / ps), farK) : ps;
+  rw = Math.min(lw, Math.ceil(W/psF) + 2); rh = Math.min(lh, Math.ceil(H/psF) + 2);
+  for (const rt of [colorRT, normalRT, gbufRT, postRT]) if (rt) rt.viewport.set(0, 0, rw, rh);
+  postMat.uniforms.uUvScale.value.set(rw/lw, rh/lh);
+  const vw = W/psF, vh = H/psF;                   // visible low-res texels (at magnification 1)
+  const dist = R.position.distanceTo(ctrl.target);
+  const wpt = S.ortho ? (L.top-L.bottom)/(L.zoom/magnify)/vh : 2*dist*Math.tan(THREE.MathUtils.degToRad(L.fov/2))/vh; // world units per texel
+  const sub = upMat.uniforms.uSub.value, doff = postMat.uniforms.uDitherOffset.value, offFull = upMat.uniforms.uOffFull.value;
+  sub.set(0,0); doff.set(0,0); offFull.set(0,0);
+  if (S.snap){
+    // Snap the camera to whole texels in its own right/up plane; hand the remainder to the upscale pass.
+    tmpR.setFromMatrixColumn(R.matrixWorld,0); tmpU.setFromMatrixColumn(R.matrixWorld,1);
+    const pr = R.position.dot(tmpR)/wpt, pu = R.position.dot(tmpU)/wpt, sr = Math.round(pr), su = Math.round(pu);
+    R.position.addScaledVector(tmpR,(sr-pr)*wpt).addScaledVector(tmpU,(su-pu)*wpt); R.updateMatrixWorld();
+    sub.set(pr-sr, pu-su); doff.set(mod(sr,8), mod(su,8)); offFull.set(mod(sr,4096), mod(su,4096));
+  }
+  FOL_U.uScreenOffset.value.copy(doff);
+  // Frustum in texels, with the visible area centred on the camera and 1 texel of margin.
+  const l=-(1+vw/2), r=rw-1-vw/2, b=-(1+vh/2), t=rh-1-vh/2;
+  if (S.ortho) R.projectionMatrix.makeOrthographic(l*wpt, r*wpt, t*wpt, b*wpt, L.near, L.far);
+  else { const k = wpt*L.near/dist; R.projectionMatrix.makePerspective(l*k, r*k, t*k, b*k, L.near, L.far); }
+  R.projectionMatrixInverse.copy(R.projectionMatrix).invert();
+  postMat.uniforms.uNear.value=L.near; postMat.uniforms.uFar.value=L.far; postMat.uniforms.uOrtho.value=+S.ortho;
+  postMat.uniforms.uTexelWorld.value = S.ortho ? wpt : wpt/dist;
+  postMat.uniforms.uFogRef.value = dist; postMat.uniforms.uFogColor.value.set(...skyColor);
+  // Characters fade in (pixel by pixel, random order) as magnified pixels reach the
+  // character size on screen. 'Always' renders big pixels from the start.
+  // Both transitions run over a zoom RANGE measured in log space, so the reveal advances
+  // evenly per scroll step (~20 steps for a 3x range).
+  const s01 = x => { x = Math.min(1, Math.max(0, x)); return x*x*(3-2*x); };
+  const inK = (asciiIn && magnify > 1) ? Math.log(magnify) / Math.log(Math.max(1.05, S.asciiInLen)) : 0;
+  asciiAmt = S.asciiMode === 'always' ? 1 : Math.max(s01(inK), s01(farK));
+  farLite = farK > 0 && asciiAmt >= 0.999 && S.asciiFarLite;
+  const u = upMat.uniforms;
+  u.uMag.value = magnify; u.uGlyphAmt.value = asciiAmt;
+  u.uStyle.value = ((farK > 0 ? S.asciiFarStyle : S.asciiNearStyle) === 'object') ? 1 : 0;
+  // Dwarf priority (zoomed-out view, or any object-symbol view): project each dwarf's centre
+  // into the art-pixel grid of this frame's render camera.
+  u.uDwarfPri.value = (S.asciiDwarfPri && (farK > 0 || u.uStyle.value > 0.5)) ? 1 : 0;
+  if (u.uDwarfPri.value > 0){
+    R.updateMatrixWorld();
+    for (let i=0;i<8;i++){
+      const slot = u.uDwarf.value[i]; slot.set(0,0,0,0);
+      const dw = dwarfs[i]; if (!dw) continue;
+      dw.root.updateWorldMatrix(true, false);
+      tmpP.set(0, 0.75, 0); dw.root.localToWorld(tmpP);
+      const depth = -tmpQ.copy(tmpP).applyMatrix4(R.matrixWorldInverse).z;
+      tmpP.project(R);
+      if (depth <= 0 || Math.abs(tmpP.x) > 1 || Math.abs(tmpP.y) > 1) continue;
+      slot.set((tmpP.x*0.5+0.5)*rw, (tmpP.y*0.5+0.5)*rh, depth, 1);
+      u.uDwarfCol.value[i].set(...dw.tunicRGB);
+    }
+  }
+  u.uPS.value = psF; u.uHalf.value.set(W/psF/2, H/psF/2);
+  u.uNear.value = L.near; u.uFar.value = L.far; u.uOrtho.value = +S.ortho;
+  return R;
+}
+
+/* ---------------------------------------------------------------------
+   PROFILER: GPU time per pass via EXT_disjoint_timer_query_webgl2 when the
+   browser exposes it; otherwise a sync fallback (forces the GPU to finish after
+   each pass with a 1-pixel read: accurate per pass, but lowers overall fps).
+   --------------------------------------------------------------------- */
+const gl = renderer.getContext();
+const timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+const gpuName = (() => { const e = gl.getExtension('WEBGL_debug_renderer_info');
+  return e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER); })();
+const prof = { avg:{}, pending:[], cur:null, t0:0, px:new Uint8Array(4) };
+renderer.info.autoReset = false;
+function passBegin(label){
+  if (!S.profiler) return;
+  if (timerExt){ const q = gl.createQuery(); gl.beginQuery(timerExt.TIME_ELAPSED_EXT, q); prof.cur = { q, label }; }
+  else { gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,prof.px); prof.cur = { label }; prof.t0 = performance.now(); }
+}
+function passEnd(){
+  if (!S.profiler || !prof.cur) return;
+  if (timerExt){ gl.endQuery(timerExt.TIME_ELAPSED_EXT); prof.pending.push(prof.cur); }
+  else { gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,prof.px); profAdd(prof.cur.label, performance.now()-prof.t0); }
+  prof.cur = null;
+}
+function profAdd(label, ms){ const a = prof.avg[label]; prof.avg[label] = a === undefined ? ms : a*0.92 + ms*0.08; }
+function pollProfiler(){
+  if (!timerExt) return;
+  const disjoint = gl.getParameter(timerExt.GPU_DISJOINT_EXT);
+  prof.pending = prof.pending.filter(p => {
+    if (!gl.getQueryParameter(p.q, gl.QUERY_RESULT_AVAILABLE)) return true;
+    if (!disjoint) profAdd(p.label, gl.getQueryParameter(p.q, gl.QUERY_RESULT)/1e6);
+    gl.deleteQuery(p.q); return false;
+  });
+}
+function drawProfiler(cpuMs){
+  const lines = [];
+  const soft = /swiftshader|llvmpipe|basic render|software/i.test(gpuName);
+  const igpu = /intel|uhd|iris|adreno|mali|apple m|radeon\(tm\) graphics|vega \d+ graphics/i.test(gpuName);
+  lines.push(`GPU  ${gpuName.replace(/^ANGLE \(|\)$/g,'').slice(0,64)}`);
+  if (soft) lines.push('!! Software rendering — enable hardware acceleration in the browser');
+  else if (igpu) lines.push('note: integrated GPU — on a laptop, set the browser to "High performance" GPU');
+  lines.push(`canvas ${W}×${H} @${dpr}x · art ${rw-2}×${rh-2} (${((rw*rh)/1e6).toFixed(3)} Mpx/pass)`);
+  lines.push(`draws ${renderer.info.render.calls} · tris ${(renderer.info.render.triangles/1000).toFixed(1)}k · CPU ${cpuMs.toFixed(2)}ms`);
+  lines.push(`timing: ${timerExt ? 'GPU timer queries' : 'sync fallback (slows fps)'}`);
+  let total = 0;
+  for (const k of ['shadow','colour','normals','post','upscale']){
+    const v = prof.avg[k]; if (v === undefined) continue; total += v;
+    lines.push(`${k.padEnd(8)} ${v.toFixed(2).padStart(6)}ms ${'█'.repeat(Math.min(30, Math.round(v*3)))}`);
+  }
+  lines.push(`total    ${total.toFixed(2).padStart(6)}ms`);
+  document.getElementById('prof').textContent = lines.join('\n');
+}
+
+let last=performance.now(), fpsT=0, fpsN=0, uiT=0, frameNo=0, lastShadowSun=null;
+const clearCol = new THREE.Color();
+const LIGHT_RGB = LIGHTS.map(Lt => hex(Lt.c));
+LIGHTS.forEach((Lt,i) => { U.uPointPos.value[i].set(...Lt.p).add(CHUNK_ORIGIN); U.uPointRange.value[i]=Lt.r; });
+const fpsEl=document.getElementById('fps');
+function frame(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  const time=now/1000; U.uTime.value=time; postMat.uniforms.uTime.value=time; upMat.uniforms.uTime.value=time;
+  fpsN++; fpsT+=dt; if (fpsT>0.5){ fpsEl.textContent=`${Math.round(fpsN/fpsT)} (${(fpsT/fpsN*1000).toFixed(1)}ms)`; fpsN=0; fpsT=0; }
+  frameNo++;
+  const cpu0 = performance.now();
+  renderer.info.reset(); pollProfiler();
+
+  if (S.cycle){ S.sun=(S.sun+dt*6)%360; uiT+=dt; if (uiT>0.2){ refreshUI('sun'); uiT=0; } }
+  updateSun();
+  for (let i=0;i<LIGHTS.length;i++){
+    const Lt=LIGHTS[i], c=LIGHT_RGB[i], k = Lt.k*(0.88 + 0.07*Math.sin(time*9.1+i*2.3) + 0.05*Math.sin(time*23.7+i));
+    U.uPointCol.value[i].set(c[0]*k, c[1]*k, c[2]*k);
+  }
+  dwarfs.forEach(d=>d.update(dt,time));
+  (S.ortho?ctrlO:ctrlP).update();
+  const cam = setupRenderCamera();
+
+  // 1. Sun shadow depth
+  //    Re-rendered every N frames (only dwarfs and swaying leaves move), or at once
+  //    when the sun moves or the scene changes.
+  U.uShadowOn.value = (S.shadows && !farLite) ? 1 : 0;
+  if (S.shadows && !farLite && (shadowDirty || S.sun !== lastShadowSun || frameNo % (+S.shadowEvery) === 0)){
+    setPass('depth'); renderer.setRenderTarget(shadowRT); renderer.clear();
+    passBegin('shadow'); renderer.render(scene, shadowCam); passEnd();
+    shadowDirty = false; lastShadowSun = S.sun;
+  }
+  // 2. Low-res colour (+ depth texture)
+  //    (combined mode writes colour + normals in this one pass)
+  renderer.setRenderTarget(gbufRT || colorRT);
+  renderer.setClearColor(clearCol.setRGB(skyColor[0], skyColor[1], skyColor[2]),1); renderer.clear();
+  passBegin('colour');
+  if (S.prepass){ setPass('pre'); renderer.render(scene, cam); }
+  setPass(gbufRT ? 'colorMRT' : 'color'); renderer.render(scene, cam);
+  passEnd();
+  // 3. Low-res world normals (only the outline pass reads them, so skip when outlines are off)
+  if ((S.outlineOn || asciiAmt > 0) && !gbufRT){   // ASCII also reads material IDs from this buffer
+    setPass('normal'); renderer.setRenderTarget(normalRT);
+    renderer.setClearColor(0x8080ff,1); renderer.clear(); passBegin('normals'); renderer.render(scene, cam); passEnd();
+  }
+  // 4+5. Low-res post (outlines, grade, dither, palette), then nearest upscale.
+  //      At 1 screen px per art pixel with no CRT/vignette, the upscale is a pure copy,
+  //      so the post pass writes straight to the screen (offset by the 1-texel margin).
+  if (ps === 1 && psF === ps && S.crt === 0 && S.vignette === 0 && asciiAmt === 0 && magnify === 1){
+    renderer.setRenderTarget(null); renderer.setViewport(-1/dpr, -1/dpr, lw/dpr, lh/dpr);   // three scales by pixel ratio
+    passBegin('post'); renderer.render(postScene, quadCam); passEnd();
+    renderer.setViewport(0, 0, innerWidth, innerHeight);
+  } else {
+    renderer.setRenderTarget(postRT); passBegin('post'); renderer.render(postScene, quadCam); passEnd();
+    renderer.setRenderTarget(null); passBegin('upscale'); renderer.render(upScene, quadCam); passEnd();
+  }
+  if (S.profiler && frameNo % 15 === 0) drawProfiler(performance.now() - cpu0);
+  if (frameNo % 10 === 0) document.getElementById('res').textContent = `${rw-2}×${rh-2} · ${psF.toFixed(psF % 1 ? 1 : 0)}px`;
+  requestAnimationFrame(frame);
+}
+
+rebuildShadowTarget();
+resize();
+applyTexturePack();
+registerPasses();
+rebuildFoliage();
+applyPreset('snes');
+applyFolPreset('dither');
+applyAsciiPreset('colour');
+updateTriCount();
+refreshUI();
+requestAnimationFrame(frame);
+
+/* =====================================================================
+   PORTING NOTES — how each pass maps to Godot 4
+   ---------------------------------------------------------------------
+   Low-res render    → Render the 3D world inside a SubViewport sized to
+                       floor(screen / pixel_size) + 2, shown through a
+                       SubViewportContainer/TextureRect with texture_filter =
+                       NEAREST (or stretch_shrink = pixel_size). Keep 3D
+                       scaling off; the SubViewport size *is* the low res.
+   Toon scene shader → spatial shader on the chunk mesh. Put the banding in
+                       light(): DIFFUSE_LIGHT += floor(NdotL*ATTENUATION*bands+0.5)/bands
+                       * LIGHT_COLOR. Godot's DirectionalLight3D/OmniLight3D
+                       shadows replace the hand-rolled shadow map; AO and sky
+                       exposure come in as CUSTOM0 vertex data from the C# mesher.
+   Normals + depth   → In a post-process spatial shader (full-screen quad mesh
+                       in front of the SubViewport camera, render_mode unshaded),
+                       read hint_depth_texture and hint_normal_roughness_texture
+                       (Forward+). Linearise depth with INV_PROJECTION_MATRIX.
+   Outlines/grade/
+   dither/palette    → Same spatial post shader (or a CompositorEffect compute
+                       pass). Palette as a uniform vec3 array or a 64x1 sampler2D
+                       with filter_nearest. Bayer from FRAGCOORD + dither offset.
+   Pixel snapping    → In _process (C#): snap the Camera3D's position to texel
+                       increments along its basis.x / basis.y, then offset the
+                       TextureRect/canvas_item by the sub-texel remainder *
+                       pixel_size (or pass it to a canvas_item shader that
+                       shifts UV), exactly like uSub here. Render 1 texel of
+                       margin so the shift never reveals an edge.
+   Upscale           → canvas_item shader on the TextureRect:
+                       COLOR = texture(TEXTURE, (floor(FRAGCOORD.xy/ps + 1.0 + sub) + 0.5) / low_res)
+                       or just NEAREST filtering plus a pixel offset.
+   Greedy meshing    → Port buildChunkGeometry() to C#, emitting ArrayMesh
+                       surfaces per chunk; keep the "merge only uniform AO" rule.
+   Edge rounding     → Same C# pass: put the 4 edge flags in the greedy merge key,
+                       inset flagged quad edges by r, then emit bevel strips
+                       (blended vertex normals), corner tris and caps per voxel.
+                       Rounding only depends on the voxel and its 6 neighbours, so
+                       a chunk needs just a 1-voxel border from adjacent chunks.
+                       Costs roughly 2x the triangles of plain greedy meshing.
+   Foliage           → spatial shader with `discard` for the dithered shell / leaf
+                       cards; Godot reuses the same shader for its depth prepass and
+                       shadow pass, so the holes match automatically (no per-pass
+                       variants needed). Wind sway in vertex(). Tag foliage for the
+                       outline pass by writing ROUGHNESS = 1.0 (read it back from
+                       hint_normal_roughness_texture.a) or use a render layer mask.
+                       Screen-door pattern: bayer(FRAGCOORD.xy + snapped offset).
+   Block textures    → Bake the atlas once (C# Image → ImageTexture, or author it as a
+                       PNG) and sample it in the spatial shader with filter_nearest.
+                       Pass the block type as CUSTOM1 (or UV2.x) from the mesher;
+                       derive face UVs from world position exactly as here so
+                       greedy-merged quads tile without extra UV work.
+   Art-style effects → Fog, wobble, watercolour edges, duotone, hatching and grain
+                       all live in the low-res post shader (cheap: they run per art
+                       pixel). CRT + vignette run in the screen-res canvas_item
+                       upscale shader. Rim / specular go in the spatial light().
+   Outlines          → Use world normals (or rotate Godot's view-space normals by
+                       INV_VIEW_MATRIX) and the second-difference depth test.
+   ===================================================================== */
+</script>
+</body>
+</html>

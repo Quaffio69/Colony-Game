@@ -38,7 +38,7 @@ public partial class FloraView : Node3D
         _sim = sim;
         _world = world;
         _flora = sim.Flora;
-        _shader = GD.Load<Shader>("res://shaders/flora.gdshader");
+        _shader = GameLooks.Shader("res://shaders/flora.gdshader");
         BuildMeshes();
         int regions = _flora.RegionsX * _flora.RegionsY;
         _regionNodes = new Node3D?[regions];
@@ -209,9 +209,11 @@ public partial class FloraView : Node3D
         _ => Colors.Magenta,
     };
 
-    private ShaderMaterial Material(Color albedo, float tintMix = 0.35f, float emission = 0f)
+    private ShaderMaterial Material(Color albedo, float tintMix = 0.35f, float emission = 0f, int glyph = DwarfRender.GlyphAtlas.Bush)
     {
         var m = new ShaderMaterial { Shader = _shader };
+        m.SetShaderParameter("object_id", (float)glyph); // styled look: what ASCII draws (trees outline as foliage)
+        GameLooks.Styled(m);
         m.SetShaderParameter("albedo", albedo);
         m.SetShaderParameter("tint_mix", tintMix);
         m.SetShaderParameter("emission", emission);
@@ -256,9 +258,14 @@ public partial class FloraView : Node3D
 
     private void BuildMeshes()
     {
-        var bark = Material(Bark, 0.1f);
-        var birchBark = Material(BirchBark, 0.1f);
-        ShaderMaterial Leaves(PlantKind k) => Material(CanopyColor(k));
+        var bark = Material(Bark, 0.1f, glyph: DwarfRender.GlyphAtlas.Trunk);
+        var birchBark = Material(BirchBark, 0.1f, glyph: DwarfRender.GlyphAtlas.Trunk);
+        ShaderMaterial Leaves(PlantKind k) => Material(CanopyColor(k), glyph: k switch
+        {
+            PlantKind.Pine or PlantKind.Spruce => DwarfRender.GlyphAtlas.Pine,
+            PlantKind.Birch => DwarfRender.GlyphAtlas.Birch,
+            _ => DwarfRender.GlyphAtlas.Oak,
+        });
 
         _meshes[(int)PlantKind.Oak] = Compose(
             (Rod(0.2f, 0.15f, 2.6f), At(0, 1.3f, 0), bark),
@@ -343,5 +350,27 @@ public partial class FloraView : Node3D
         _farMesh = Compose(
             (Rod(2.1f, 0f, 3.6f, 5), At(0, 3.8f, 0), marker),
             (Rod(0f, 2.1f, 1.4f, 5), At(0, 1.3f, 0), marker));
+        if (Main.StyledRender) KitTrees();
+    }
+
+    /// <summary>
+    /// The Dwarf Render look: trees and bushes from the kit's TreeBuilder (dithered canopy shells, bark with branches),
+    /// canopy and bark as two surfaces of one mesh so the MultiMesh instancing stays as it is. Sliced like the rest.
+    /// </summary>
+    private void KitTrees()
+    {
+        var canopy = DwarfRender.DwarfMaterials.Foliage;
+        var bark = DwarfRender.DwarfMaterials.CreateObject(Colors.White, DwarfRender.GlyphAtlas.Trunk, null, useVertexColor: true);
+        _materials.Add(canopy);
+        _materials.Add(bark);
+        Mesh Tree(DwarfRender.TreeSpecies species, float scale, int seed) =>
+            DwarfRender.TreeBuilder.Build(species, scale, seed, into: new ArrayMesh(), canopyMaterial: canopy, barkMaterial: bark).canopy;
+        _meshes[(int)PlantKind.Oak] = Tree(DwarfRender.TreeSpecies.Oak, 0.9f, 1);
+        _meshes[(int)PlantKind.Willow] = Tree(DwarfRender.TreeSpecies.Oak, 1.05f, 7);
+        _meshes[(int)PlantKind.Birch] = Tree(DwarfRender.TreeSpecies.Birch, 0.85f, 2);
+        _meshes[(int)PlantKind.Pine] = Tree(DwarfRender.TreeSpecies.Pine, 0.85f, 3);
+        _meshes[(int)PlantKind.Spruce] = Tree(DwarfRender.TreeSpecies.Pine, 0.75f, 5);
+        _meshes[(int)PlantKind.Shrub] = Tree(DwarfRender.TreeSpecies.Bush, 0.55f, 4);
+        _meshes[(int)PlantKind.BerryBush] = Tree(DwarfRender.TreeSpecies.Bush, 0.6f, 6);
     }
 }
