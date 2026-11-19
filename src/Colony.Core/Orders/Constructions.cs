@@ -359,4 +359,53 @@ public sealed class Constructions
 
     public static int MaterialsOnSite(Blueprint bp, ItemPiles items, bool available = false) =>
         items.TryGet(bp.Cell, out var pile) && pile.Type == bp.Cost.Material ? (available ? pile.Available : pile.Count) : 0;
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    /// <summary>Rebuilds the lookups from the blueprint list (in its order), as a loaded copy builds them.</summary>
+    internal void Settle() => Reindex();
+
+    private void Reindex()
+    {
+        _byCell.Clear();
+        _byEdge.Clear();
+        _byCover.Clear();
+        _bySite.Clear();
+        foreach (var bp in _order)
+        {
+            if (bp.IsEdge) _byEdge[(bp.EdgeCell, bp.Side)] = bp;
+            else if (bp.IsCover) _byCover[(bp.Cell, bp.Kind == StructureKind.Roof)] = bp;
+            else _byCell[bp.Cell] = bp;
+            if (bp.IsEdge || bp.IsCover) AddSite(bp);
+        }
+    }
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(_order.Count);
+        foreach (var bp in _order)
+        {
+            Net.SnapIO.Write(w, bp.Cell); w.Write((byte)bp.Kind); w.Write(bp.Faction); w.Write(bp.Facing);
+            Net.SnapIO.Write(w, bp.EdgeCell); w.Write(bp.Side); w.Write(bp.Material); w.Write(bp.BuilderId); w.Write(bp.Removed);
+        }
+        w.Write(Version);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        int n = r.ReadInt32();
+        for (int i = 0; i < n; i++)
+        {
+            var bp = new Blueprint
+            {
+                Cell = Net.SnapIO.ReadPos(r), Kind = (StructureKind)r.ReadByte(), Faction = r.ReadInt32(), Facing = r.ReadInt32(),
+                EdgeCell = Net.SnapIO.ReadPos(r), Side = r.ReadInt32(), Material = r.ReadInt32(),
+            };
+            bp.BuilderId = r.ReadInt32();
+            bp.Removed = r.ReadBoolean();
+            _order.Add(bp);
+        }
+        Version = r.ReadInt32();
+        Reindex();
+    }
 }

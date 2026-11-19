@@ -35,9 +35,8 @@ public class SaveTests
         var loaded = SaveGame.Read(file).Load(progress.Add);
         Assert.Equal(sim.Tick, loaded.Tick);
         Assert.Equal(StateHash.Compute(sim), StateHash.Compute(loaded));
-        Assert.Equal(sim.Commands.Log.Count, loaded.Commands.Log.Count);
         Assert.Equal(1f, progress[^1]);
-        Assert.True(progress.Count > 3);
+        Assert.True(progress.Count >= 3);
 
         // And it plays on the same as the original.
         for (int i = 0; i < 300; i++) { sim.Step(); loaded.Step(); }
@@ -49,5 +48,23 @@ public class SaveTests
     {
         var junk = new MemoryStream(new byte[] { 3, 1, 2, 3, 4, 5 });
         Assert.ThrowsAny<Exception>(() => SaveGame.Read(junk));
+    }
+
+    [Fact]
+    public void AnOldLogSave_StillLoads_ByReplay()
+    {
+        var sim = Small.Create();
+        var home = sim.Colonists[0].Position;
+        for (int i = 0; i < 400; i++)
+        {
+            if (i == 50) sim.Commands.Execute(new DesignateBox(home.Offset(2, -2, -1), home.Offset(5, 2, -1), DesignationKind.Dig));
+            sim.Step();
+        }
+        var old = new SaveGame(Small, sim.Tick, sim.Commands.Log.ToList(), "Old", 0, 0); // version 1: no snapshot
+        var file = new MemoryStream();
+        old.Write(file);
+        file.Position = 0;
+        var loaded = SaveGame.Read(file).Load();
+        Assert.Equal(StateHash.Compute(sim), StateHash.Compute(loaded));
     }
 }

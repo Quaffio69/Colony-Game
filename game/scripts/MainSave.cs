@@ -31,7 +31,8 @@ public partial class Main
     /// <summary>Saves this game under a name (a file per name; the same name overwrites). Null on success, else why not.</summary>
     public string? SaveAs(string name)
     {
-        if (!Shareable) return "This world was changed by a demo or a test, so it can't be rebuilt from a save: start a new one";
+        if (s_client != null) return "Only the host can save an online game (its save holds every colony)";
+        if (!Shareable) return "A test's world can't be saved";
         name = string.IsNullOrWhiteSpace(name) ? $"{_sim.Factions[Player].Name}, day {_sim.Tick / Colony.Core.Agents.Needs.Day + 1}" : name.Trim();
         try
         {
@@ -123,11 +124,11 @@ public partial class Main
             GetTree().ReloadCurrentScene();
             return;
         }
-        // Autosave as each new day begins (a few kilobytes: no hitch), only for worlds that can be rebuilt.
+        // Autosave every second game day (a snapshot: half a second on the biggest map, so not every day).
         long day = _sim.Tick / Colony.Core.Agents.Needs.Day;
-        if (day > 0 && day != _lastAutosaveDay && Shareable && _sim.Tick % Colony.Core.Agents.Needs.Day < 40)
+        if (day > 0 && day != _lastAutosaveDay && Shareable && s_client == null && _sim.Tick % Colony.Core.Agents.Needs.Day < 40)
         {
-            if (_lastAutosaveDay >= 0) SaveAs("Autosave");
+            if (_lastAutosaveDay >= 0 && day % 2 == 0) SaveAs("Autosave");
             _lastAutosaveDay = day;
         }
         else if (_lastAutosaveDay < 0) _lastAutosaveDay = day;

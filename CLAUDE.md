@@ -121,19 +121,19 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - **Host-relayed lockstep over TCP** (plain .NET sockets in Core, no Godot: tested headless over loopback). The host's
   sim is the reference and never waits. `LockstepHost`: accepts clients (`Peer`: length-prefixed frames, a reader
   thread filling an inbox drained on the main thread), gives each a free colony (refuses when full or on a protocol
-  mismatch), sends a Welcome (colony, `GameSettings`, the command log so far, the tick), stamps the client's colony on
+  mismatch), sends a Welcome (colony, `GameSettings`, the tick, a `Snapshot` of the game), stamps the client's colony on
   every command it sends (`with { Player = faction }`: nobody acts for another colony) and submits it; each frame
   `Broadcast` flushes (so commands apply even while paused) and sends each client a Turn: newly logged commands with
   their ticks and the host's tick. `AfterTick` (call after every host tick) takes a `StateHash` every
   `HashInterval` (100) ticks, sent with the next turn. `LockstepClient`: `Connect` (waits for the welcome),
-  `BuildWorld` (generates from the settings and `CommandQueue.Replay`s the log to the join tick), `Poll`, `Advance`
+  `BuildWorld` (loads the snapshot), `Poll`, `Advance`
   (applies each command when the sim reaches its tick, never runs past `ConfirmedTick`, compares hashes:
   `DesyncTick`), `Send`. Guests trail the host by their latency and catch up.
 - **`StateHash`:** colonists, piles, designations, stockpiles, rooms, blueprints, edge/cover revisions, combined
   order-independently with a fixed 64-bit mix (never `HashCode`: seeded per process; also never enumerate
   string-keyed dictionaries in sim logic, their order differs between processes).
 - **Game:** sessions live in statics across scene reloads. `HostGame` (this world, if `Shareable`: generated from
-  settings and only changed by commands; demos and tests mark it unshareable, and they're disabled online),
+  settings, or loaded or joined; test worlds can't be; demos are disabled online),
   `HostNewGame`, `JoinGame` (builds the world, reloads onto it), `LeaveOnline`. Host frames: `Poll`, ticks with
   `AfterTick`, `Broadcast`; the menu doesn't pause an online game. Client frames: `Poll`, `Advance` (all confirmed
   ticks, a third at a time when far behind); its tool sends commands (`DesignationTool.Remote`) and shows their results
@@ -143,17 +143,31 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   command path), `--net-check=TICKS` (prints the state hash at that tick; client quits, host 15 s later). End-to-end:
   start a headless host with `--colonies=2 --host=7781 --net-orders --net-check=1500`, then a client with
   `--join=127.0.0.1:7781 --net-orders --net-check=1500`; the two `[net] ... hash` lines must match (they did).
-- Limits: joining replays the whole log (long games join slowly until snapshots exist); demos edit the world outside
-  commands, so they're off online.
-- **Saves (`Net.SaveGame`, game `MainSave.cs`):** a save is the `GameSettings`, the tick, the command log, a name, the
-  local player and when it was saved (binary, "COLONYSAVE" + version; `Read(headerOnly)` lists saves fast). `Load`
-  regenerates and replays to the tick with progress (runs on a background task; nothing else touches that sim), so a
-  loaded game is bit-identical (tested, and across two processes: `--save-at=TICKS` then `--load-newest` print
-  matching hashes) and plays on identically. Files in `user://saves/*.colony` (name -> file; same name overwrites).
-  Main menu: Save game (name, overwrite list; disabled for unshareable worlds), Load game (newest first, day, map,
-  colonies, age, delete), a Loading page with a progress bar; F5 quicksave, F9 loads the newest, autosave ("Autosave")
-  as each game day begins. A loaded multi-colony save can be hosted again (it is shareable). Long games load at sim
-  speed (about 2000 ticks/s on a big map) until snapshots exist.
+- Limits: demos edit the world outside commands, so they're off online (a world a demo changed can still be hosted:
+  snapshots hold its edits).
+- **Snapshots (`Net.Snapshot`):** the whole state in a gzip blob: the `GameSettings` (the terrain is regenerated, a
+  second at 2048), the chunks changed since generation (`VoxelWorld.Seal` after generation starts tracking them), then
+  flora, piles, orders, stockpiles, farms, rooms and parts, blueprints, waterworks, water (spans, volumes, flow
+  momentum, sleep state, springs; natural levels from the terrain; pipes rebuilt), colonists, colonies (society,
+  housing: policies, homes, fixtures, residents) and sim counters/events, in named sections (`SnapIO.Section`: a
+  mismatch throws naming it). `Take` first applies a `SettleGame` command (`ColonySim.Settle`: water joined, queued
+  commands applied, every colonist `Settle`s: puts down its task (claims released, loads dropped) and clears its
+  caches; containers compacted so their enumeration order no longer depends on history (`SnapIO.Compact`); layouts
+  redone; connectivity and job board rebuilt from scratch). Because it is a command, online every peer settles before
+  the same tick. A loaded snapshot is in exactly the settled state, so both play on alike: tested in Core (a busy
+  two-colony game: identical after load and every 250 ticks for 3000; a snapshot of a loaded snapshot matches) and at
+  2048 (`-- snapshot [size] [ticks]` bench: take ~0.6 s, ~8 MB, load ~2 s, matches after 400 more ticks). Every new
+  piece of sim state must be added to its class's `SnapSave`/`SnapLoad` (and `Settle` if it holds claims or
+  order-dependent containers); the continuation test catches omissions. Arrays are written in bulk (`MemoryMarshal`):
+  element by element through gzip, water took 11 s to load.
+- **Saves (`Net.SaveGame`, game `MainSave.cs`):** version 2 holds a snapshot (version 1, the command log, still loads by
+  replay), with the `GameSettings`, the tick, a name, the local player and when it was saved (`Read(headerOnly)` lists
+  saves fast). `Load` runs on a background task with progress; loaded games are bit-identical (tested, and across two
+  processes: `--save-at=TICKS` then `--load-newest` print matching hashes). Files in `user://saves/*.colony` (name ->
+  file; same name overwrites). Main menu: Save game (name, overwrite list; not for test worlds or guests: the host's
+  save holds every colony), Load game (newest first, day, map, colonies, age, delete), a Loading page with a progress
+  bar; F5 quicksave, F9 loads the newest, autosave ("Autosave") every second game day. A loaded multi-colony save can
+  be hosted again.
 
 ## Commands and factions (multiplayer foundation)
 
@@ -517,11 +531,11 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       Work, Tests) plus Colonists, Stocks, Chronicle, Inspect, Appearance, Help windows and a main menu; work priorities.
 - [x] Multiplayer foundation: player commands (queue, log, exact replay, binary codec), factions (ownership of orders,
       zones, rooms, blueprints, colonists; per-colony society and housing), multi-colony world generation, hot-seat.
-- [x] Networking: host-relayed lockstep over TCP (join mid-game by replay, desync hashes, guests act only for their
+- [x] Networking: host-relayed lockstep over TCP (join mid-game by snapshot, desync hashes, guests act only for their
       colony), Multiplayer page in the main menu, HUD status; verified across two processes (identical hashes).
 - [x] Save/load: settings + command log saves, background load with progress, quicksave/quickload, daily autosave.
-- [ ] Next for the demo: snapshots (fast loads and joins in long games),
-      chat, combat and health (war, NPC enemies), trade between colonies, colonist pages (job clothing, titles by
+- [x] Snapshots: whole-state saves and joins (settle as a command, exact; ~2 s load at 2048).
+- [ ] Next for the demo: chat, combat and health (war, NPC enemies), trade between colonies, colonist pages (job clothing, titles by
       proficiency once skills exist), title art behind the main menu, NAT/relay for internet play without port forwarding.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.

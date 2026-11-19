@@ -23,4 +23,19 @@ public sealed class Owners
 
     /// <summary>Whether a filter (a faction, or <see cref="Any"/>) matches this cell's owner.</summary>
     public bool Matches(TilePos p, int filter) => filter == Any || Of(p) == filter;
+
+    internal void Compact() => Net.SnapIO.Compact(_owner);
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(_owner.Count);
+        foreach (var (p, f) in _owner) { Net.SnapIO.Write(w, p); w.Write(f); }
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        _owner.Clear();
+        int n = r.ReadInt32();
+        for (int i = 0; i < n; i++) _owner[Net.SnapIO.ReadPos(r)] = r.ReadInt32();
+    }
 }

@@ -21,14 +21,14 @@ public partial class Main
     private static LockstepClient? s_client;
     private static int? s_hostPort;
     private static GameSettings? s_settings;
-    /// <summary>The sim that is exactly its settings plus its command log (no demo or test edits): only it can be shared.</summary>
+    /// <summary>The sim made from <see cref="s_settings"/> (generated, loaded or joined; not a test's world): only it can be saved or shared.</summary>
     private static ColonySim? s_replayable;
     private static long s_lastNetCheck;
 
     public LockstepHost? Host => s_host;
     public LockstepClient? Client => s_client;
     public bool Online => s_host != null || s_client != null;
-    /// <summary>Others can rebuild this world from its settings and command log.</summary>
+    /// <summary>This world can be saved and shared (snapshots hold everything; only test worlds lack the settings).</summary>
     public bool Shareable => ReferenceEquals(s_replayable, _sim) && s_settings != null;
     public string PlayerName { get; set; } = System.Environment.UserName is { Length: > 0 } n ? n : "Player";
 
@@ -39,14 +39,12 @@ public partial class Main
         s_replayable = _sim;
     }
 
-    /// <summary>A demo or test edited the world directly: nobody else could rebuild it.</summary>
-    private void MarkUnshareable() => s_replayable = null;
 
     /// <summary>Hosts this world (it needs a free colony for each guest). Null on success, else why not.</summary>
     public string? HostGame(int port)
     {
         if (Online) return "Already online";
-        if (!Shareable) return "This world was changed by a demo or a test, so others can't rebuild it: start a new one";
+        if (!Shareable) return "A test's world can't be shared: start a new one";
         if (_sim.Factions.Count < 2) return "This world has one colony: start a new one with room for guests";
         try
         {

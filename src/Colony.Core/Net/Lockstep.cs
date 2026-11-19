@@ -24,7 +24,7 @@ public sealed record GameSettings(int Seed, int Width, int Depth, int Height, in
 internal enum Msg : byte
 {
     Hello = 1,   // client -> host: protocol version, player name
-    Welcome,     // host -> client: your colony, the settings, the command log so far, the tick it reaches
+    Welcome,     // host -> client: your colony, the settings, the tick, a snapshot of the game
     Command,     // client -> host: a command to apply (the host stamps the client's colony on it)
     Turn,        // host -> client: commands applied (with their ticks) and the tick to run up to
     Hash,        // host -> client: the state hash at a tick (desync check)
@@ -118,14 +118,14 @@ public sealed record NetPlayer(int Faction, string Name);
 
 /// <summary>
 /// The host of a lockstep game: its sim is the reference. Clients connect, each gets a free colony and a copy of the
-/// game so far (settings + command log); their commands are applied on the host before its next tick, stamped with
+/// game as it stands (a snapshot); their commands are applied on the host before its next tick, stamped with
 /// their colony. After each frame <see cref="Broadcast"/> streams the newly logged commands and the host's tick, so
 /// every client applies the same commands before the same ticks, and a state hash now and then catches desyncs.
 /// The host never waits for clients: they trail it by their latency and catch up.
 /// </summary>
 public sealed class LockstepHost : IDisposable
 {
-    public const int Protocol = 1;
+    public const int Protocol = 2;
     /// <summary>Ticks between desync checks (5 s at 1x).</summary>
     public const int HashInterval = 100;
 
@@ -201,7 +201,8 @@ public sealed class LockstepHost : IDisposable
                     Refuse(c, $"the game is full ({_sim.Factions.Count} colonies)");
                     return;
                 }
-                _sim.Commands.Flush(); // the log it gets must be everything applied so far
+                // A snapshot of the game as it stands (settling it is a command: guests already here settle before this tick too).
+                var state = Snapshot.Take(_sim, _settings);
                 c.Faction = free;
                 c.SentLog = _sim.Commands.Log.Count;
                 c.SentTick = _sim.Tick;
@@ -210,7 +211,7 @@ public sealed class LockstepHost : IDisposable
                     w.Write(free);
                     _settings.Write(w);
                     w.Write(_sim.Tick);
-                    var log = CommandCodec.EncodeLog(_sim.Commands.Log);
+                    var log = state;
                     w.Write(log.Length);
                     w.Write(log);
                 }));
@@ -299,7 +300,7 @@ public sealed class LockstepHost : IDisposable
 
 /// <summary>
 /// A client of a lockstep game. <see cref="Connect"/> joins and receives the game so far; <see cref="BuildWorld"/>
-/// makes the same world and replays it to the host's tick. Then each frame: <see cref="Poll"/>, and
+/// loads it. Then each frame: <see cref="Poll"/>, and
 /// <see cref="Advance"/> runs ticks no further than the host has confirmed, applying each command before the same tick
 /// the host did. Its own commands go to the host (<see cref="Send"/>) and come back in a turn like everyone else's.
 /// </summary>
@@ -313,7 +314,7 @@ public sealed class LockstepClient : IDisposable
     public GameSettings Settings { get; }
     /// <summary>The host's tick when this client joined (the replay runs to it).</summary>
     public long JoinTick { get; }
-    private readonly List<LoggedCommand> _joinLog;
+    private readonly byte[] _joinState;
     /// <summary>How far the host has confirmed: the sim may run up to here.</summary>
     public long ConfirmedTick { get; private set; }
     public IReadOnlyList<NetPlayer> Players { get; private set; } = [];
@@ -323,13 +324,13 @@ public sealed class LockstepClient : IDisposable
     public long? DesyncTick { get; private set; }
     public event Action<string>? Message;
 
-    private LockstepClient(Peer peer, int faction, GameSettings settings, long tick, List<LoggedCommand> log)
+    private LockstepClient(Peer peer, int faction, GameSettings settings, long tick, byte[] state)
     {
         _peer = peer;
         Faction = faction;
         Settings = settings;
         JoinTick = ConfirmedTick = tick;
-        _joinLog = log;
+        _joinState = state;
     }
 
     /// <summary>Connects, says hello and waits for the welcome (or a refusal, thrown as an exception with the host's reason).</summary>
@@ -351,8 +352,8 @@ public sealed class LockstepClient : IDisposable
                 int faction = r.ReadInt32();
                 var settings = GameSettings.Read(r);
                 long tick = r.ReadInt64();
-                var log = CommandCodec.DecodeLog(r.ReadBytes(r.ReadInt32()));
-                var client = new LockstepClient(peer, faction, settings, tick, log);
+                var state = r.ReadBytes(r.ReadInt32());
+                var client = new LockstepClient(peer, faction, settings, tick, state);
                 foreach (var e in early) peer.Inbox.Enqueue(e); // anything that raced ahead of the welcome
                 return client;
             }
@@ -363,11 +364,10 @@ public sealed class LockstepClient : IDisposable
         throw new TimeoutException("the host didn't welcome us in time");
     }
 
-    /// <summary>Makes the host's world and replays the game to the tick the host was at when we joined.</summary>
+    /// <summary>The host's game as it stood when we joined, from its snapshot.</summary>
     public ColonySim BuildWorld()
     {
-        var sim = Settings.Create();
-        CommandQueue.Replay(sim, _joinLog, JoinTick);
+        var sim = Snapshot.Load(_joinState);
         return sim;
     }
 

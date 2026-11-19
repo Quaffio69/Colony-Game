@@ -79,6 +79,7 @@ public sealed class VoxelWorld : ITileReader
     {
         int lx = x & Chunk.Mask, ly = y & Chunk.Mask, lz = z & Chunk.Mask;
         int cx = x >> Chunk.Shift, cy = y >> Chunk.Shift, cz = z >> Chunk.Shift;
+        _modified?.Add(ChunkIndex(cx, cy, cz));
         ChunkChanged?.Invoke(ChunkIndex(cx, cy, cz));
 
         // A tile near a chunk boundary can change faces or walkability in neighbouring chunks (including
@@ -94,6 +95,7 @@ public sealed class VoxelWorld : ITileReader
             if (dx == 0 && dy == 0 && dz == 0) continue;
             if (GetChunk(cx + dx, cy + dy, cz + dz) is not { } n) continue;
             n.Touch();
+            _modified?.Add(ChunkIndex(cx + dx, cy + dy, cz + dz));
             ChunkChanged?.Invoke(ChunkIndex(cx + dx, cy + dy, cz + dz));
         }
     }
@@ -302,4 +304,45 @@ public sealed class VoxelWorld : ITileReader
 
     private Chunk ChunkAt(int x, int y, int z) =>
         _chunks[ChunkIndex(x >> Chunk.Shift, y >> Chunk.Shift, z >> Chunk.Shift)];
+
+    // ---- Snapshot (see Net.Snapshot) ----------------------------------------------------------------------
+
+    private HashSet<int>? _modified;
+
+    /// <summary>Generation is done: from now on remember which chunks change (a snapshot stores only those).</summary>
+    internal void Seal() => _modified = new HashSet<int>();
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(Revision);
+        w.Write(EdgeRevision);
+        w.Write(CoverRevision);
+        w.Write(_edgeCells);
+        w.Write(_coverCells);
+        var list = _modified is { } m ? m.OrderBy(i => i).ToList() : Enumerable.Range(0, _chunks.Length).ToList();
+        w.Write(list.Count);
+        foreach (int i in list)
+        {
+            w.Write(i);
+            _chunks[i].SnapSave(w);
+        }
+    }
+
+    /// <summary>Lays the changed chunks back over a freshly generated world.</summary>
+    internal void SnapLoad(BinaryReader r)
+    {
+        Revision = r.ReadInt64();
+        EdgeRevision = r.ReadInt64();
+        CoverRevision = r.ReadInt64();
+        _edgeCells = r.ReadInt32();
+        _coverCells = r.ReadInt32();
+        int n = r.ReadInt32();
+        _modified = new HashSet<int>();
+        for (int k = 0; k < n; k++)
+        {
+            int i = r.ReadInt32();
+            _chunks[i].SnapLoad(r);
+            _modified.Add(i);
+        }
+    }
 }

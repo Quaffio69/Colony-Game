@@ -14,7 +14,7 @@ namespace Colony.Core;
 /// <see cref="Step"/> at a fixed rate of <see cref="TicksPerSecond"/>. Same seed + same commands at the
 /// same ticks gives the same outcome.
 /// </summary>
-public sealed class ColonySim
+public sealed partial class ColonySim
 {
     public const int TicksPerSecond = 20;
 
@@ -295,6 +295,7 @@ public sealed class ColonySim
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var generated = WorldGenerator.GenerateWithTerrain(settings);
+        generated.World.Seal(); // from here on, changed chunks are what a snapshot stores
         var sim = new ColonySim(generated.World) { Terrain = generated.Terrain };
         long genMs = clock.ElapsedMilliseconds;
 
@@ -642,6 +643,144 @@ public sealed class ColonySim
             if (Movement.IsStandable(World, p) && (!dry || Water.MassAt(p) < Fluids.Water.MinMass)) result.Add(p);
         }
         return result;
+    }
+}
+
+public sealed partial class ColonySim
+{
+    // ---- Snapshot (see Net.Snapshot) ----------------------------------------------------------------------
+
+    /// <summary>
+    /// Brings the game to a state a snapshot holds completely: water finished, queued commands applied, every
+    /// colonist puts down what it was doing (claims released, loads dropped), containers compacted (their order no
+    /// longer depends on history) and the derived maps (connectivity, job board) rebuilt from scratch. A loaded
+    /// snapshot ends up in exactly this state, so both go on alike.
+    /// </summary>
+    public void Settle()
+    {
+        WaitForWater();
+        Water.Join();
+        Commands.Flush();
+        foreach (var c in _colonists) c.Settle(this);
+        Water.Join();
+        Designations.Settle();
+        Stockpiles.Settle();
+        Farms.Settle();
+        Items.Settle();
+        Rooms.Settle();
+        Constructions.Settle();
+        Flora.Settle();
+        Water.Settle();
+        foreach (var f in _factions) f.Housing.Settle();
+        _reservedStudents.Clear();
+        RebuildDerived();
+    }
+
+    private void RebuildDerived()
+    {
+        Connectivity.Reset();
+        JobBoard.Reset();
+        Connectivity.Update();
+        JobBoard.Update(World, Designations, Connectivity);
+    }
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        Net.SnapIO.Section(w, "world"); World.SnapSave(w);
+        Net.SnapIO.Section(w, "flora"); Flora.SnapSave(w);
+        Net.SnapIO.Section(w, "items"); Items.SnapSave(w);
+        Net.SnapIO.Section(w, "orders"); Designations.SnapSave(w);
+        Net.SnapIO.Section(w, "stockpiles"); Stockpiles.SnapSave(w);
+        Net.SnapIO.Section(w, "farms"); Farms.SnapSave(w);
+        Net.SnapIO.Section(w, "rooms"); Rooms.SnapSave(w);
+        Net.SnapIO.Section(w, "blueprints"); Constructions.SnapSave(w);
+        Net.SnapIO.Section(w, "waterworks"); Waterworks.SnapSave(w);
+        Net.SnapIO.Section(w, "water"); Water.SnapSave(w);
+        Net.SnapIO.Section(w, "colonists");
+        w.Write(_colonists.Count);
+        foreach (var c in _colonists) c.SnapSave(w);
+        Net.SnapIO.Section(w, "factions");
+        w.Write(_factions.Count);
+        foreach (var f in _factions)
+        {
+            w.Write(f.Name);
+            w.Write(f.Landing.HasValue);
+            if (f.Landing is { } l) Net.SnapIO.Write(w, l);
+            w.Write(f.MagisterArrived);
+            f.Society.SnapSave(w);
+            f.Housing.SnapSave(w);
+        }
+        Net.SnapIO.Section(w, "sim");
+        w.Write(Tick); w.Write(PathSearches); w.Write(CaveInCount); w.Write(ItemsProduced); w.Write(ColonistsEver);
+        w.Write(_families); w.Write(_eventRoomsVersion); w.Write(_waterworksDue); w.Write(NeedsEnabled);
+        w.Write(_recentCaveIns.Count);
+        foreach (var c in _recentCaveIns) { Net.SnapIO.Write(w, c.Origin); w.Write(c.Tiles); w.Write(c.Drop); w.Write(c.Tick); }
+        w.Write(_events.Count);
+        foreach (var e in _events) { w.Write(e.Tick); w.Write(e.Text); w.Write(e.Faction); }
+        Net.SnapIO.Section(w, "end");
+    }
+
+    /// <summary>A sim from a snapshot body, over the regenerated <paramref name="world"/> (see <see cref="Net.Snapshot.Load"/>).</summary>
+    internal static ColonySim SnapLoad(BinaryReader r, VoxelWorld world, Terrain? terrain)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var times = new List<string>();
+        void Lap(string what) { times.Add($"{what} {clock.ElapsedMilliseconds}"); clock.Restart(); }
+        Net.SnapIO.Section(r, "world"); world.SnapLoad(r);
+        Lap("world");
+        var sim = new ColonySim(world) { Terrain = terrain };
+        Lap("sim");
+        Net.SnapIO.Section(r, "flora"); sim.Flora.SnapLoad(r);
+        Lap("flora");
+        Net.SnapIO.Section(r, "items"); sim.Items.SnapLoad(r);
+        Net.SnapIO.Section(r, "orders"); sim.Designations.SnapLoad(r);
+        Net.SnapIO.Section(r, "stockpiles"); sim.Stockpiles.SnapLoad(r);
+        Net.SnapIO.Section(r, "farms"); sim.Farms.SnapLoad(r);
+        Net.SnapIO.Section(r, "rooms"); sim.Rooms.SnapLoad(r);
+        Net.SnapIO.Section(r, "blueprints"); sim.Constructions.SnapLoad(r);
+        Net.SnapIO.Section(r, "waterworks"); sim.Waterworks.SnapLoad(r);
+        Lap("items to waterworks");
+        Net.SnapIO.Section(r, "water"); sim.Water.SnapLoad(r, terrain);
+        Lap("water");
+        Net.SnapIO.Section(r, "colonists");
+        int nc = r.ReadInt32();
+        var spouses = new List<(Colonist, int)>();
+        var byId = new Dictionary<int, Colonist>();
+        for (int i = 0; i < nc; i++)
+        {
+            var (c, spouse) = Colonist.SnapLoad(r);
+            sim._colonists.Add(c);
+            byId[c.Id] = c;
+            spouses.Add((c, spouse));
+        }
+        foreach (var (c, spouse) in spouses) c.Spouse = spouse >= 0 ? byId[spouse] : null;
+        Net.SnapIO.Section(r, "factions");
+        int nf = r.ReadInt32();
+        for (int i = 0; i < nf; i++)
+        {
+            string name = r.ReadString();
+            TilePos? landing = r.ReadBoolean() ? Net.SnapIO.ReadPos(r) : null;
+            var f = i == 0 ? sim._factions[0] : sim.AddFaction(name);
+            f.Name = name;
+            f.Landing = landing;
+            f.MagisterArrived = r.ReadBoolean();
+            f.Society.SnapLoad(r);
+            f.Housing.SnapLoad(r, sim.Rooms, byId);
+        }
+        Net.SnapIO.Section(r, "sim");
+        sim.Tick = r.ReadInt64(); sim.PathSearches = r.ReadInt64(); sim.CaveInCount = r.ReadInt32(); sim.ItemsProduced = r.ReadInt64();
+        sim.ColonistsEver = r.ReadInt32(); sim._families = r.ReadInt32(); sim._eventRoomsVersion = r.ReadInt32();
+        sim._waterworksDue = r.ReadBoolean(); sim.NeedsEnabled = r.ReadBoolean();
+        int ncv = r.ReadInt32();
+        for (int i = 0; i < ncv; i++) sim._recentCaveIns.Add(new CaveIn(Net.SnapIO.ReadPos(r), r.ReadInt32(), r.ReadInt32(), r.ReadInt64()));
+        int ne = r.ReadInt32();
+        for (int i = 0; i < ne; i++) sim._events.Add(new SimEvent(r.ReadInt64(), r.ReadString(), r.ReadInt32()));
+        Net.SnapIO.Section(r, "end");
+        Lap("colonists to end");
+        sim.RebuildDerived();
+        Lap("connectivity + jobs");
+        Net.Snapshot.LastTimings = string.Join(", ", times) + " ms";
+        return sim;
     }
 }
 

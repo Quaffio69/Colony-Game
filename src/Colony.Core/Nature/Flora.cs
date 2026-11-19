@@ -126,4 +126,50 @@ public sealed class Flora
 
     private int RegionOf(TilePos p) => (p.Y >> RegionShift) * RegionsX + (p.X >> RegionShift);
     private long Key(TilePos p) => ((long)p.Z * _world.Depth + p.Y) * _world.Width + p.X;
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    internal void Settle() => Net.SnapIO.Compact(_index);
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        Net.SnapIO.WriteInts(w, _regionVersion);
+        w.Write(Version);
+        for (int r = 0; r < _regions.Length; r++)
+        {
+            var list = _regions[r];
+            w.Write(list.Count);
+            foreach (var p in list) { Net.SnapIO.Write(w, p.Position); w.Write((byte)p.Kind); w.Write(p.Growth); w.Write(p.Variant); }
+        }
+        // The index's own order (cell -> slot), so lookups enumerate alike.
+        w.Write(_index.Count);
+        foreach (var (key, _) in _index) w.Write(key);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        var versions = Net.SnapIO.ReadInts(r);
+        Array.Copy(versions, _regionVersion, Math.Min(versions.Length, _regionVersion.Length));
+        Version = r.ReadInt32();
+        var slot = new Dictionary<long, int>();
+        for (int i = 0; i < _regions.Length; i++)
+        {
+            var list = _regions[i];
+            list.Clear();
+            int n = r.ReadInt32();
+            for (int k = 0; k < n; k++)
+            {
+                var p = new Plant(Net.SnapIO.ReadPos(r), (PlantKind)r.ReadByte(), r.ReadByte(), r.ReadByte());
+                slot[Key(p.Position)] = list.Count;
+                list.Add(p);
+            }
+        }
+        _index.Clear();
+        int count = r.ReadInt32();
+        for (int i = 0; i < count; i++)
+        {
+            long key = r.ReadInt64();
+            _index[key] = slot[key];
+        }
+    }
 }

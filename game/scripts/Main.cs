@@ -213,7 +213,6 @@ public partial class Main : Node3D
     public void RunDemo(string id)
     {
         if (!CanRunDemos || Online) return;
-        MarkUnshareable(); // demos edit the world directly
         _sim.WaitForWater();
         _stairsDemoAt = null;
         switch (id)
@@ -403,8 +402,6 @@ public partial class Main : Node3D
                 if (Arg("--build-menu") is { } menu) _ui.OpenBuild(menu);
                 if (Arg("--water-demo") != null) WaterDemo();
                 if (Arg("--homes-demo") != null) HomesDemo();
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo" }.Any(a => Arg(a) != null))
-                    MarkUnshareable(); // demos edit the world directly
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
                 if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);

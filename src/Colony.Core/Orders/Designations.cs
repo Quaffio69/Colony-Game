@@ -226,4 +226,33 @@ public sealed class Designations
             if (action(new TilePos(x, y, z))) n++;
         return n;
     }
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    internal void Settle()
+    {
+        Net.SnapIO.Compact(_orders);
+        Net.SnapIO.Compact(_claims);
+        _owners.Compact();
+    }
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(_orders.Count);
+        foreach (var (p, k) in _orders) { Net.SnapIO.Write(w, p); w.Write((byte)k); }
+        w.Write(_claims.Count);
+        foreach (var (p, id) in _claims) { Net.SnapIO.Write(w, p); w.Write(id); }
+        _owners.SnapSave(w);
+        w.Write(Version);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        int n = r.ReadInt32();
+        for (int i = 0; i < n; i++) _orders[Net.SnapIO.ReadPos(r)] = (DesignationKind)r.ReadByte();
+        int nc = r.ReadInt32();
+        for (int i = 0; i < nc; i++) _claims[Net.SnapIO.ReadPos(r)] = r.ReadInt32();
+        _owners.SnapLoad(r);
+        Version = r.ReadInt32();
+    }
 }

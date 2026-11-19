@@ -435,4 +435,12 @@ public sealed class Connectivity
     }
 
     private int _edgeCount;
+
+    /// <summary>Forgets the labelling: the next <see cref="Update"/> labels the whole world from scratch (snapshots do this on both sides).</summary>
+    internal void Reset()
+    {
+        _built = false;
+        _changed.Clear();
+        _activeDirty = true;
+    }
 }

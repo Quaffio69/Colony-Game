@@ -491,4 +491,78 @@ public sealed class Housing
 
     /// <summary>Beds settlers could take: free beds in homes no family has claimed.</summary>
     public int FreeBeds => _homes.Where(h => h.Family == 0).Sum(h => Math.Max(0, h.Beds - h.Residents.Count));
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    /// <summary>Layouts and shells are redone next tick (a loaded copy redoes them too); promises were released by the colonists.</summary>
+    internal void Settle()
+    {
+        foreach (var h in _homes)
+        {
+            h.LayoutDirty = true;
+            Array.Clear(h.Pending);
+        }
+    }
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(Policies.Count);
+        foreach (var p in Policies)
+        {
+            w.Write(p.Name);
+            Net.SnapIO.WriteInts(w, p.Tier);
+            Net.SnapIO.WriteFloats(w, p.PerResident);
+            w.Write(p.Shared);
+        }
+        w.Write(_homes.Count);
+        foreach (var h in _homes)
+        {
+            w.Write(h.Room.Id);
+            w.Write(Policies.IndexOf(h.Policy));
+            w.Write(h.Family);
+            w.Write(h.Fixtures.Count);
+            foreach (var f in h.Fixtures) { w.Write(f.Item.Index); w.Write(f.Slot); Net.SnapIO.Write(w, f.Cell); w.Write(f.WearLeft); }
+            w.Write(h.Residents.Count);
+            foreach (var c in h.Residents) w.Write(c.Id);
+        }
+        w.Write(_seenRooms); w.Write(_seenEver); w.Write(_seenCount); w.Write(_seenEdges); w.Write(_seenCovers);
+        w.Write(_plansChanged); w.Write(Version); w.Write(WornOut); w.Write(Salvaged);
+    }
+
+    internal void SnapLoad(BinaryReader r, Industry.Rooms rooms, IReadOnlyDictionary<int, Colonist> colonists)
+    {
+        Policies.Clear();
+        int np = r.ReadInt32();
+        for (int i = 0; i < np; i++)
+        {
+            var p = new HousingPolicy { Name = r.ReadString(), Tier = Net.SnapIO.ReadInts(r), PerResident = new float[SlotCount] };
+            Net.SnapIO.ReadFloatsInto(r, p.PerResident);
+            p.Shared = r.ReadBoolean();
+            Policies.Add(p);
+        }
+        int nh = r.ReadInt32();
+        for (int i = 0; i < nh; i++)
+        {
+            int roomId = r.ReadInt32();
+            var home = new Home { Room = rooms.All.First(x => x.Id == roomId), Policy = Policies[r.ReadInt32()], Family = r.ReadInt32() };
+            int nf = r.ReadInt32();
+            for (int k = 0; k < nf; k++)
+            {
+                var f = new Fixture { Item = new ItemType(r.ReadUInt16()), Slot = r.ReadInt32(), Cell = Net.SnapIO.ReadPos(r) };
+                f.WearLeft = r.ReadInt32();
+                home.Fixtures.Add(f);
+            }
+            int nr = r.ReadInt32();
+            for (int k = 0; k < nr; k++)
+            {
+                var c = colonists[r.ReadInt32()];
+                home.Residents.Add(c);
+                c.Home = home;
+            }
+            home.LayoutDirty = true;
+            _homes.Add(home);
+        }
+        _seenRooms = r.ReadInt32(); _seenEver = r.ReadInt32(); _seenCount = r.ReadInt32(); _seenEdges = r.ReadInt64(); _seenCovers = r.ReadInt64();
+        _plansChanged = r.ReadBoolean(); Version = r.ReadInt32(); WornOut = r.ReadInt32(); Salvaged = r.ReadInt32();
+    }
 }

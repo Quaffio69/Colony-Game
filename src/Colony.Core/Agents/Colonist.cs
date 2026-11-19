@@ -1323,4 +1323,68 @@ public sealed class Colonist
         Position = p;
         Abandon(sim);
     }
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Puts down whatever it was doing (claims released, any load dropped where it stands) and forgets its search
+    /// caches: what is left is the durable state a snapshot holds, so the live game goes on exactly as a loaded one.
+    /// </summary>
+    internal void Settle(ColonySim sim)
+    {
+        if (Task != ColonistTask.None || State != ColonistState.Idle || CarryingCount > 0 || _carried.Count > 0) Abandon(sim);
+        _path.Clear();
+        _trip = _plannedTrip = null;
+        _stepTicksTotal = _stepTicksDone = 0;
+        _searchedDesignations = _searchedConnectivity = _searchedItems = _searchedStockpiles = -1;
+        _searchedRooms = _searchedHousing = -1;
+        _retryDelay = 0;
+        _deferred = false;
+        _pathFailed.Clear();
+        _pathFailedConnectivity = -1;
+        _haul = default;
+        _craft = default;
+        _build = default;
+        _fetchIndex = 0;
+        _jobKind = default;
+        _foodRetry = 0;
+        _sleepRate = 0;
+        _meal = default;
+        _furnish = default;
+        _haulDestination = "stockpile";
+        JobTarget = null;
+        NextStep = null;
+        WorkDone = WorkRequired = 0;
+        State = ColonistState.Idle;
+        Task = ColonistTask.None;
+    }
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(Id); w.Write(Name); Net.SnapIO.Write(w, Position); w.Write(Education); w.Write(IsAutomaton); w.Write(Faction);
+        w.Write(_priority);
+        w.Write(Satiety); w.Write(StarvingTicks); w.Write(Household); w.Write(Spouse?.Id ?? -1); w.Write(IsChild); w.Write(BornTick);
+        w.Write(Happiness); w.Write(UnhappyDays); w.Write(Rest); w.Write(LastTreat); w.Write(WorkTicks); w.Write(PreferredTicks);
+        w.Write(CarryingType.Index);
+    }
+
+    /// <summary>Reads a colonist; its spouse is linked afterwards (by id) and its home by the housing.</summary>
+    internal static (Colonist Colonist, int SpouseId) SnapLoad(BinaryReader r)
+    {
+        int id = r.ReadInt32();
+        string name = r.ReadString();
+        var pos = Net.SnapIO.ReadPos(r);
+        int education = r.ReadInt32();
+        bool automaton = r.ReadBoolean();
+        int faction = r.ReadInt32();
+        var c = new Colonist(id, name, pos, education) { IsAutomaton = automaton, Faction = faction };
+        r.BaseStream.ReadExactly(c._priority);
+        c.Satiety = r.ReadInt32(); c.StarvingTicks = r.ReadInt32(); c.Household = r.ReadInt32();
+        int spouse = r.ReadInt32();
+        c.IsChild = r.ReadBoolean(); c.BornTick = r.ReadInt64();
+        c.Happiness = r.ReadSingle(); c.UnhappyDays = r.ReadInt32(); c.Rest = r.ReadSingle(); c.LastTreat = r.ReadInt64();
+        c.WorkTicks = r.ReadInt32(); c.PreferredTicks = r.ReadInt32();
+        c.CarryingType = new ItemType(r.ReadUInt16());
+        return (c, spouse);
+    }
 }

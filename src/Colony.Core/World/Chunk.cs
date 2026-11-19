@@ -144,4 +144,50 @@ public sealed class Chunk
     }
 
     internal static int Index(int lx, int ly, int lz) => (lz << (2 * Shift)) | (ly << Shift) | lx;
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(Version);
+        w.Write(NonAirCount);
+        w.Write(SolidCount);
+        w.Write((byte)_fill);
+        w.Write(_tiles != null);
+        if (_tiles != null) w.Write(System.Runtime.InteropServices.MemoryMarshal.AsBytes(_tiles.AsSpan()));
+        w.Write(Edges != null);
+        if (Edges != null) w.Write(System.Runtime.InteropServices.MemoryMarshal.AsBytes(Edges.AsSpan()));
+        w.Write(EdgeCells);
+        w.Write(Covers != null);
+        if (Covers != null) w.Write(Covers);
+        w.Write(CoverCells);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        Version = r.ReadInt32();
+        NonAirCount = r.ReadInt32();
+        SolidCount = r.ReadInt32();
+        _fill = (TileType)r.ReadByte();
+        _tiles = null;
+        if (r.ReadBoolean())
+        {
+            _tiles = new TileType[Volume];
+            r.BaseStream.ReadExactly(System.Runtime.InteropServices.MemoryMarshal.AsBytes(_tiles.AsSpan()));
+        }
+        Edges = null;
+        if (r.ReadBoolean())
+        {
+            Edges = new ushort[Volume];
+            r.BaseStream.ReadExactly(System.Runtime.InteropServices.MemoryMarshal.AsBytes(Edges.AsSpan()));
+        }
+        EdgeCells = r.ReadInt32();
+        Covers = null;
+        if (r.ReadBoolean())
+        {
+            Covers = new byte[Volume];
+            r.BaseStream.ReadExactly(Covers);
+        }
+        CoverCells = r.ReadInt32();
+    }
 }

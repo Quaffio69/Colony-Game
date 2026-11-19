@@ -123,4 +123,32 @@ public sealed class Farms
         for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
             action(new TilePos(x, y, z));
     }
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    internal void Settle()
+    {
+        Net.SnapIO.Compact(_plots);
+        _owners.Compact();
+    }
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(_plots.Count);
+        foreach (var (p, crop) in _plots) { Net.SnapIO.Write(w, p); w.Write((int)crop); }
+        w.Write(_order.Count);
+        foreach (var p in _order) Net.SnapIO.Write(w, p);
+        _owners.SnapSave(w);
+        w.Write(Version);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        int n = r.ReadInt32();
+        for (int i = 0; i < n; i++) _plots[Net.SnapIO.ReadPos(r)] = (PlantKind)r.ReadInt32();
+        int no = r.ReadInt32();
+        for (int i = 0; i < no; i++) _order.Add(Net.SnapIO.ReadPos(r));
+        _owners.SnapLoad(r);
+        Version = r.ReadInt32();
+    }
 }

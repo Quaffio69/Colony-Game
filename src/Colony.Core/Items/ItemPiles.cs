@@ -202,4 +202,27 @@ public sealed class ItemPiles
         else _piles[p] = pile;
         Version++;
     }
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    internal void Settle() => Net.SnapIO.Compact(_piles);
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(_piles.Count);
+        foreach (var (p, pile) in _piles)
+        {
+            Net.SnapIO.Write(w, p);
+            w.Write(pile.Type.Index); w.Write(pile.Count); w.Write(pile.Reserved); w.Write(pile.Incoming);
+        }
+        w.Write(Version); w.Write(LayoutVersion);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        int n = r.ReadInt32();
+        for (int i = 0; i < n; i++)
+            _piles[Net.SnapIO.ReadPos(r)] = new ItemPile(new ItemType(r.ReadUInt16()), r.ReadInt32(), r.ReadInt32(), r.ReadInt32());
+        Version = r.ReadInt32(); LayoutVersion = r.ReadInt32();
+    }
 }

@@ -185,4 +185,13 @@ public sealed class JobBoard
         }
         return best.ConvertAll(b => b.Job);
     }
+
+    /// <summary>Forgets every job: the next update rebuilds the board from the designations (snapshots do this on both sides).</summary>
+    internal void Reset()
+    {
+        _byTarget.Clear();
+        _jobs.Clear();
+        _designationVersion = _connectivityVersion = -1;
+        _stamp = 0;
+    }
 }

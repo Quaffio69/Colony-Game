@@ -75,8 +75,8 @@ public partial class MainMenu : Control
         {
             Item("Continue", "Primary", () => Show(false), "Back to the colony (Esc)");
             Item("New colony", "", () => Go("new"), "A fresh world: pick a seed and a map size");
-            var save = Item("Save game", "", () => Go("save"), _ui.Main.Shareable ? "Save this game (F5 quicksaves)" : "A world changed by a demo or test can't be saved");
-            save.Disabled = !_ui.Main.Shareable;
+            var save = Item("Save game", "", () => Go("save"), _ui.Main.Shareable ? "Save this game (F5 quicksaves)" : _ui.Main.Client != null ? "Only the host saves an online game" : "A test's world can't be saved");
+            save.Disabled = !_ui.Main.Shareable || _ui.Main.Client != null;
             Item("Load game", "", () => Go("load"), "Pick up a saved game (F9 loads the newest)");
             Item(_ui.Main.Online ? "Multiplayer (online)" : "Multiplayer", "", () => Go("multiplayer"), "Several players' colonies in one world: host a game or join one");
             _box.AddChild(G.Gap(0.5f));

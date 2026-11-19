@@ -9,6 +9,33 @@ using Colony.Core.Navigation;
 using Colony.Core.Procedural;
 using Colony.Core.World;
 
+if (args.Length > 0 && args[0] == "snapshot")
+{
+    // Snapshot cost on a real map: settle + write, size, load, and a check that the copy matches.
+    //   dotnet run -c Release --project tools/Colony.Bench -- snapshot [size=2048] [ticks=2000]
+    int ssize = args.Length > 1 ? int.Parse(args[1]) : 2048;
+    int sticks = args.Length > 2 ? int.Parse(args[2]) : 2000;
+    var settings = new Colony.Core.Net.GameSettings(12345, ssize, ssize, 384, 7, 2);
+    var clock = Stopwatch.StartNew();
+    var ssim = settings.Create();
+    Console.WriteLine($"generate {clock.ElapsedMilliseconds} ms");
+    var shome = ssim.Colonists[0].Position;
+    ssim.Commands.Execute(new Colony.Core.Commands.DesignatePlants(Colony.Core.Orders.DesignationKind.Chop, shome.X - 40, shome.Y - 40, shome.X + 40, shome.Y + 40));
+    ssim.Commands.Execute(new Colony.Core.Commands.DesignateBox(shome.Offset(3, -3, -1), shome.Offset(9, 3, -4), Colony.Core.Orders.DesignationKind.Dig));
+    for (int i = 0; i < sticks; i++) ssim.Step();
+    clock.Restart();
+    var data = Colony.Core.Net.Snapshot.Take(ssim, settings);
+    Console.WriteLine($"take (settle + write) {clock.ElapsedMilliseconds} ms, {data.Length / 1024} KB");
+    clock.Restart();
+    var copy = Colony.Core.Net.Snapshot.Load(data);
+    Console.WriteLine($"load {clock.ElapsedMilliseconds} ms: {Colony.Core.Net.Snapshot.LastTimings}");
+    bool same = Colony.Core.Net.StateHash.Compute(ssim) == Colony.Core.Net.StateHash.Compute(copy);
+    for (int i = 0; i < 400; i++) { ssim.Step(); copy.Step(); }
+    same &= Colony.Core.Net.StateHash.Compute(ssim) == Colony.Core.Net.StateHash.Compute(copy);
+    Console.WriteLine(same ? "copy matches (and after 400 more ticks)" : "COPY DIFFERS");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "flood")
 {
     // Flooding check: dotnet run -c Release --project tools/Colony.Bench -- flood [size] [ticks]. Counts water standing

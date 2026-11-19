@@ -367,3 +367,16 @@ public sealed record AddPolicy : Command
         return $"New policy: {policies[^1].Name}";
     }
 }
+
+/// <summary>
+/// Settles the game for a snapshot (<see cref="ColonySim.Settle"/>): a command, so in an online game every peer
+/// settles before the same tick and the host's snapshot matches everyone's world.
+/// </summary>
+public sealed record SettleGame : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        sim.Settle();
+        return "Saved the game's state";
+    }
+}

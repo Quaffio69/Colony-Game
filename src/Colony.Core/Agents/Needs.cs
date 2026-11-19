@@ -289,4 +289,22 @@ public sealed class Society
     }
 
     private static float Chance(long tick, int id, int salt) => Procedural.Noise.Hash(unchecked((int)(tick / Needs.Day)), id, salt, 7717);
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        Net.SnapIO.WriteFloats(w, _owed);
+        Net.SnapIO.WriteFloats(w, Met);
+        w.Write(Standard); w.Write(Days); w.Write(SettlersArrived); w.Write(SettlersCome); w.Write(Departed);
+        w.Write(Happiness); w.Write(Marriages); w.Write(Births);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        Net.SnapIO.ReadFloatsInto(r, _owed);
+        Net.SnapIO.ReadFloatsInto(r, Met);
+        Standard = r.ReadSingle(); Days = r.ReadInt32(); SettlersArrived = r.ReadInt32(); SettlersCome = r.ReadBoolean();
+        Departed = r.ReadInt32(); Happiness = r.ReadSingle(); Marriages = r.ReadInt32(); Births = r.ReadInt32();
+    }
 }

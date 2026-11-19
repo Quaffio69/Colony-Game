@@ -97,4 +97,36 @@ public sealed class Waterworks
         foreach (var p in _pumps)
             p.Pumped = water.Move(p.Cell, p.Outlet, (int)(PumpRate * Supply));
     }
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(_wheels.Count);
+        foreach (var wh in _wheels) { Net.SnapIO.Write(w, wh.Cell); w.Write(wh.Facing); w.Write(wh.Power); }
+        w.Write(_pumps.Count);
+        foreach (var p in _pumps) { Net.SnapIO.Write(w, p.Cell); w.Write(p.Facing); w.Write(p.Pumped); }
+        w.Write(Version); w.Write(Generated); w.Write(Demand); w.Write(Supply);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        int nw = r.ReadInt32();
+        for (int i = 0; i < nw; i++)
+        {
+            var wh = new WaterWheel { Cell = Net.SnapIO.ReadPos(r), Facing = r.ReadInt32() };
+            wh.Power = r.ReadSingle();
+            _wheels.Add(wh);
+            _byCell[wh.Cell] = wh;
+        }
+        int np = r.ReadInt32();
+        for (int i = 0; i < np; i++)
+        {
+            var p = new Pump { Cell = Net.SnapIO.ReadPos(r), Facing = r.ReadInt32() };
+            p.Pumped = r.ReadInt32();
+            _pumps.Add(p);
+            _byCell[p.Cell] = p;
+        }
+        Version = r.ReadInt32(); Generated = r.ReadSingle(); Demand = r.ReadSingle(); Supply = r.ReadSingle();
+    }
 }

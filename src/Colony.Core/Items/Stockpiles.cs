@@ -77,4 +77,28 @@ public sealed class Stockpiles
         for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
             action(new TilePos(x, y, z));
     }
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    internal void Settle()
+    {
+        Net.SnapIO.Compact(_cells);
+        _owners.Compact();
+    }
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(_cells.Count);
+        foreach (var p in _cells) Net.SnapIO.Write(w, p);
+        _owners.SnapSave(w);
+        w.Write(Version);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        int n = r.ReadInt32();
+        for (int i = 0; i < n; i++) _cells.Add(Net.SnapIO.ReadPos(r));
+        _owners.SnapLoad(r);
+        Version = r.ReadInt32();
+    }
 }

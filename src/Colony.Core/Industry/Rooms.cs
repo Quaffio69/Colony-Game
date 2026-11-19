@@ -491,4 +491,81 @@ public sealed class Rooms
         }
         return e + sum / machineTiles;
     }
+
+    // ---- Snapshot -----------------------------------------------------------------------------------------
+
+    /// <summary>Rebuilds the cell maps from the rooms (in room, then cell order), as a loaded copy builds them.</summary>
+    internal void Settle()
+    {
+        foreach (var room in _rooms) Net.SnapIO.Compact(room.CellSet);
+        Reindex();
+    }
+
+    private void Reindex()
+    {
+        _cellRoom.Clear();
+        _cellPart.Clear();
+        foreach (var room in _rooms)
+        {
+            foreach (var c in room.CellSet) _cellRoom[c] = room;
+            foreach (var part in room.PartList)
+                foreach (var c in part.Cells) _cellPart[c] = part;
+        }
+    }
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        w.Write(_rooms.Count);
+        foreach (var room in _rooms)
+        {
+            w.Write(room.Id);
+            w.Write(room.Faction);
+            w.Write(room.Type.Id);
+            w.Write(room.CellSet.Count);
+            foreach (var c in room.CellSet) Net.SnapIO.Write(w, c);
+            w.Write(room.PartList.Count);
+            foreach (var p in room.PartList)
+            {
+                w.Write(p.Id); w.Write(p.Type.Id); w.Write(p.Size); Net.SnapIO.Write(w, p.Origin); w.Write(p.Rotated);
+                w.Write(p.Cells.Length);
+                foreach (var c in p.Cells) Net.SnapIO.Write(w, c);
+                w.Write(p.Recipe is { } recipe ? p.Type.Recipes.IndexOf(recipe) : -1);
+                w.Write(p.ClaimedBy); w.Write(p.Working); w.Write(p.Removed); w.Write(p.Built); w.Write(p.BuilderId);
+            }
+        }
+        w.Write(_nextRoomId); w.Write(_nextPartId); w.Write(Version); w.Write(InstantBuild);
+    }
+
+    internal void SnapLoad(BinaryReader r)
+    {
+        int n = r.ReadInt32();
+        for (int i = 0; i < n; i++)
+        {
+            int id = r.ReadInt32(), faction = r.ReadInt32();
+            string typeId = r.ReadString();
+            var room = new Room { Id = id, Faction = faction, Type = typeId == Catalog.Home.Id ? Catalog.Home : Catalog.Workshop(typeId) };
+            int cells = r.ReadInt32();
+            for (int k = 0; k < cells; k++) room.CellSet.Add(Net.SnapIO.ReadPos(r));
+            int parts = r.ReadInt32();
+            for (int k = 0; k < parts; k++)
+            {
+                int pid = r.ReadInt32();
+                var type = Catalog.Part(r.ReadString());
+                int size = r.ReadInt32();
+                var origin = Net.SnapIO.ReadPos(r);
+                bool rotated = r.ReadBoolean();
+                var pc = new TilePos[r.ReadInt32()];
+                for (int c = 0; c < pc.Length; c++) pc[c] = Net.SnapIO.ReadPos(r);
+                var part = new Part { Id = pid, Type = type, Size = size, Origin = origin, Rotated = rotated, Cells = pc, Room = room };
+                int recipe = r.ReadInt32();
+                part.Recipe = recipe >= 0 ? type.Recipes[recipe] : null;
+                part.ClaimedBy = r.ReadInt32(); part.Working = r.ReadBoolean(); part.Removed = r.ReadBoolean();
+                part.Built = r.ReadBoolean(); part.BuilderId = r.ReadInt32();
+                room.PartList.Add(part);
+            }
+            _rooms.Add(room);
+        }
+        _nextRoomId = r.ReadInt32(); _nextPartId = r.ReadInt32(); Version = r.ReadInt32(); InstantBuild = r.ReadBoolean();
+        Reindex();
+    }
 }

@@ -80,7 +80,7 @@ public static class CommandCodec
         DesignateBox = 1, DesignateStairs, DesignatePlants, CancelPlants, CancelOrders, AddStockpile, AddFarm, PlaceWalls,
         CancelWalls, DebugCompleteAll, PaintRoom, EraseRoom, PlacePart, RemoveParts, CycleRecipe, PlaceStructure,
         RemoveStructures, PlaceEdge, RemoveEdge, EdgeLine, PlaceOutline, ClearWalls, Covers, SetWorkPriority, SetHomePolicy,
-        SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy,
+        SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy, SettleGame,
     }
 
     public static byte[] EncodeLog(IEnumerable<LoggedCommand> log)
@@ -159,6 +159,7 @@ public static class CommandCodec
             case SetPolicyPerResident x: Head(Tag.SetPolicyPerResident); w.Write(x.Policy); w.Write(x.Slot); w.Write(x.PerResident); break;
             case SetPolicyShared x: Head(Tag.SetPolicyShared); w.Write(x.Policy); w.Write(x.Shared); break;
             case AddPolicy: Head(Tag.AddPolicy); break;
+            case SettleGame: Head(Tag.SettleGame); break;
             default: throw new NotSupportedException($"No codec for {c.GetType().Name}");
         }
     }
@@ -198,6 +199,7 @@ public static class CommandCodec
             Tag.SetPolicyPerResident => new SetPolicyPerResident(r.ReadInt32(), r.ReadInt32(), r.ReadSingle()),
             Tag.SetPolicyShared => new SetPolicyShared(r.ReadInt32(), r.ReadBoolean()),
             Tag.AddPolicy => new AddPolicy(),
+            Tag.SettleGame => new SettleGame(),
             _ => throw new InvalidDataException($"Unknown command tag {tag}"),
         };
         return c with { Player = player };

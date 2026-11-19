@@ -290,11 +290,10 @@ public sealed class Water
     /// (<see cref="Procedural.Terrain.RiverSources"/>), discharging in proportion to that gain and never raising
     /// its river above the bank. Then <see cref="Settle"/> lets the rivers find their flowing depth.
     /// </summary>
-    public void FillFromTerrain(Procedural.Terrain t, int headRadius = 12, int sourceRate = 30)
+    /// <summary>Natural water surfaces per column (see <see cref="Seepage"/>), from the terrain.</summary>
+    private void SetNatural(Procedural.Terrain t)
     {
         int w = t.Width, d = t.Depth;
-        // Natural water surfaces: just under a lake's shore or a river's bank (lakes sit at their sill, rivers a
-        // level below the bank; see Terrain), or the ground on land. Water above them seeps away (Seepage).
         _natural = new int[w * d];
         for (int i = 0; i < w * d; i++)
         {
@@ -306,6 +305,14 @@ public sealed class Water
                 _ => (t.Surface[i] + 1) * U + U / 32,
             };
         }
+    }
+
+    public void FillFromTerrain(Procedural.Terrain t, int headRadius = 12, int sourceRate = 30)
+    {
+        int w = t.Width, d = t.Depth;
+        // Natural water surfaces: just under a lake's shore or a river's bank (lakes sit at their sill, rivers a
+        // level below the bank; see Terrain), or the ground on land. Water above them seeps away (Seepage).
+        SetNatural(t);
         for (int y = 0; y < d; y++)
         for (int x = 0; x < w; x++)
         {
@@ -1006,5 +1013,101 @@ public sealed class Water
             var raw = chunk.Raw!;
             for (int lz = 0; lz < Chunk.Size && z0 + lz < open.Length; lz++) open[z0 + lz] = !TileInfo.IsSolid(raw[Chunk.Index(lx, ly, lz)]);
         }
+    }
+
+    // ---- Snapshot (see Net.Snapshot) ----------------------------------------------------------------------
+
+    /// <summary>Finishes any step in flight and drops the pipes (rebuilt from the spans; a loaded copy does the same).</summary>
+    internal void Settle()
+    {
+        Join();
+        foreach (var b in _blocks) if (b != null) b.LinksValid = false;
+        Net.SnapIO.Compact(_springs);
+        Net.SnapIO.Compact(_dirty);
+    }
+
+    internal void SnapSave(BinaryWriter w)
+    {
+        Join();
+        w.Write(_blocks.Count(b => b != null));
+        foreach (var b in _blocks)
+        {
+            if (b == null) continue;
+            w.Write(b.Index);
+            Net.SnapIO.WriteInts(w, b.Start);
+            Net.SnapIO.WriteShorts(w, b.Floor);
+            Net.SnapIO.WriteShorts(w, b.Ceil);
+            Net.SnapIO.WriteInts(w, b.Vol);
+            w.Write(b.Out != null);
+            if (b.Out != null) Net.SnapIO.WriteInts(w, b.Out);
+            Net.SnapIO.WriteInts(w, b.FlowX);
+            Net.SnapIO.WriteInts(w, b.FlowY);
+            Net.SnapIO.WriteInts(w, b.Shown);
+            Net.SnapIO.WriteBools(w, b.Confined);
+            Net.SnapIO.WriteInts(w, b.Press);
+            w.Write(b.HasFull); w.Write(b.Awake); w.Write(b.Prepared); w.Write(b.NeedsSpans); w.Write(b.Changed); w.Write(b.Received);
+            w.Write(b.Quiet); w.Write(b.Version); w.Write(b.Wet); w.Write(b.Drained); w.Write(b.Evaporated); w.Write(b.Visited);
+        }
+        void Set(IReadOnlyCollection<int> s) { w.Write(s.Count); foreach (int i in s) w.Write(i); }
+        Set(_wet);
+        Set(_dirty);
+        Set(_fullBlocks);
+        w.Write(_confined.Count);
+        foreach (var (b, s) in _confined) { w.Write(b.Index); w.Write(s); }
+        w.Write(_awake.Count);
+        foreach (var b in _awake) w.Write(b.Index);
+        w.Write(_prepared.Count);
+        foreach (var b in _prepared) w.Write(b.Index);
+        w.Write(_springs.Count);
+        foreach (var (p, (rate, limit)) in _springs) { Net.SnapIO.Write(w, p); w.Write(rate); w.Write(limit); }
+        w.Write(_drained); w.Write(_sourced); w.Write(_evaporated);
+        w.Write(Version); w.Write(Steps); w.Write(LastStepCells);
+    }
+
+    internal void SnapLoad(BinaryReader r, Procedural.Terrain? terrain)
+    {
+        if (terrain != null) SetNatural(terrain);
+        int count = r.ReadInt32();
+        for (int k = 0; k < count; k++)
+        {
+            int bi = r.ReadInt32();
+            int x0 = (bi % _bw) << Chunk.Shift, y0 = (bi / _bw) << Chunk.Shift;
+            var b = new Block(bi, x0, y0, x0 == 0 || y0 == 0 || x0 + Chunk.Size >= _world.Width || y0 + Chunk.Size >= _world.Depth);
+            _blocks[bi] = b;
+            b.Start = Net.SnapIO.ReadInts(r);
+            b.Floor = Net.SnapIO.ReadShorts(r);
+            b.Ceil = Net.SnapIO.ReadShorts(r);
+            b.Vol = Net.SnapIO.ReadInts(r);
+            b.Out = r.ReadBoolean() ? Net.SnapIO.ReadInts(r) : null;
+            b.FlowX = Net.SnapIO.ReadInts(r);
+            b.FlowY = Net.SnapIO.ReadInts(r);
+            b.Shown = Net.SnapIO.ReadInts(r);
+            b.Confined = Net.SnapIO.ReadBools(r);
+            b.Press = Net.SnapIO.ReadInts(r);
+            b.HasFull = r.ReadBoolean(); b.Awake = r.ReadBoolean(); b.Prepared = r.ReadBoolean(); b.NeedsSpans = r.ReadBoolean();
+            b.Changed = r.ReadBoolean(); b.Received = r.ReadBoolean();
+            b.Quiet = r.ReadInt32(); b.Version = r.ReadInt32(); b.Wet = r.ReadInt32();
+            b.Drained = r.ReadInt64(); b.Evaporated = r.ReadInt64(); b.Visited = r.ReadInt32();
+            b.NewVol = new int[b.Floor.Length];
+            b.LinksValid = false;
+        }
+        void Set(ICollection<int> s) { s.Clear(); int n = r.ReadInt32(); for (int i = 0; i < n; i++) s.Add(r.ReadInt32()); }
+        Set(_wet);
+        Set(_dirty);
+        Set(_fullBlocks);
+        _confined.Clear();
+        int nc = r.ReadInt32();
+        for (int i = 0; i < nc; i++) _confined.Add((_blocks[r.ReadInt32()]!, r.ReadInt32()));
+        _awake = new List<Block>();
+        int na = r.ReadInt32();
+        for (int i = 0; i < na; i++) _awake.Add(_blocks[r.ReadInt32()]!);
+        _prepared.Clear();
+        int np = r.ReadInt32();
+        for (int i = 0; i < np; i++) _prepared.Add(_blocks[r.ReadInt32()]!);
+        _springs.Clear();
+        int ns = r.ReadInt32();
+        for (int i = 0; i < ns; i++) _springs[Net.SnapIO.ReadPos(r)] = (r.ReadInt32(), r.ReadInt32());
+        _drained = r.ReadInt64(); _sourced = r.ReadInt64(); _evaporated = r.ReadInt64();
+        Version = r.ReadInt32(); Steps = r.ReadInt64(); LastStepCells = r.ReadInt32();
     }
 }
