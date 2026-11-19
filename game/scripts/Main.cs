@@ -251,6 +251,8 @@ public partial class Main : Node3D
             case Key.Key2 when s_client == null: _speedIndex = 1; _paused = false; break;
             case Key.Key3 when s_client == null: _speedIndex = 2; _paused = false; break;
             case Key.Home when !key.Echo: FocusHome(); break;
+            case Key.F5 when !key.Echo: QuickSave(); break;
+            case Key.F9 when !key.Echo && s_client == null: QuickLoad(); break;
             case Key.F4 when !key.Echo && _sim.Factions.Count > 1: PlayAs((Player + 1) % _sim.Factions.Count); break;
         }
     }
@@ -301,6 +303,8 @@ public partial class Main : Node3D
             HostNetCheckQuit();
         }
         NetOrders();
+        SaveFrame();
+        SaveDevArgs();
         NetCheck();
     }
 

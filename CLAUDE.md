@@ -145,6 +145,15 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   `--join=127.0.0.1:7781 --net-orders --net-check=1500`; the two `[net] ... hash` lines must match (they did).
 - Limits: joining replays the whole log (long games join slowly until snapshots exist); demos edit the world outside
   commands, so they're off online.
+- **Saves (`Net.SaveGame`, game `MainSave.cs`):** a save is the `GameSettings`, the tick, the command log, a name, the
+  local player and when it was saved (binary, "COLONYSAVE" + version; `Read(headerOnly)` lists saves fast). `Load`
+  regenerates and replays to the tick with progress (runs on a background task; nothing else touches that sim), so a
+  loaded game is bit-identical (tested, and across two processes: `--save-at=TICKS` then `--load-newest` print
+  matching hashes) and plays on identically. Files in `user://saves/*.colony` (name -> file; same name overwrites).
+  Main menu: Save game (name, overwrite list; disabled for unshareable worlds), Load game (newest first, day, map,
+  colonies, age, delete), a Loading page with a progress bar; F5 quicksave, F9 loads the newest, autosave ("Autosave")
+  as each game day begins. A loaded multi-colony save can be hosted again (it is shareable). Long games load at sim
+  speed (about 2000 ticks/s on a big map) until snapshots exist.
 
 ## Commands and factions (multiplayer foundation)
 
@@ -510,7 +519,8 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       zones, rooms, blueprints, colonists; per-colony society and housing), multi-colony world generation, hot-seat.
 - [x] Networking: host-relayed lockstep over TCP (join mid-game by replay, desync hashes, guests act only for their
       colony), Multiplayer page in the main menu, HUD status; verified across two processes (identical hashes).
-- [ ] Next for the demo: save/load (settings + command log is already a save; snapshots for fast joins and long games),
+- [x] Save/load: settings + command log saves, background load with progress, quicksave/quickload, daily autosave.
+- [ ] Next for the demo: snapshots (fast loads and joins in long games),
       chat, combat and health (war, NPC enemies), trade between colonies, colonist pages (job clothing, titles by
       proficiency once skills exist), title art behind the main menu, NAT/relay for internet play without port forwarding.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,

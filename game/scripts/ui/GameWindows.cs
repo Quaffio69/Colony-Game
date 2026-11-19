@@ -462,6 +462,7 @@ public partial class HelpWindow : GlyphWindow
         ("LMB, RMB", "start/confirm a box or place; remove box"), ("Z X while boxing", "stretch the box over levels"),
         ("R, [ ]", "rotate, size of the part being placed"), ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor"),
         ("Esc", "cancel placing, close the window, main menu"), ("Ctrl+Tab", "next window"), ("Enter", "debug: finish all orders"),
+        ("F5 / F9", "quicksave / load the newest save"), ("F4", "play the next colony (hot-seat, several colonies)"),
         ("C I B L", "colonists, stocks, build, chronicle"), ("H J V", "housing, work, inspect"), ("F1 F2 F3", "tests, appearance, this help"),
     ];
 
