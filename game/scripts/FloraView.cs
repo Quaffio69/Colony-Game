@@ -18,7 +18,11 @@ namespace ColonyGame;
 /// </summary>
 public partial class FloraView : Node3D
 {
-    private const float NearTreeRange = 320f;
+    private const float NearTreeRange = 320f, StyledTreeRange = 200f;
+    /// <summary>Full-detail trees within this distance of the camera, markers beyond (the styled look's trees are heavier).</summary>
+    private float _treeRange = NearTreeRange;
+    private bool _detail = true;
+    private readonly List<(MultiMeshInstance3D Node, bool Tree, bool Marker)> _ranged = new();
     private const float NearPlantRange = 180f;
     private const double BuildBudgetMs = 4;
 
@@ -66,6 +70,34 @@ public partial class FloraView : Node3D
             if (clock.Elapsed.TotalMilliseconds > BuildBudgetMs) return;
             BuildRegion(rx, ry);
             _builtVersions[r] = v;
+        }
+    }
+
+    private float TreeEnd => _detail ? _treeRange : 0.01f;   // 0 would mean "no limit"
+    private float PlantEnd => _detail ? NearPlantRange : 0.01f;
+
+    /// <summary>
+    /// Full-detail plants (false: trees only as their light distant markers, plants hidden). The styled look turns detail
+    /// off once its far view is mostly symbols, where the 3D detail can't be seen but still costs millions of triangles.
+    /// </summary>
+    public bool Detail
+    {
+        get => _detail;
+        set
+        {
+            if (_detail == value) return;
+            _detail = value;
+            ApplyRanges();
+        }
+    }
+
+    private void ApplyRanges()
+    {
+        _ranged.RemoveAll(r => !IsInstanceValid(r.Node));
+        foreach (var (node, tree, marker) in _ranged)
+        {
+            if (marker) node.VisibilityRangeBegin = TreeEnd;
+            else node.VisibilityRangeEnd = tree ? TreeEnd : PlantEnd;
         }
     }
 
@@ -119,13 +151,15 @@ public partial class FloraView : Node3D
                 mm.SetInstanceTransform(i, InstanceTransform(list[i], origin));
                 mm.SetInstanceCustomData(i, Tint(list[i]));
             }
-            node.AddChild(new MultiMeshInstance3D
+            var near = new MultiMeshInstance3D
             {
                 Multimesh = mm,
-                VisibilityRangeEnd = tree ? NearTreeRange : NearPlantRange,
+                VisibilityRangeEnd = tree ? TreeEnd : PlantEnd,
                 VisibilityRangeEndMargin = 16,
                 CastShadow = tree ? GeometryInstance3D.ShadowCastingSetting.On : GeometryInstance3D.ShadowCastingSetting.Off,
-            });
+            };
+            node.AddChild(near);
+            _ranged.Add((near, tree, false));
         }
 
         if (trees.Count > 0)
@@ -136,13 +170,15 @@ public partial class FloraView : Node3D
                 far.SetInstanceTransform(i, InstanceTransform(trees[i], origin));
                 far.SetInstanceCustomData(i, CanopyColor(trees[i].Kind).SrgbToLinear() * Brightness(trees[i]));
             }
-            node.AddChild(new MultiMeshInstance3D
+            var markers = new MultiMeshInstance3D
             {
                 Multimesh = far,
-                VisibilityRangeBegin = NearTreeRange,
+                VisibilityRangeBegin = TreeEnd,
                 VisibilityRangeBeginMargin = 16,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
-            });
+            };
+            node.AddChild(markers);
+            _ranged.Add((markers, true, true));
         }
 
         AddChild(node);
@@ -346,11 +382,15 @@ public partial class FloraView : Node3D
         _meshes[(int)PlantKind.Glowcap] = Compose(caps.ToArray());
 
         // Far LOD: a two-cone spindle on a short stalk, coloured per instance.
-        var marker = Material(new Color(1f, 1f, 1f), 1f);
+        var marker = Material(new Color(1f, 1f, 1f), 1f, glyph: DwarfRender.GlyphAtlas.Oak); // distant trees still count as trees
         _farMesh = Compose(
             (Rod(2.1f, 0f, 3.6f, 5), At(0, 3.8f, 0), marker),
             (Rod(0f, 2.1f, 1.4f, 5), At(0, 1.3f, 0), marker));
-        if (Main.StyledRender) KitTrees();
+        if (Main.StyledRender)
+        {
+            _treeRange = StyledTreeRange;
+            KitTrees();
+        }
     }
 
     /// <summary>
@@ -364,7 +404,8 @@ public partial class FloraView : Node3D
         _materials.Add(canopy);
         _materials.Add(bark);
         Mesh Tree(DwarfRender.TreeSpecies species, float scale, int seed) =>
-            DwarfRender.TreeBuilder.Build(species, scale, seed, into: new ArrayMesh(), canopyMaterial: canopy, barkMaterial: bark).canopy;
+            DwarfRender.TreeBuilder.Build(species, scale, seed, into: new ArrayMesh(), canopyMaterial: canopy, barkMaterial: bark,
+                leafCards: _sim.World != null && DwarfRender.DwarfRenderer.Instance?.Settings.FoliageTechnique == DwarfRender.FoliageMode.LeafCards).canopy;
         _meshes[(int)PlantKind.Oak] = Tree(DwarfRender.TreeSpecies.Oak, 0.9f, 1);
         _meshes[(int)PlantKind.Willow] = Tree(DwarfRender.TreeSpecies.Oak, 1.05f, 7);
         _meshes[(int)PlantKind.Birch] = Tree(DwarfRender.TreeSpecies.Birch, 0.85f, 2);

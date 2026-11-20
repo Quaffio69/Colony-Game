@@ -27,5 +27,5 @@ void fragment() {
 	v_transl = 0.0;
 	METALLIC = 0.0;
 	SPECULAR = 0.0;
-	ROUGHNESS = dr_group[t] / 127.0;
+	ROUGHNESS = dr_cap_group[t] / 127.0;
 }

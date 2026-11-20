@@ -56,8 +56,10 @@ public partial class GameUi : CanvasLayer
         Add(new TestsWindow(this), Key.F1);
         Add(new AppearanceWindow(this), Key.F2);
         Add(new HelpWindow(this), Key.F3);
+        Add(new GraphicsWindow(this), Key.F10);
 
         BuildHud();
+        _m.AddChild(new ProfilerPanel(this) { Name = "Profiler" });
         _menu = new MainMenu(this);
         _m.Overlay.AddChild(_menu);
         _m.Changed();

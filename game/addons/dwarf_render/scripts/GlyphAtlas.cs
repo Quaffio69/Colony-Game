@@ -26,7 +26,7 @@ public static class GlyphAtlas
 	public const int Generic = 16;
 	public const int Grass = 17, Dirt = 18, Path = 19, Sand = 20, Stone = 21, DeepStone = 22, Boulder = 23,
 	                 Ore = 24, Wood = 25, Plank = 26, Water = 27, Brick = 28, Ember = 29, Metal = 30, Crystal = 31;
-	public const int FirstCustomGroup = 32, MaxGroup = 126, EdgeRow = 127;
+	public const int FirstCustomGroup = 32, MaxGroup = 63, EdgeRow = 127; // the roughness channel carries ids 0..63
 
 	public record Group(string Name, string Ramp, string Object);
 

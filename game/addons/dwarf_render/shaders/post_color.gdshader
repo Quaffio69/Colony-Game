@@ -72,7 +72,9 @@ float lin_depth(float d, vec2 uv, mat4 inv_proj) {
 	return -v.z / v.w;
 }
 // Object id from the roughness channel (Godot packs roughness into 7 bits).
-float obj_id(float a) { if (a > 0.5) a = 1.0 - a; return floor(a / (127.0 / 255.0) * 127.0 + 0.5); }
+// Godot 4.7 stores roughness as is (static) or as 1 - roughness (dynamic objects) in the alpha: ids 0..63 decode exactly.
+// (The kit first assumed the older 7-bit packing, which read every id as twice its value.)
+float obj_id(float a) { if (a > 0.5) a = 1.0 - a; return floor(a * 127.0 + 0.5); }
 bool is_fol(float a) { float id = obj_id(a); return id >= 0.5 && id <= 4.5; }
 
 float outer_axis(float d, float da, float db, float thr) {
@@ -190,7 +192,8 @@ void fragment() {
 	if (palette_on) {
 		float b = bayer_size < 3.0 ? bayer2(wp) : (bayer_size < 6.0 ? bayer4(wp) : bayer8(wp));
 		b -= 0.5 * (1.0 - 1.0 / (bayer_size * bayer_size));
-		vec3 c = clamp(col + b * dither_amount * dither_spread, 0.0, 1.0);
+		// No dither on the sky: on a flat colour it is a dot grid, and the far view magnifies it.
+		vec3 c = clamp(col + b * (sky ? 0.0 : dither_amount) * dither_spread, 0.0, 1.0);
 		col = texture(palette_lut, c * (31.0 / 32.0) + 0.5 / 32.0).rgb;
 	}
 	ALBEDO = srgb_to_lin(col);

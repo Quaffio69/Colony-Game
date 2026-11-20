@@ -40,32 +40,66 @@ public partial class Main
         _renderer = new DwarfRenderer
         {
             Name = "DwarfRenderer",
-            Settings = GameDefaults(),
+            Settings = LoadLook() ?? GameDefaults(),
             GameCamera = _rig.Camera.GetPath(),
             SunLight = _sun.GetPath(),
+            CreateTuningPanel = false, // the Graphics window (F10) is in the game's own UI
         };
         AddChild(_renderer);
-        foreach (var c in _renderer.GetChildren())
-            if (c is SettingsPanel panel) panel.PanelTheme = UI.GlyphTheme.Theme; // F10 in the Glyph UI's font and colours
+        if (Arg("--profiler") != null) _renderer.Settings.ShowProfiler = true; // dev: the profiler from the start
         GameLooks.Watch(this);
     }
 
-    /// <summary>
-    /// The kit's defaults, retuned for this camera: zoom 1 is 40 tiles from the pivot; glyphs take over closer than about
-    /// 13 tiles; the far view turns to symbols from 160 tiles out and is all symbols past about 450.
-    /// </summary>
-    private static DwarfRenderSettings GameDefaults() => new()
+    /// <summary>The diorama's defaults; zoom 1x is 45 tiles from the pivot (glyphs from ~18 in, symbols from ~50 out).</summary>
+    public static DwarfRenderSettings GameDefaults() => new() { ReferenceDistance = 45f };
+
+    public const string LookPath = "user://dwarf_render_settings.tres";
+
+    /// <summary>The look in use (null in the classic renderer).</summary>
+    public DwarfRenderSettings? Look => _renderer?.Settings;
+    public DwarfRenderer? Renderer => _renderer;
+
+    private static DwarfRenderSettings? LoadLook() =>
+        FileAccess.FileExists(LookPath) ? ResourceLoader.Load<DwarfRenderSettings>(LookPath, null, ResourceLoader.CacheMode.Ignore) : null;
+
+    /// <summary>Saves the look (it loads with every world from then on).</summary>
+    public void SaveLook() { if (_renderer != null) ResourceSaver.Save(_renderer.Settings, LookPath); }
+
+    /// <summary>Puts a look in use (a saved one, defaults, or a changed copy) and pushes it to the shaders.</summary>
+    public void UseLook(DwarfRenderSettings look)
     {
-        ReferenceDistance = 40f,
-        ZoomInStart = 3f,
-        ZoomOutStart = 0.25f,
-        ZoomOutFullyText = 0.09f,
-    };
+        if (_renderer == null) return;
+        _renderer.Settings = look;
+        _renderer.ApplySettings();
+    }
+
+    /// <summary>The saved look again (false if none was saved).</summary>
+    public bool RevertLook()
+    {
+        if (LoadLook() is not { } saved) return false;
+        UseLook(saved);
+        return true;
+    }
+
+    private int _shadowMapApplied;
 
     /// <summary>Each frame: the renderer zooms about the rig's pivot (the ground under the view), not where the ray lands.</summary>
     private void UpdateRenderer()
     {
         if (_renderer == null) return;
+        var look = _renderer.Settings;
         _renderer.FocusOverride = _rig.GlobalPosition;
+        _renderer.ZoomOverride = look.ReferenceDistance / Mathf.Max(1f, _rig.Distance); // same zoom whatever the projection
+        _rig.Orthographic = look.Orthographic;
+        // Far out and mostly symbols, full-detail trees can't be seen (each is ~1k triangles): show the light markers instead.
+        _flora.Detail = !(_renderer.Zoom < 1f && _renderer.AsciiAmount > 0.6f);
+        _renderer.TimeOfDay = _sim.Tick % Colony.Core.Agents.Needs.Day / (float)Colony.Core.Agents.Needs.Day;
+        // Shadows reach as far as the view does (Godot measures from the camera, which ortho puts further back).
+        _sun.DirectionalShadowMaxDistance = Mathf.Clamp(_rig.CameraBack + _rig.Distance * 2f, 100f, 2500f);
+        if ((int)look.ShadowMap != _shadowMapApplied)
+        {
+            _shadowMapApplied = (int)look.ShadowMap;
+            RenderingServer.DirectionalShadowAtlasSetSize(_shadowMapApplied, true);
+        }
     }
 }

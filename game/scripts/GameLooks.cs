@@ -14,7 +14,7 @@ namespace ColonyGame;
 public static class GameLooks
 {
     // Glyph groups of our own (GlyphAtlas: 32..126 are free).
-    public const int Furniture = 32, Construction = 33, Farm = 34;
+    public const int Furniture = 32, Construction = 33, Farm = 34, UpStairs = 35, DownStairs = 36, UpDownStairs = 37, Nest = 38, CutRock = 39;
 
     private static bool _registered;
 
@@ -28,14 +28,69 @@ public static class GameLooks
             var t = (TileType)i;
             BlockLooks.Register(i, Look(t));
         }
-        GlyphAtlas.RegisterGroup(GlyphAtlas.Sky, "sky", "        ", "        "); // our sky is plain: no dots over it
-        GlyphAtlas.RegisterGroup(Furniture, "furniture", " .:=#HH8", "ΠΠΠ╥ΠΠ╥Π");
-        GlyphAtlas.RegisterGroup(Construction, "construction", " .:+=#%@", "########");
-        GlyphAtlas.RegisterGroup(Farm, "farm", " .,'\"vwW", "\"\"τ\"\"τ\"\"");
-        GlyphAtlas.Font.TryAdd("Π", ["#####", ".#.#.", ".#.#.", ".#.#.", ".#.#.", ".#.#.", "....."]);
-        GlyphAtlas.Font.TryAdd("╥", [".....", ".....", "#####", ".#.#.", ".#.#.", ".#.#.", ".#.#."]);
+        RegisterSymbols();
     }
 
+
+    /// <summary>
+    /// What ASCII draws, Dwarf Fortress world-map style: each group's zoomed-in brightness ramp and its zoomed-out object
+    /// symbols (eight, picked by position: repeats weight the mix). Grassland ", broadleaf ♣, conifers ♠ ↑, mountains ▲,
+    /// cut rock ▓, water ≈ ~, sand ░, ore £, stairs &lt; &gt; X, colonists ☺, ants a, nests ∩, beds Θ, tables Π ╥, walls #.
+    /// The kit's 5x7 font gets every glyph of the UI's bitmap font plus a few drawn here.
+    /// </summary>
+    private static void RegisterSymbols()
+    {
+        ImportUiGlyphs();
+        var font = GlyphAtlas.Font;
+        font.TryAdd("<", ["...#.", "..#..", ".#...", "#....", ".#...", "..#..", "...#."]);
+        font.TryAdd(">", [".#...", "..#..", "...#.", "....#", "...#.", "..#..", ".#..."]);
+        font.TryAdd("X", ["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"]);
+        font.TryAdd("a", [".....", ".....", ".###.", "....#", ".####", "#...#", ".####"]);
+        font.TryAdd("∩", [".....", ".###.", "#...#", "#...#", "#...#", "#...#", "....."]);
+        font.TryAdd("░", ["#...#", "..#..", ".....", "#...#", "..#..", ".....", "#...#"]);
+        font.TryAdd("Π", ["#####", ".#.#.", ".#.#.", ".#.#.", ".#.#.", ".#.#.", "....."]);
+        font.TryAdd("╥", [".....", ".....", "#####", ".#.#.", ".#.#.", ".#.#.", ".#.#."]);
+        void G(int id, string name, string ramp, string symbols) => GlyphAtlas.RegisterGroup(id, name, ramp, symbols);
+        G(GlyphAtlas.Sky, "sky", "        ", "        ");           // our sky is plain: no dots over it
+        G(GlyphAtlas.Oak, "oak", " .,*&%8@", "♣♣♣♣♣♣♣♣");
+        G(GlyphAtlas.Pine, "pine", " .,*&%8@", "♠♠♠↑♠♠↑♠");
+        G(GlyphAtlas.Birch, "birch", " .,*&%8@", "♣♣♣♣♣♣♣♣");
+        G(GlyphAtlas.Bush, "bush", " .,*&%8@", "\"\"♣\"\"\"♣\"");
+        G(GlyphAtlas.Creature, "ant", " .:aO0@@", "aaaaaaaa");
+        G(GlyphAtlas.Grass, "grass", " .,'\"vwW", "\"\"\"\"'\"\",");
+        G(GlyphAtlas.Dirt, "dirt", " .,:;+o%", ".,.`.,..");
+        G(GlyphAtlas.Sand, "sand", " ..,:;+o", "░.░░.░,░");
+        G(GlyphAtlas.Stone, "mountain", " .:+=#%@", "▲▲▲∩▲▲▲▲");
+        G(GlyphAtlas.DeepStone, "rock", " .:+=#%@", "▓▓▓▓▓▓▓▓");
+        G(CutRock, "cut rock", " .:+=#%@", "▓▓▓▓▓▓▓▓");
+        G(GlyphAtlas.Water, "water", " .-~~~==", "≈≈≈~≈≈≈~");
+        G(Furniture, "furniture", " .:=#HH8", "ΘΠ╥ΠΘΠ╥Π");
+        G(Construction, "construction", " .:+=#%@", "########");
+        G(Farm, "farm", " .,'\"vwW", "\"\"≈\"\"≈\"\"");
+        G(UpStairs, "up stairs", " .:<<<<<", "<<<<<<<<");
+        G(DownStairs, "down stairs", " .:>>>>>", ">>>>>>>>");
+        G(UpDownStairs, "up/down stairs", " .:XXXXX", "XXXXXXXX");
+        G(Nest, "nest", " .:∩∩∩∩∩", "∩∩∩∩∩∩∩∩");
+    }
+
+    /// <summary>The UI's 5x7 bitmap glyphs (game/ui/glyph_glyphs.json) into the kit's font, so ASCII matches the UI.</summary>
+    private static void ImportUiGlyphs()
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(FileAccess.GetFileAsString("res://ui/glyph_glyphs.json"));
+            foreach (var g in doc.RootElement.GetProperty("bitmap5x7").EnumerateObject())
+            {
+                var rows = new List<string>();
+                foreach (var r in g.Value.EnumerateArray()) rows.Add(r.GetString() ?? ".....");
+                if (rows.Count == 7) GlyphAtlas.Font.TryAdd(g.Name, rows.ToArray());
+            }
+        }
+        catch (System.Exception e)
+        {
+            GD.PrintErr($"GameLooks: couldn't import UI glyphs: {e.Message}");
+        }
+    }
     private static BlockLook Look(TileType t)
     {
         BlockLook B(string hex, TileRecipe recipe, int group, SurfaceClass cls = SurfaceClass.Generic, bool glow = false) =>
@@ -56,25 +111,29 @@ public static class GameLooks
             TileType.Sulfur => B("#e0d840", TileRecipe.Ore, GlyphAtlas.Ore, SurfaceClass.Ore),
             TileType.Aetherite => B("#7fe0d8", TileRecipe.Noise, GlyphAtlas.Crystal, SurfaceClass.Prop, glow: true),
             TileType.Wall => B("#8a3c2a", TileRecipe.Brick, GlyphAtlas.Brick),
-            TileType.UpStair or TileType.DownStair or TileType.UpDownStair => B("#b48a58", TileRecipe.Path, GlyphAtlas.Path),
+            TileType.UpStair => B("#b48a58", TileRecipe.Path, UpStairs),
+            TileType.DownStair => B("#b48a58", TileRecipe.Path, DownStairs),
+            TileType.UpDownStair => B("#b48a58", TileRecipe.Path, UpDownStairs),
             _ => B("#77706a", TileRecipe.Stone, GlyphAtlas.Stone),
         };
     }
 
     /// <summary>Per tile type, for the terrain shaders: sRGB colour (alpha &lt; 1 glows) and glyph group.</summary>
-    public static (Vector4[] Palette, float[] Groups) TileTables()
+    public static (Vector4[] Palette, float[] Groups, float[] CapGroups) TileTables()
     {
         RegisterBlocks();
         var palette = new Vector4[32];
         var groups = new float[32];
+        var capGroups = new float[32];
         for (int i = 1; i < TileInfo.Count && i < 32; i++)
         {
             var look = BlockLooks.Get(i);
             var classic = WorldView.TileColor((TileType)i);
             palette[i] = new Vector4(look.Color.R, look.Color.G, look.Color.B, look.Emissive ? 0.2f : classic.A);
             groups[i] = look.GlyphGroup;
+            capGroups[i] = look.GlyphGroup is GlyphAtlas.Stone or GlyphAtlas.Brick ? CutRock : look.GlyphGroup;
         }
-        return (palette, groups);
+        return (palette, groups, capGroups);
     }
 
     /// <summary>A shader by path: its <c>_dr</c> variant when the kit's look is on and one exists.</summary>
@@ -182,6 +241,8 @@ public static class GameLooks
     /// <summary>What ASCII should draw for a node: by the view it belongs to.</summary>
     private static int GroupOf(Node n)
     {
+        for (var q = n; q != null; q = q.GetParent())
+            if (q.Name.ToString().StartsWith("Nest_")) return Nest; // the mound, not its ants
         for (var p = n; p != null; p = p.GetParent())
             switch (p)
             {

@@ -37,13 +37,24 @@ public partial class DwarfRenderer : Node
 	/// <summary>Optional: your camera controller can set these instead of the automatic zoom / focus detection.</summary>
 	public float? ZoomOverride { get; set; }
 	public Vector3? FocusOverride { get; set; }
+	/// <summary>Game clock, 0..1 from midnight: with DayNightCycle on, the sun follows it (6:00 sunrise, 18:00 sunset).</summary>
+	public float? TimeOfDay { get; set; }
+	/// <summary>Drive the sun, ambient light and sky from the settings (sun angle, warmth, ambient), like the diorama.</summary>
+	[Export] public bool ControlLighting { get; set; } = true;
+	Vector3 _sunAxis; Color _skyDay; bool _sunAxisSet;
 
 	/// <summary>Current ASCII amount (0..1) and whether the far view is all text; useful for gameplay/UI.</summary>
 	public float AsciiAmount { get; private set; }
 	public bool FarViewIsText { get; private set; }
+	/// <summary>Current zoom (1 = the reference view, above 1 zoomed in) and the art resolution, for readouts.</summary>
+	public float Zoom { get; private set; } = 1f;
+	public Vector2I ArtSize => new(_lw, _lh);
 
 	Camera3D _game, _artCam, _idsCam;
 	SubViewport _art, _ids;
+	/// <summary>The ids pass target (R = glyph group / 255, G = linear depth), for diagnostics.</summary>
+	public SubViewport IdsViewport => _ids;
+	public SubViewport ArtViewport => _art;
 	MeshInstance3D _artQuad, _idsQuad;
 	ShaderMaterial _post, _postIds, _present;
 	TextureRect _rect;
@@ -237,6 +248,7 @@ public partial class DwarfRenderer : Node
 		else focus = gt.Origin + fwd * s.ReferenceDistance;
 		float dist = Mathf.Max(0.01f, (focus - gt.Origin).Length());
 		float zoomF = ZoomOverride ?? (ortho ? s.ReferenceOrthoSize / Mathf.Max(0.001f, _game.Size) : s.ReferenceDistance / dist);
+		Zoom = zoomF;
 
 		// ---- ASCII zoom logic (same as the prototype) -------------------------------------
 		bool asciiIn = s.AsciiMode is AsciiMode.WhenZoomedIn or AsciiMode.ZoomedInAndOut;
@@ -314,7 +326,8 @@ public partial class DwarfRenderer : Node
 		u.SetShaderParameter("is_ortho", ortho ? 1f : 0f);
 
 		// ---- Shadows off in the all-text far view ------------------------------------------------
-		if (_sun != null) _sun.ShadowEnabled = _sunShadowDefault && !(FarViewIsText && s.SkipShadowsWhenAllText);
+		if (_sun != null) _sun.ShadowEnabled = s.SunShadows && !(FarViewIsText && s.SkipShadowsWhenAllText);
+		if (ControlLighting) UpdateLighting(s);
 
 		// ---- Marker priority (dwarves etc.) ----------------------------------------------------
 		int n = 0;
@@ -340,5 +353,44 @@ public partial class DwarfRenderer : Node
 		u.SetShaderParameter("marker_count", n);
 	}
 
+
+	static float Smooth(float a, float b, float x) { x = Mathf.Clamp((x - a) / (b - a), 0f, 1f); return x * x * (3 - 2 * x); }
+	static Color Hex(string h) => Color.FromHtml(h);
+
+	/// <summary>
+	/// The diorama's sun (updateSun): angle 0 sunrise, 90 noon, 180 sunset, beyond that night (a dim blue moon from the
+	/// other side). Warmth tints it from white to amber, and a low sun goes orange; ambient light and the sky follow.
+	/// The sun travels in the vertical plane of the scene sun's original heading, so the default angle keeps its side.
+	/// </summary>
+	void UpdateLighting(DwarfRenderSettings s)
+	{
+		if (_sun == null) return;
+		if (!_sunAxisSet)
+		{
+			var fwd = -_sun.GlobalTransform.Basis.Z;                   // where its light travels
+			var h = new Vector3(-fwd.X, 0, -fwd.Z);                      // towards the sun, horizontally
+			_sunAxis = h.LengthSquared() > 1e-6f ? h.Normalized() : Vector3.Right;
+			_skyDay = GetViewport().FindWorld3D()?.Environment?.BackgroundColor ?? Hex("#e6d2a4");
+			_sunAxisSet = true;
+		}
+		float angle = s.DayNightCycle && TimeOfDay is { } t ? t * 360f - 90f : s.SunAngle;
+		float r = Mathf.DegToRad(angle), sinE = Mathf.Sin(r);
+		var dir = (_sunAxis * Mathf.Cos(r) + Vector3.Up * sinE).Normalized();
+		float day = Smooth(-0.08f, 0.2f, sinE), low = (1 - Smooth(0.05f, 0.55f, sinE)) * day;
+		Color lc;
+		if (sinE >= 0) lc = Hex("#fff4e0").Lerp(Hex("#ffb868"), s.SunWarmth).Lerp(Hex("#ff8048"), low * 0.7f) * (day * 1.05f);
+		else { dir = -dir; lc = Hex("#7080b0") * (0.45f * Smooth(0, 0.25f, -sinE)); }
+		lc.A = 1;
+		var up = Mathf.Abs(dir.Y) > 0.98f ? Vector3.Forward : Vector3.Up;
+		_sun.GlobalTransform = new Transform3D(Basis.LookingAt(-dir, up), _sun.GlobalPosition);
+		_sun.LightColor = lc;
+		if (_envOverride == null) return;
+		var dayAmb = Hex("#c8c4b8").Lerp(Hex("#e0c098"), s.SunWarmth);
+		var amb = Hex("#3a4466").Lerp(dayAmb, day).Lerp(Hex("#e09a70"), low * 0.4f);
+		_envOverride.AmbientLightSource = Godot.Environment.AmbientSource.Color;
+		_envOverride.AmbientLightColor = amb;
+		_envOverride.AmbientLightEnergy = s.Ambient * 1.1f;
+		_envOverride.BackgroundColor = Hex("#1c1a2a").Lerp(_skyDay, day).Lerp(Hex("#e8945c"), low * 0.75f);
+	}
 	static float Mod(float a, float m) => ((a % m) + m) % m;
 }

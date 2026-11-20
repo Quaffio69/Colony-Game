@@ -11,7 +11,11 @@ public partial class CameraRig : Node3D
     private Camera3D _camera = null!;
     public Camera3D Camera => _camera;
     public float Distance => _distance;
-    private float _yaw = 45f, _pitch = -50f, _distance = 120f;
+    /// <summary>How far the camera sits from the pivot (more than Distance in ortho).</summary>
+    public float CameraBack => Orthographic ? _distance + 250f : _distance;
+    private float _yaw = 45f, _pitch = -50f, _distance = 120f, _targetDistance = 120f;
+    /// <summary>Iso projection: the view keeps the size a perspective view would have at this distance, from far back.</summary>
+    public bool Orthographic { get; set; }
     private bool _orbiting;
 
     /// <summary>Height (Godot Y) of the visible ground at a Godot (x, z), or null to leave the pivot height alone.</summary>
@@ -27,7 +31,7 @@ public partial class CameraRig : Node3D
     public void Focus(Vector3 point, float? distance = null, float? yaw = null, float? pitch = null)
     {
         Position = point;
-        if (distance is { } d) _distance = d;
+        if (distance is { } d) _distance = _targetDistance = d;
         if (yaw is { } y) _yaw = y;
         if (pitch is { } p) _pitch = p;
         ApplyTransform();
@@ -54,6 +58,10 @@ public partial class CameraRig : Node3D
 
         // Keep the pivot on the ground that's actually visible (e.g. the cut surface after peeling levels
         // away), so zoom is always relative to what's on screen. Eased, so cliffs don't jolt the view.
+        // Zoom eases towards the wheel's target, so the pixel-art renderer's zoom transitions glide instead of jumping.
+        _distance = Mathf.Lerp(_distance, _targetDistance, 1f - Mathf.Exp(-dt * 12f));
+        if (Mathf.Abs(_distance - _targetDistance) < 0.01f) _distance = _targetDistance;
+
         if (GroundHeight?.Invoke(Position.X, Position.Z) is { } ground)
             Position = Position with { Y = Mathf.Lerp(Position.Y, ground, 1f - Mathf.Exp(-dt * 10f)) };
 
@@ -65,10 +73,10 @@ public partial class CameraRig : Node3D
         switch (e)
         {
             case InputEventMouseButton { ButtonIndex: MouseButton.WheelUp, Pressed: true }:
-                _distance = Mathf.Max(8f, _distance * 0.9f);
+                _targetDistance = Mathf.Max(8f, _targetDistance * 0.9f);
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.WheelDown, Pressed: true }:
-                _distance = Mathf.Min(900f, _distance * 1.1f);
+                _targetDistance = Mathf.Min(900f, _targetDistance * 1.1f);
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Middle } mb:
                 _orbiting = mb.Pressed;
@@ -87,7 +95,19 @@ public partial class CameraRig : Node3D
         _camera.Position = Vector3.Zero;
         RotationDegrees = new Vector3(0, _yaw, 0);
         var pitch = Mathf.DegToRad(_pitch);
-        _camera.Position = new Vector3(0, -Mathf.Sin(pitch) * _distance, Mathf.Cos(pitch) * _distance);
+        if (Orthographic)
+        {
+            // Same framing as perspective at this distance, seen from far enough back that nothing behind the pivot is clipped.
+            _camera.Projection = Camera3D.ProjectionType.Orthogonal;
+            _camera.Size = 2f * _distance * Mathf.Tan(Mathf.DegToRad(_camera.Fov * 0.5f));
+            float back = _distance + 250f; // far enough back for hills between camera and pivot; shadows still reach
+            _camera.Position = new Vector3(0, -Mathf.Sin(pitch) * back, Mathf.Cos(pitch) * back);
+        }
+        else
+        {
+            _camera.Projection = Camera3D.ProjectionType.Perspective;
+            _camera.Position = new Vector3(0, -Mathf.Sin(pitch) * _distance, Mathf.Cos(pitch) * _distance);
+        }
         _camera.LookAt(GlobalPosition, Vector3.Up);
     }
 }

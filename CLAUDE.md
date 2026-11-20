@@ -107,6 +107,23 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   of the 3D render and drawn crisp in 2D by `ScreenTags` (layer 1). The renderer zooms about the rig pivot
   (`FocusOverride`); `GameDefaults` retunes zoom: reference 40 tiles, glyphs under ~13, symbols from 160. The sun faces
   away from the default view (yaw 215) so we see lit faces (toon shade bands are dark). Render layers 19-20 are the kit's.
+- **Graphics window (F10, `UI.GraphicsWindow`):** every `DwarfRenderSettings` [Export] by group, built by reflection in
+  Glyph controls (`GlyphSlider`, `GlyphCycler`, switches, colour pickers) with the diorama's labels/formats; presets,
+  Save (`Main.SaveLook` -> `user://dwarf_render_settings.tres`, loaded with every world), Revert, Defaults
+  (`Main.GameDefaults`: the diorama's values, zoom 1x = 45 tiles); a live readout (zoom, ASCII %, art size, fps). The kit's
+  own F10 panel is off (`CreateTuningPanel = false`). Settings the port added from the diorama: sun angle / warmth /
+  ambient / shadows / day-night (`DwarfRenderer.UpdateLighting`, the diorama's updateSun; `TimeOfDay` from the game clock),
+  orthographic (iso) camera (`CameraRig.Orthographic`: same framing, camera 250 further back), shadow map size, profiler
+  (`UI.ProfilerPanel`: fps, worst frame, sim, world GPU, draws, prims, memory, zoom/ASCII; `--profiler`). Zoom is
+  `ReferenceDistance / rig distance` (`ZoomOverride`); the rig eases zoom so ASCII transitions glide.
+- **Glyph ids:** Godot 4.7 stores roughness as is (or 1 - r for dynamic objects): ids decode as `round(a * 127)`, groups
+  0..63 only (`GlyphAtlas.MaxGroup`). The kit first assumed the older 7-bit packing and read every id doubled (grass drew
+  farm symbols). `--id-probe` on the kit demo prints the decoded ids. **Symbols (`GameLooks.RegisterSymbols`):** DF
+  world-map style: grassland ", broadleaf ♣, conifers ♠ ↑, mountains ▲ (surface stone), cut rock ▓ (the cap uses
+  `dr_cap_group`), water ≈ ~, sand ░, stairs < > X, ants a, nests ∩ (nodes named `Nest_*`), beds/tables Θ Π ╥, walls #; the
+  UI's bitmap glyphs are imported into the kit font. No dither on the sky (a dot grid in the far view).
+- **Cost:** kit trees are ~1k triangles (no leaf cards unless that technique is on at load); full detail within 200
+  tiles, and `FloraView.Detail` drops to the distant markers once the far view is mostly symbols.
 - Not ported yet: per-vertex AO / cave sky light and edge rounding (would need mesher changes), tree variants per species.
 
 ## UI (Glyph UI, `game/scripts/ui`)

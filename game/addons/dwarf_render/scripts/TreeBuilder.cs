@@ -145,7 +145,7 @@ public static class TreeBuilder
 	/// <summary>Builds a tree. With <paramref name="into"/>, both parts go into that one mesh (canopy surface, then bark) with
 	/// the given materials (for MultiMesh instancing) and it is returned as both.</summary>
 	public static (ArrayMesh canopy, ArrayMesh bark) Build(TreeSpecies species, float scale = 1f, int seed = 1, float cardSize = 0.5f,
-		ArrayMesh into = null, Material canopyMaterial = null, Material barkMaterial = null)
+		ArrayMesh into = null, Material canopyMaterial = null, Material barkMaterial = null, bool leafCards = true)
 	{
 		var rnd = new Random(seed * 7919 + (int)species * 104729);
 		float R() => (float)rnd.NextDouble();
@@ -231,7 +231,7 @@ public static class TreeBuilder
 			var cc = cones ? bl.c + new Vector3(0, -bl.h * 0.15f, 0) : bl.c;
 			float cr = cones ? bl.r * 0.8f : bl.r, csq = cones ? bl.h / bl.r * 0.4f : bl.sq;
 			float size = cardSize * (cones ? 0.85f : Mathf.Min(1, 0.6f + s * 0.4f));
-			int count = (int)MathF.Round(18 * cr * cr);
+			int count = leafCards ? (int)MathF.Round(18 * cr * cr) : 0; // cards only matter to the leaf-card technique
 			var cardAttr = Attr(0, 1, 2);
 			for (int k = 0; k < count; k++)
 			{

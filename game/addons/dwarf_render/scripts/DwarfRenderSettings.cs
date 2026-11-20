@@ -11,6 +11,7 @@ public enum FoliageMode { DitheredShell = 0, Solid = 1, LeafCards = 2 }
 public enum FoliageOutlines { None = 0, Silhouette = 1, EveryClump = 2 }
 public enum AsciiMode { Off, WhenZoomedIn, WhenZoomedOut, ZoomedInAndOut, Always }
 public enum GlyphStyle { BrightnessRamps, ObjectSymbols }
+public enum ShadowMapSize { Size512 = 512, Size1024 = 1024, Size2048 = 2048, Size4096 = 4096 }
 
 /// <summary>
 /// Every knob of the pixel-art / ASCII renderer, mirroring the diorama's panel.
@@ -71,6 +72,11 @@ public partial class DwarfRenderSettings : Resource
 	[Export(PropertyHint.Range, "0,3,0.05")] public float TorchGlow { get; set; } = 1.2f;
 	[Export(PropertyHint.Range, "0,1.5,0.01")] public float RimLight { get; set; } = 0f;
 	[Export(PropertyHint.Range, "0,1.5,0.01")] public float SpecularGlints { get; set; } = 0f;
+	[Export(PropertyHint.Range, "0,360,1")] public float SunAngle { get; set; } = 52f;        // 0 sunrise, 90 noon, 180 sunset, beyond: night
+	[Export(PropertyHint.Range, "0,1,0.01")] public float SunWarmth { get; set; } = 0.55f;
+	[Export(PropertyHint.Range, "0,1.5,0.01")] public float Ambient { get; set; } = 0.5f;
+	[Export] public bool SunShadows { get; set; } = true;
+	[Export] public bool DayNightCycle { get; set; } = false;                                  // the sun follows the game clock (DwarfRenderer.TimeOfDay)
 
 	// ----------------------------------------------------------------- Grade
 	[ExportGroup("Grade")]
@@ -102,10 +108,10 @@ public partial class DwarfRenderSettings : Resource
 	[Export] public bool DwarfsAlwaysShow { get; set; } = true;
 	[Export(PropertyHint.Range, "0,1,0.01")] public float BrightnessMatch { get; set; } = 1f;
 	[Export(PropertyHint.Range, "0,1,0.01")] public float DissolveCrossfade { get; set; } = 0.6f;
-	[Export(PropertyHint.Range, "1,8,0.1")] public float ZoomInStart { get; set; } = 2.5f;
+	[Export(PropertyHint.Range, "1,20,0.1")] public float ZoomInStart { get; set; } = 2.5f;
 	[Export(PropertyHint.Range, "1.2,10,0.1")] public float ZoomInLength { get; set; } = 3f;
-	[Export(PropertyHint.Range, "0.12,1.5,0.01")] public float ZoomOutStart { get; set; } = 0.9f;
-	[Export(PropertyHint.Range, "0.05,1.2,0.01")] public float ZoomOutFullyText { get; set; } = 0.3f;
+	[Export(PropertyHint.Range, "0.02,1.5,0.01")] public float ZoomOutStart { get; set; } = 0.9f;
+	[Export(PropertyHint.Range, "0.01,1.2,0.01")] public float ZoomOutFullyText { get; set; } = 0.3f;
 	[Export(PropertyHint.Range, "4,16,1")] public int ZoomOutCharSize { get; set; } = 8;
 	[Export(PropertyHint.Range, "4,16,1")] public int AlwaysCharSize { get; set; } = 8;
 	[Export] public bool SkipShadowsWhenAllText { get; set; } = true;
@@ -123,12 +129,15 @@ public partial class DwarfRenderSettings : Resource
 	// ----------------------------------------------------------------- Camera / zoom reference
 	[ExportGroup("Camera")]
 	[Export] public float ReferenceOrthoSize { get; set; } = 88f;     // ortho Size that counts as "zoom 1x"
-	[Export] public float ReferenceDistance { get; set; } = 140f;     // perspective distance to the focus that counts as "zoom 1x"
+	[Export] public bool Orthographic { get; set; } = true;            // iso projection (the game camera keeps its zoom)
+	[Export(PropertyHint.Range, "5,300,1")] public float ReferenceDistance { get; set; } = 140f;     // perspective distance to the focus that counts as "zoom 1x"
 	[Export] public float FocusPlaneY { get; set; } = 0f;             // perspective focus = where the view ray hits this height
 
 	// ----------------------------------------------------------------- Performance
 	[ExportGroup("Performance")]
 	[Export] public bool ReverseZ { get; set; } = true;               // Godot 4.3+ = true
+	[Export] public ShadowMapSize ShadowMap { get; set; } = ShadowMapSize.Size2048;
+	[Export] public bool ShowProfiler { get; set; } = false;
 
 	// =================================================================== Presets
 	public static readonly string[] StylePresets =
@@ -142,6 +151,7 @@ public partial class DwarfRenderSettings : Resource
 		PixelSize = 3; PaletteEnabled = true; Palette = PaletteName.WarmSnes; PaletteSize = 32; Dither = 0.35f; DitherPattern = DitherPattern.Bayer4x4;
 		OutlinesEnabled = true; OutlineColour = Color.FromHtml("#2b1a16"); OuterSilhouette = 0.75f; InnerCrease = -0.35f; DepthThreshold = 0.6f; NormalThreshold = 0.35f; OutlineWidth = 1;
 		ShadingBands = 3; TorchGlow = 1.2f; RimLight = 0; SpecularGlints = 0; Saturation = 1.15f; Contrast = 1.05f; Brightness = 1;
+		SunAngle = 52; SunWarmth = 0.55f; Ambient = 0.5f;
 		DepthFog = 0; InkHatching = 0; PaperColour = Color.FromHtml("#efe4c8"); PaintWobble = 0; WatercolourEdges = 0; Duotone = 0;
 		DuotoneDark = Color.FromHtml("#2a1e1a"); DuotoneLight = Color.FromHtml("#f0e0c0"); Grain = 0; AnimatedGrain = false; Crt = 0; Vignette = 0;
 	}
@@ -151,19 +161,19 @@ public partial class DwarfRenderSettings : Resource
 		ResetStyle();
 		switch (name)
 		{
-			case "Autumn Hearth": Palette = PaletteName.AutumnHearth; PaletteSize = 24; Dither = 0.45f; OutlineColour = Color.FromHtml("#2a140c"); OuterSilhouette = 0.8f; InnerCrease = 0.25f; TorchGlow = 2.2f; Saturation = 1.2f; Contrast = 1.1f; Brightness = 0.98f; break;
-			case "Faded Cartridge": PixelSize = 4; Palette = PaletteName.FadedCartridge; PaletteSize = 16; Dither = 0.85f; OutlineColour = Color.FromHtml("#4a3e3a"); OuterSilhouette = 0.45f; InnerCrease = 0.15f; TorchGlow = 1f; Saturation = 0.65f; Contrast = 0.82f; Brightness = 1.08f; break;
-			case "Clean Low Poly": PixelSize = 2; PaletteEnabled = false; PaletteSize = 64; Dither = 0; OutlineColour = Color.FromHtml("#1e1410"); OuterSilhouette = 1; InnerCrease = 0.5f; DepthThreshold = 0.5f; NormalThreshold = 0.3f; Saturation = 1.05f; break;
-			case "Pocket Mono": PixelSize = 5; Palette = PaletteName.PocketMono; PaletteSize = 4; Dither = 0.55f; OutlineColour = Color.FromHtml("#0f2a1d"); OuterSilhouette = 1; InnerCrease = 0.4f; Saturation = 1; Contrast = 1.1f; Duotone = 1; DuotoneDark = Color.FromHtml("#0f2a1d"); DuotoneLight = Color.FromHtml("#d6e29a"); break;
-			case "1-Bit Dither": PixelSize = 4; Palette = PaletteName.OneBit; PaletteSize = 2; Dither = 1; DitherPattern = DitherPattern.Bayer8x8; OutlineColour = Color.FromHtml("#18141c"); OuterSilhouette = 1; InnerCrease = -0.6f; ShadingBands = 4; Contrast = 1.15f; Brightness = 1.05f; Duotone = 1; DuotoneDark = Colors.Black; DuotoneLight = Colors.White; break;
-			case "CRT Arcade": PixelSize = 6; PaletteSize = 48; Dither = 0.3f; OuterSilhouette = 0.9f; InnerCrease = -0.4f; Saturation = 1.35f; Contrast = 1.15f; Brightness = 1.05f; RimLight = 0.4f; Crt = 1; Vignette = 0.35f; break;
-			case "Ink & Parchment": PixelSize = 3; PaletteEnabled = false; OutlineColour = Color.FromHtml("#2a1c14"); OuterSilhouette = 1; InnerCrease = 0.7f; DepthThreshold = 0.45f; ShadingBands = 4; Saturation = 0.9f; Contrast = 1; InkHatching = 1; PaperColour = Color.FromHtml("#efe2c4"); Grain = 0.3f; Vignette = 0.3f; break;
-			case "Storybook Gouache": PixelSize = 3; PaletteEnabled = false; OutlineColour = Color.FromHtml("#4a3020"); OuterSilhouette = 0.45f; InnerCrease = 0.15f; ShadingBands = 4; Saturation = 1.15f; Contrast = 0.95f; Brightness = 1.04f; PaintWobble = 1.4f; WatercolourEdges = 0.8f; Grain = 0.35f; RimLight = 0.25f; DepthFog = 0.25f; Vignette = 0.25f; break;
-			case "Ligne Claire": PixelSize = 2; Palette = PaletteName.PastelClear; PaletteSize = 24; Dither = 0; OutlineColour = Color.FromHtml("#141014"); OuterSilhouette = 1; InnerCrease = 0.9f; NormalThreshold = 0.25f; OutlineWidth = 2; ShadingBands = 2; Saturation = 0.95f; Brightness = 1.05f; DepthFog = 0.3f; break;
-			case "Misty Morning": PixelSize = 4; Palette = PaletteName.FadedCartridge; PaletteSize = 24; Dither = 0.6f; OutlineColour = Color.FromHtml("#5a5560"); OuterSilhouette = 0.5f; InnerCrease = -0.25f; Saturation = 0.8f; Contrast = 0.9f; Brightness = 1.06f; DepthFog = 0.85f; RimLight = 0.5f; break;
-			case "Cel Shaded": PixelSize = 2; PaletteEnabled = false; OutlineColour = Color.FromHtml("#1a1216"); OuterSilhouette = 1; InnerCrease = 0.55f; OutlineWidth = 2; ShadingBands = 2; Saturation = 1.25f; Contrast = 1.08f; RimLight = 0.8f; SpecularGlints = 0.9f; break;
-			case "Old Photograph": PixelSize = 3; PaletteEnabled = false; OutlineColour = Color.FromHtml("#2a2018"); OuterSilhouette = 0.5f; InnerCrease = 0.2f; ShadingBands = 5; Contrast = 1.2f; Duotone = 1; DuotoneDark = Color.FromHtml("#24180f"); DuotoneLight = Color.FromHtml("#f2dcb0"); Grain = 0.5f; AnimatedGrain = true; Vignette = 0.8f; break;
-			case "Chunky Retro": PixelSize = 6; Palette = PaletteName.ChunkyRetro; PaletteSize = 8; Dither = 1; OuterSilhouette = 1; InnerCrease = 0.3f; ShadingBands = 2; TorchGlow = 1.4f; Saturation = 1.2f; Contrast = 1.1f; Brightness = 1.02f; break;
+			case "Autumn Hearth": SunAngle = 22; SunWarmth = 0.95f; Ambient = 0.38f; Palette = PaletteName.AutumnHearth; PaletteSize = 24; Dither = 0.45f; OutlineColour = Color.FromHtml("#2a140c"); OuterSilhouette = 0.8f; InnerCrease = 0.25f; TorchGlow = 2.2f; Saturation = 1.2f; Contrast = 1.1f; Brightness = 0.98f; break;
+			case "Faded Cartridge": SunAngle = 60; SunWarmth = 0.45f; Ambient = 0.65f; PixelSize = 4; Palette = PaletteName.FadedCartridge; PaletteSize = 16; Dither = 0.85f; OutlineColour = Color.FromHtml("#4a3e3a"); OuterSilhouette = 0.45f; InnerCrease = 0.15f; TorchGlow = 1f; Saturation = 0.65f; Contrast = 0.82f; Brightness = 1.08f; break;
+			case "Clean Low Poly": SunAngle = 50; SunWarmth = 0.5f; PixelSize = 2; PaletteEnabled = false; PaletteSize = 64; Dither = 0; OutlineColour = Color.FromHtml("#1e1410"); OuterSilhouette = 1; InnerCrease = 0.5f; DepthThreshold = 0.5f; NormalThreshold = 0.3f; Saturation = 1.05f; break;
+			case "Pocket Mono": SunAngle = 55; SunWarmth = 0.3f; Ambient = 0.55f; PixelSize = 5; Palette = PaletteName.PocketMono; PaletteSize = 4; Dither = 0.55f; OutlineColour = Color.FromHtml("#0f2a1d"); OuterSilhouette = 1; InnerCrease = 0.4f; Saturation = 1; Contrast = 1.1f; Duotone = 1; DuotoneDark = Color.FromHtml("#0f2a1d"); DuotoneLight = Color.FromHtml("#d6e29a"); break;
+			case "1-Bit Dither": SunAngle = 50; Ambient = 0.45f; PixelSize = 4; Palette = PaletteName.OneBit; PaletteSize = 2; Dither = 1; DitherPattern = DitherPattern.Bayer8x8; OutlineColour = Color.FromHtml("#18141c"); OuterSilhouette = 1; InnerCrease = -0.6f; ShadingBands = 4; Contrast = 1.15f; Brightness = 1.05f; Duotone = 1; DuotoneDark = Colors.Black; DuotoneLight = Colors.White; break;
+			case "CRT Arcade": SunAngle = 58; SunWarmth = 0.5f; PixelSize = 6; PaletteSize = 48; Dither = 0.3f; OuterSilhouette = 0.9f; InnerCrease = -0.4f; Saturation = 1.35f; Contrast = 1.15f; Brightness = 1.05f; RimLight = 0.4f; Crt = 1; Vignette = 0.35f; break;
+			case "Ink & Parchment": SunAngle = 45; SunWarmth = 0.4f; Ambient = 0.55f; PixelSize = 3; PaletteEnabled = false; OutlineColour = Color.FromHtml("#2a1c14"); OuterSilhouette = 1; InnerCrease = 0.7f; DepthThreshold = 0.45f; ShadingBands = 4; Saturation = 0.9f; Contrast = 1; InkHatching = 1; PaperColour = Color.FromHtml("#efe2c4"); Grain = 0.3f; Vignette = 0.3f; break;
+			case "Storybook Gouache": SunAngle = 48; SunWarmth = 0.7f; Ambient = 0.6f; PixelSize = 3; PaletteEnabled = false; OutlineColour = Color.FromHtml("#4a3020"); OuterSilhouette = 0.45f; InnerCrease = 0.15f; ShadingBands = 4; Saturation = 1.15f; Contrast = 0.95f; Brightness = 1.04f; PaintWobble = 1.4f; WatercolourEdges = 0.8f; Grain = 0.35f; RimLight = 0.25f; DepthFog = 0.25f; Vignette = 0.25f; break;
+			case "Ligne Claire": SunAngle = 62; SunWarmth = 0.35f; Ambient = 0.7f; PixelSize = 2; Palette = PaletteName.PastelClear; PaletteSize = 24; Dither = 0; OutlineColour = Color.FromHtml("#141014"); OuterSilhouette = 1; InnerCrease = 0.9f; NormalThreshold = 0.25f; OutlineWidth = 2; ShadingBands = 2; Saturation = 0.95f; Brightness = 1.05f; DepthFog = 0.3f; break;
+			case "Misty Morning": SunAngle = 24; SunWarmth = 0.75f; Ambient = 0.65f; PixelSize = 4; Palette = PaletteName.FadedCartridge; PaletteSize = 24; Dither = 0.6f; OutlineColour = Color.FromHtml("#5a5560"); OuterSilhouette = 0.5f; InnerCrease = -0.25f; Saturation = 0.8f; Contrast = 0.9f; Brightness = 1.06f; DepthFog = 0.85f; RimLight = 0.5f; break;
+			case "Cel Shaded": SunAngle = 55; SunWarmth = 0.45f; Ambient = 0.55f; PixelSize = 2; PaletteEnabled = false; OutlineColour = Color.FromHtml("#1a1216"); OuterSilhouette = 1; InnerCrease = 0.55f; OutlineWidth = 2; ShadingBands = 2; Saturation = 1.25f; Contrast = 1.08f; RimLight = 0.8f; SpecularGlints = 0.9f; break;
+			case "Old Photograph": SunAngle = 50; Ambient = 0.6f; PixelSize = 3; PaletteEnabled = false; OutlineColour = Color.FromHtml("#2a2018"); OuterSilhouette = 0.5f; InnerCrease = 0.2f; ShadingBands = 5; Contrast = 1.2f; Duotone = 1; DuotoneDark = Color.FromHtml("#24180f"); DuotoneLight = Color.FromHtml("#f2dcb0"); Grain = 0.5f; AnimatedGrain = true; Vignette = 0.8f; break;
+			case "Chunky Retro": SunAngle = 48; SunWarmth = 0.6f; PixelSize = 6; Palette = PaletteName.ChunkyRetro; PaletteSize = 8; Dither = 1; OuterSilhouette = 1; InnerCrease = 0.3f; ShadingBands = 2; TorchGlow = 1.4f; Saturation = 1.2f; Contrast = 1.1f; Brightness = 1.02f; break;
 			default: break;   // "Warm SNES" = the reset values
 		}
 	}

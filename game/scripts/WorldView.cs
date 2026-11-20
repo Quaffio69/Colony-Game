@@ -105,7 +105,8 @@ public partial class WorldView : Node3D
     private static void StyleTiles(ShaderMaterial m)
     {
         if (!Main.StyledRender) return;
-        var (palette, groups) = GameLooks.TileTables();
+        var (palette, groups, capGroups) = GameLooks.TileTables();
+        m.SetShaderParameter("dr_cap_group", capGroups);
         m.SetShaderParameter("dr_palette", palette);
         m.SetShaderParameter("dr_group", groups);
         GameLooks.Styled(m);

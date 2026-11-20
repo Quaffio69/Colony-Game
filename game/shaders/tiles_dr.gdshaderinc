@@ -7,6 +7,7 @@ uniform float dr_tile_px = 8.0;
 uniform float dr_tex_strength = 0.85;
 uniform vec4 dr_palette[32];   // sRGB base colour; alpha < 1 glows (aetherite)
 uniform float dr_group[32];    // glyph group per tile type (what ASCII draws)
+uniform float dr_cap_group[32]; // ... on the cut surface (inside rock: cut-rock symbols, not mountains)
 
 // t: tile type; cell: integer tile (Godot axes); world/n: position and face normal; on_cut: the view level's own tiles.
 vec3 dr_tile_albedo(int t, vec3 cell, vec3 world, vec3 n, bool on_cut) {

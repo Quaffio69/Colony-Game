@@ -20,7 +20,7 @@ void fragment() {
 	bool sky = reverse_z ? d <= 1e-7 : d >= 0.9999999;
 	float a = texture(nr_tex, SCREEN_UV).a;
 	if (a > 0.5) a = 1.0 - a;
-	float id = floor(a / (127.0 / 255.0) * 127.0 + 0.5);
+	float id = floor(a * 127.0 + 0.5); // see obj_id in post_color: Godot 4.7 stores roughness as is
 	vec4 v = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, d, 1.0);
 	float lin = -v.z / v.w;
 	ALBEDO = sky ? vec3(0.0) : vec3(id / 255.0, lin, 0.0);

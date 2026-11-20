@@ -106,6 +106,15 @@ public partial class DwarfRenderDemo : Node3D, IVoxelSource
 	public override void _Process(double delta)
 	{
 		// Dev: --screenshot=PATH saves a frame once things settle, then quits (lets an agent check the look headlessly).
+		// Dev: --id-probe prints which glyph groups the ids pass decoded (checks the roughness-channel encoding).
+		if (_frames == 89 && System.Array.IndexOf(OS.GetCmdlineUserArgs(), "--id-probe") >= 0 && DwarfRenderer.Instance?.IdsViewport is { } ids)
+		{
+			var img = ids.GetTexture().GetImage();
+			var counts = new System.Collections.Generic.SortedDictionary<int, int>();
+			for (int y = 0; y < img.GetHeight(); y += 2) for (int x = 0; x < img.GetWidth(); x += 2)
+			{ int id = (int)System.MathF.Round(img.GetPixel(x, y).R * 255); counts[id] = (counts.TryGetValue(id, out int had) ? had : 0) + 1; }
+			GD.Print("[id-probe] " + string.Join(", ", System.Linq.Enumerable.Select(counts, kv => $"{kv.Key}:{kv.Value}")));
+		}
 		if (++_frames == 90 && System.Array.Find(OS.GetCmdlineUserArgs(), a => a.StartsWith("--screenshot=")) is { } shot)
 		{
 			GetViewport().GetTexture().GetImage().SavePng(shot["--screenshot=".Length..]);

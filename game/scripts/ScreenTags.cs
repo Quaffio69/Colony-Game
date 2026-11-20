@@ -44,7 +44,7 @@ public partial class ScreenTags : CanvasLayer
                 continue;
             }
             var pos = l3.GlobalPosition;
-            bool show = camera != null && l3.IsVisibleInTree() && !camera.IsPositionBehind(pos) && l3.Text.Length > 0 &&
+            bool show = camera != null && DwarfRender.DwarfRenderer.Instance?.FarViewIsText != true && l3.IsVisibleInTree() && !camera.IsPositionBehind(pos) && l3.Text.Length > 0 &&
                         (l3.VisibilityRangeEnd <= 0 || camera.GlobalPosition.DistanceTo(pos) <= l3.VisibilityRangeEnd);
             label.Visible = show;
             if (!show) continue;
