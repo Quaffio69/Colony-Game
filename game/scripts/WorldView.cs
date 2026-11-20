@@ -20,6 +20,10 @@ namespace ColonyGame;
 /// thread (cheap), meshing runs on the thread pool, and uploads are spread over frames under a time budget.</item>
 /// <item>The view-level slice is a shader cut plus a texture-driven "cap" quad for the cut surface, so
 /// changing level never re-meshes.</item>
+/// <item>Far out (<see cref="FarView"/>: one art pixel covers several tiles) the sections give way to far blocks: a
+/// coarse heightfield of ground and standing water per <see cref="FarBlock"/>² columns (<see cref="FarMesher"/>), a few
+/// dozen draws for the whole map instead of ten thousand. They are built in the background once the world is meshed,
+/// rebuilt (throttled) where chunks change and refreshed in turn for the water; the switch waits until all exist.</item>
 /// </list>
 /// Also draws dig/stair designations.
 /// </summary>
@@ -56,7 +60,25 @@ public partial class WorldView : Node3D
         public int[] CurrentVersions() => Array.ConvertAll(Chunks, c => c.Version);
     }
 
-    private sealed record MeshResult(Section Section, int[] Versions, Vector3[] Verts, Vector3[] Normals, Color[] Colors, Vector2[] Uvs, int[] Indices, int Quads);
+    private sealed record MeshResult(Section Section, int[] Versions, MeshArrays Arrays);
+
+    /// <summary>Vertex arrays for a list of quads (built on a worker, uploaded on the main thread).</summary>
+    private sealed record MeshArrays(Vector3[] Verts, Vector3[] Normals, Color[] Colors, Vector2[] Uvs, int[] Indices, int Quads)
+    {
+        public ArrayMesh ToMesh()
+        {
+            var arrays = new Godot.Collections.Array();
+            arrays.Resize((int)Mesh.ArrayType.Max);
+            arrays[(int)Mesh.ArrayType.Vertex] = Verts;
+            arrays[(int)Mesh.ArrayType.Normal] = Normals;
+            arrays[(int)Mesh.ArrayType.Color] = Colors;
+            arrays[(int)Mesh.ArrayType.TexUV] = Uvs;
+            arrays[(int)Mesh.ArrayType.Index] = Indices;
+            var mesh = new ArrayMesh();
+            mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+            return mesh;
+        }
+    }
 
     private ColonySim _sim = null!;
     private readonly List<Section> _sections = new();
@@ -82,6 +104,27 @@ public partial class WorldView : Node3D
 
     private int _viewLevel;
     private int _appliedViewLevel = -1;
+
+    // Far view.
+    public const int FarBlock = 256, FarCell = 4;
+    private sealed class FarBlockState
+    {
+        public required int X0, Y0;
+        public MeshInstance3D? Node;
+        public bool Built, Dirty = true, InFlight;
+        public double BuiltAt = -1e9;
+    }
+    private sealed record FarResult(FarBlockState Block, MeshArrays? Arrays);
+    private readonly List<FarBlockState> _farBlocks = new();
+    private readonly ConcurrentQueue<FarResult> _farResults = new();
+    private int _farBlocksX, _farBuilt, _farInFlight, _farRefresh;
+    private double _now, _farSampledAt;
+    private Node3D _nearRoot = null!, _farRoot = null!;
+    private bool _farWanted, _farShown;
+    /// <summary>Far blocks drawn instead of sections (set each frame by Main; takes effect once every far block exists).</summary>
+    public bool FarView { get => _farShown; set => _farWanted = value; }
+    /// <summary>Main-thread ms spent sampling far blocks (diagnostics).</summary>
+    public double FarSampleMs;
 
     public VoxelWorld World => _sim.World;
     public int VisibleQuads { get; private set; }
@@ -131,6 +174,7 @@ public partial class WorldView : Node3D
         TileType.UpStair => new Color(0.74f, 0.64f, 0.46f),
         TileType.DownStair => new Color(0.62f, 0.54f, 0.42f),
         TileType.UpDownStair => new Color(0.80f, 0.72f, 0.56f),
+        FarMesher.Water => new Color(0.24f, 0.46f, 0.62f), // standing water in far blocks
         _ => Colors.Magenta,
     };
 
@@ -152,6 +196,14 @@ public partial class WorldView : Node3D
 
         _terrainMaterial = new ShaderMaterial { Shader = GameLooks.Shader("res://shaders/terrain.gdshader") };
         StyleTiles(_terrainMaterial);
+        _nearRoot = new Node3D { Name = "Near" };
+        _farRoot = new Node3D { Name = "Far", Visible = false };
+        AddChild(_nearRoot);
+        AddChild(_farRoot);
+        _farBlocksX = (World.Width + FarBlock - 1) / FarBlock;
+        for (int y0 = 0; y0 < World.Depth; y0 += FarBlock)
+        for (int x0 = 0; x0 < World.Width; x0 += FarBlock)
+            _farBlocks.Add(new FarBlockState { X0 = x0, Y0 = y0 });
 
         for (int z0 = 0; z0 < World.Height; z0 += SectionZ)
         for (int y0 = 0; y0 < World.Depth; y0 += SectionY)
@@ -212,6 +264,7 @@ public partial class WorldView : Node3D
         _maxInFlight = loading ? MaxInFlight * 8 : MaxInFlight;
         ApplyResults(clock);
         ScheduleDirty(clock);
+        UpdateFar(delta);
         if (_capDirty.Count > 0) UpdateCap();
 
         var designations = _sim.Designations;
@@ -249,6 +302,7 @@ public partial class WorldView : Node3D
         var c = World.Chunks[chunkIndex].Coord;
         int sx = (c.X << Chunk.Shift) / SectionX, sy = (c.Y << Chunk.Shift) / SectionY, sz = (c.Z << Chunk.Shift) / SectionZ;
         Enqueue((sz * _sectionsY + sy) * _sectionsX + sx);
+        _farBlocks[((c.Y << Chunk.Shift) / FarBlock) * _farBlocksX + (c.X << Chunk.Shift) / FarBlock].Dirty = true;
         if (c.Z >= _capLevel >> Chunk.Shift && c.Z <= (_capLevel + 1) >> Chunk.Shift) _capDirty.Add(chunkIndex);
     }
 
@@ -320,7 +374,11 @@ public partial class WorldView : Node3D
     {
         var quads = new List<Quad>();
         SectionMesher.Build(box, s.X0, s.Y0, s.Z0, s.SX, s.SY, s.SZ, quads);
+        return new MeshResult(s, versions, ToArrays(quads));
+    }
 
+    private static MeshArrays ToArrays(List<Quad> quads)
+    {
         int n = quads.Count;
         var verts = new Vector3[n * 4];
         var normals = new Vector3[n * 4];
@@ -348,7 +406,7 @@ public partial class WorldView : Node3D
             indices[t] = v; indices[t + 1] = v + 1; indices[t + 2] = v + 2;
             indices[t + 3] = v; indices[t + 4] = v + 2; indices[t + 5] = v + 3;
         }
-        return new MeshResult(s, versions, verts, normals, colors, uvs, indices, n);
+        return new MeshArrays(verts, normals, colors, uvs, indices, n);
     }
 
     private void ApplyResults(Stopwatch clock)
@@ -362,21 +420,12 @@ public partial class WorldView : Node3D
             s.BuiltVersions = r.Versions;
             if (s.IsDirty()) Enqueue(s.Index); // the world moved on while it was being meshed
 
-            if (r.Quads == 0)
+            if (r.Arrays.Quads == 0)
             {
                 SetMesh(s, null, 0);
                 continue;
             }
-            var arrays = new Godot.Collections.Array();
-            arrays.Resize((int)Mesh.ArrayType.Max);
-            arrays[(int)Mesh.ArrayType.Vertex] = r.Verts;
-            arrays[(int)Mesh.ArrayType.Normal] = r.Normals;
-            arrays[(int)Mesh.ArrayType.Color] = r.Colors;
-            arrays[(int)Mesh.ArrayType.TexUV] = r.Uvs;
-            arrays[(int)Mesh.ArrayType.Index] = r.Indices;
-            var mesh = new ArrayMesh();
-            mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
-            SetMesh(s, mesh, r.Quads);
+            SetMesh(s, r.Arrays.ToMesh(), r.Arrays.Quads);
         }
         UploadMs += (Stopwatch.GetTimestamp() - u0) * 1000.0 / Stopwatch.Frequency;
     }
@@ -393,11 +442,86 @@ public partial class WorldView : Node3D
         if (s.Instance == null)
         {
             s.Instance = new MeshInstance3D { MaterialOverride = _terrainMaterial };
-            AddChild(s.Instance);
+            _nearRoot.AddChild(s.Instance);
         }
         s.Instance.Mesh = mesh;
         s.Instance.Visible = s.Z0 <= _viewLevel;
     }
+
+    // ---- Far view ------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Far blocks: all built in the background once the near world is meshed (or as soon as the far view is wanted),
+    /// before the first switch. While the far view shows, changed blocks rebuild at most every 2 s each, and one block
+    /// every half second is refreshed in turn (water moves without chunk changes). Sampling reads the live world and
+    /// water, so it runs on the main thread (a couple of ms a block); meshing runs on workers.
+    /// </summary>
+    private void UpdateFar(double delta)
+    {
+        _now += delta;
+        while (_farResults.TryDequeue(out var r))
+        {
+            var b = r.Block;
+            b.InFlight = false;
+            _farInFlight--;
+            if (!b.Built) { b.Built = true; _farBuilt++; }
+            if (r.Arrays is not { Quads: > 0 } arrays)
+            {
+                if (b.Node != null) b.Node.Mesh = null;
+                continue;
+            }
+            if (b.Node == null)
+            {
+                b.Node = new MeshInstance3D { Name = $"Far_{b.X0}_{b.Y0}", MaterialOverride = _terrainMaterial };
+                _farRoot.AddChild(b.Node);
+            }
+            b.Node.Mesh = arrays.ToMesh();
+        }
+        bool all = _farBuilt == _farBlocks.Count;
+        bool show = _farWanted && all;
+        if (show != _farShown)
+        {
+            _farShown = show;
+            _nearRoot.Visible = !show;
+            _farRoot.Visible = show;
+        }
+
+        if (!_sim.WaterReady || (PendingSections > 0 && !_farWanted)) return; // the near world first
+        if (_farShown && _now - _farSampledAt > 0.5)
+        {
+            _farSampledAt = _now;
+            var turn = _farBlocks[_farRefresh++ % _farBlocks.Count];
+            turn.Dirty = true;
+            turn.BuiltAt = -1e9;
+        }
+        var clock = Stopwatch.StartNew();
+        double budget = _farWanted && !all ? 8.0 : 1.5;
+        foreach (var b in _farBlocks)
+        {
+            if (clock.Elapsed.TotalMilliseconds > budget) break;
+            if (b.InFlight || !b.Dirty || (b.Built && (!_farShown || _now - b.BuiltAt < 2.0))) continue;
+            b.Dirty = false;
+            b.InFlight = true;
+            _farInFlight++;
+            b.BuiltAt = _now;
+            int cx = Math.Min(FarBlock, World.Width - b.X0 + FarCell - 1) / FarCell;
+            int cy = Math.Min(FarBlock, World.Depth - b.Y0 + FarCell - 1) / FarCell;
+            var heights = new float[(cx + 2) * (cy + 2)];
+            var types = new TileType[heights.Length];
+            long t0 = Stopwatch.GetTimestamp();
+            FarMesher.Sample(World, _sim.Water, b.X0, b.Y0, cx, cy, FarCell, heights, types);
+            FarSampleMs += (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+            Task.Run(() =>
+            {
+                var quads = new List<Quad>();
+                FarMesher.Build(heights, types, cx, cy, b.X0, b.Y0, FarCell, quads);
+                _farResults.Enqueue(new FarResult(b, quads.Count > 0 ? ToArrays(quads) : null));
+            });
+        }
+    }
+
+    /// <summary>Far blocks built so far, of all (loading progress, diagnostics).</summary>
+    public (int Built, int Total) FarProgress => (_farBuilt, _farBlocks.Count);
 
     // ---- Cut-surface cap -----------------------------------------------------------------------------
 

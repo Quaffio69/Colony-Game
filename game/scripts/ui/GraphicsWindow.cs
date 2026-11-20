@@ -146,7 +146,9 @@ public partial class GraphicsWindow : GlyphWindow
         ["WatercolourEdges"] = "Watercolour edges", ["AnimatedGrain"] = "Animated film grain", ["Crt"] = "CRT screen",
         ["AsciiMode"] = "ASCII mode", ["ZoomedOutSymbols"] = "Zoomed-out symbols", ["ZoomedInSymbols"] = "Zoomed-in symbols",
         ["DwarfsAlwaysShow"] = "Colonists always show as ☺", ["DissolveCrossfade"] = "Dissolve ↔ crossfade",
-        ["ZoomInStart"] = "Zoom in: pixels start growing at", ["ZoomInLength"] = "Zoom in: transition length",
+        ["ZoomInStart"] = "Glyphs from zoom", ["ZoomInLength"] = "Glyph fade-in length",
+        ["ZoomStep"] = "Redraw scale every", ["PixelGrowStart"] = "Pixels grow from zoom",
+        ["PixelGrowth"] = "Pixel growth", ["MaxPixelSize"] = "Largest pixel", ["OrbitStep"] = "Turn in steps of",
         ["ZoomOutStart"] = "Zoom out: transition starts at", ["ZoomOutFullyText"] = "Zoom out: fully text at",
         ["ZoomOutCharSize"] = "Zoom out: final character size", ["AlwaysCharSize"] = "Always mode: character size",
         ["SkipShadowsWhenAllText"] = "Far: skip shadows when all text", ["SceneColourVsMono"] = "Scene colour ↔ mono",
@@ -292,7 +294,11 @@ public partial class GraphicsWindow : GlyphWindow
     private static Func<double, string> Format(string name, bool integer) => name switch
     {
         "PixelSize" => v => $"{v:0.#} px",
-        "ZoomInStart" or "ZoomOutStart" or "ZoomOutFullyText" => v => $"{v:0.00}×",
+        "ZoomInStart" or "ZoomOutStart" or "ZoomOutFullyText" or "PixelGrowStart" => v => $"{v:0.00}×",
+        "ZoomStep" => v => v <= 1.001 ? "off" : $"{v:0.00}× zoom",
+        "PixelGrowth" => v => $"{v * 100:0}%",
+        "MaxPixelSize" => v => $"{v:0} px",
+        "OrbitStep" => v => v <= 0 ? "smooth" : $"{v:0}°",
         "ZoomInLength" => v => $"{v:0.0}× zoom",
         "ZoomOutCharSize" or "AlwaysCharSize" => v => $"{v:0} px",
         "GlyphDensity" => v => $"{1 / Math.Max(0.01, v):0.00}",
@@ -315,7 +321,8 @@ public partial class GraphicsWindow : GlyphWindow
     public override void Tick()
     {
         if (S is null || _ui.Main.Renderer is not { } r) return;
+        if (_readout == null) { Rebuild(); return; } // opened (from the saved layout) before the renderer existed
         var art = r.ArtSize;
-        _readout.Text = $"now: zoom {r.Zoom:0.00}× · ASCII {r.AsciiAmount * 100:0}% · art {art.X}×{art.Y} px · {Engine.GetFramesPerSecond():0} fps";
+        _readout.Text = $"now: zoom {r.Zoom:0.00}× · ASCII {r.AsciiAmount * 100:0}% · art {art.X}×{art.Y} px · pixel {r.PixelScreen:0.0} px · {Engine.GetFramesPerSecond():0} fps";
     }
 }

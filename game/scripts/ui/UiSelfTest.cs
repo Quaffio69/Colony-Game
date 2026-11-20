@@ -84,6 +84,9 @@ public partial class UiSelfTest : Node
         var colonists = _ui.Window("colonists")!;
         var build = _ui.Window("build")!;
         float cw = GlyphTheme.Cw, ch = GlyphTheme.Ch;
+        // Start from no windows, whatever the saved layout restored (the Esc-order checks count the open ones).
+        foreach (var w in m.Windows) if (w.IsShown) w.Close();
+        await Frames();
 
         // Hotkeys open and toggle; the newest is active.
         Key(Godot.Key.C);

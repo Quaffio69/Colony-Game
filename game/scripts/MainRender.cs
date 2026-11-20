@@ -91,8 +91,12 @@ public partial class Main
         _renderer.FocusOverride = _rig.GlobalPosition;
         _renderer.ZoomOverride = look.ReferenceDistance / Mathf.Max(1f, _rig.Distance); // same zoom whatever the projection
         _rig.Orthographic = look.Orthographic;
+        _rig.OrbitStep = look.OrbitStep;
         // Far out and mostly symbols, full-detail trees can't be seen (each is ~1k triangles): show the light markers instead.
         _flora.Detail = !(_renderer.Zoom < 1f && _renderer.AsciiAmount > 0.6f);
+        // Once an art pixel covers several tiles, coarse far blocks (cells of 4 tiles) draw the terrain and water instead
+        // of ten thousand sections. On from 3 tiles a pixel, off below 2.4, so a zoom near the edge doesn't flip it.
+        _world.FarView = _renderer.TexelWorld > (_world.FarView ? 2.4f : 3f);
         _renderer.TimeOfDay = _sim.Tick % Colony.Core.Agents.Needs.Day / (float)Colony.Core.Agents.Needs.Day;
         // Shadows reach as far as the view does (Godot measures from the camera, which ortho puts further back).
         _sun.DirectionalShadowMaxDistance = Mathf.Clamp(_rig.CameraBack + _rig.Distance * 2f, 100f, 2500f);

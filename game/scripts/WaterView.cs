@@ -44,7 +44,7 @@ public partial class WaterView : Node3D
     private readonly System.Collections.Concurrent.ConcurrentQueue<((int X, int Y, int Z) Key, long Signature, Faces? Mesh)> _done = new();
     private readonly List<((int X, int Y, int Z) Key, long Signature, Faces? Mesh)> _ready = new();
     private double _now;
-    private Node3D _structures = null!;
+    private Node3D _structures = null!, _surfaces = null!;
     private readonly List<(WaterWheel Wheel, Node3D Rotor)> _wheels = new();
     private int _drawnWorks = -1, _drawnSites = -1, _cutLevel = int.MinValue;
     private Material _wood = null!, _darkWood = null!, _metal = null!, _stone = null!, _brass = null!;
@@ -65,6 +65,8 @@ public partial class WaterView : Node3D
         _brass = Mat(new Color(0.78f, 0.6f, 0.3f));
         _structures = new Node3D { Name = "Waterworks" };
         AddChild(_structures);
+        _surfaces = new Node3D { Name = "Surfaces" };
+        AddChild(_surfaces);
 
         var world = sim.World;
         _capData = new byte[world.Width * world.Depth];
@@ -207,10 +209,11 @@ public partial class WaterView : Node3D
             _water.SetShaderParameter("cut_height", (float)(level + 1));
             foreach (var m in _sliced) m.SetShaderParameter("cut_height", (float)(level + 1));
         }
+        _surfaces.Visible = !_worldView.FarView;
         if (_sim.WaterReady) // nothing to mesh until the generated water has settled
         {
             var watch = Stopwatch.StartNew();
-            UpdateWater();
+            if (!_worldView.FarView) UpdateWater(); // far out the far blocks draw the water: no sections meshed meanwhile
             MeshMs += watch.Elapsed.TotalMilliseconds;
             watch.Restart();
             UpdateCap(delta);
@@ -274,7 +277,7 @@ public partial class WaterView : Node3D
             if (have.Node is null)
             {
                 have.Node = new MeshInstance3D { CastShadow = GeometryInstance3D.ShadowCastingSetting.Off };
-                AddChild(have.Node);
+                _surfaces.AddChild(have.Node);
             }
             have.Node.Mesh = job.Mesh?.ToMesh(_water);
             _sections[job.Key] = (have.Node, job.Signature, _now);

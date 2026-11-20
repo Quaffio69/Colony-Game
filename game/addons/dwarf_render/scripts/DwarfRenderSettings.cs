@@ -26,6 +26,17 @@ public partial class DwarfRenderSettings : Resource
 	[ExportGroup("Pixels")]
 	[Export(PropertyHint.Range, "1,8,0.5")] public float PixelSize { get; set; } = 3f;        // screen pixels per art pixel
 	[Export] public bool CameraSnapping { get; set; } = true;
+	/// <summary>The art is redrawn at a new scale only when the zoom has changed by this factor; in between the finished
+	/// picture is scaled on screen, so zooming doesn't make every pixel crawl. 1 = a new scale every frame.</summary>
+	[Export(PropertyHint.Range, "1,2,0.05")] public float ZoomStep { get; set; } = 1.4f;
+	/// <summary>Zoomed in: the zoom (1 = reference) from which art pixels grow instead of showing more detail.</summary>
+	[Export(PropertyHint.Range, "0.5,20,0.1")] public float PixelGrowStart { get; set; } = 2.5f;
+	/// <summary>How much of the zoom past PixelGrowStart goes into bigger pixels (1 all of it, 0 none: more detail instead).</summary>
+	[Export(PropertyHint.Range, "0,1,0.05")] public float PixelGrowth { get; set; } = 1f;
+	/// <summary>Art pixels never get bigger than this (screen pixels); zooming further shows more detail.</summary>
+	[Export(PropertyHint.Range, "2,48,1")] public float MaxPixelSize { get; set; } = 24f;
+	/// <summary>Camera turns are drawn in steps of this many degrees (0 = smooth). Steps keep the pixel art still between them.</summary>
+	[Export(PropertyHint.Range, "0,45,1")] public float OrbitStep { get; set; } = 0f;
 
 	// ----------------------------------------------------------------- Voxels
 	[ExportGroup("Voxels")]

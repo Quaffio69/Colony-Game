@@ -49,6 +49,14 @@ public partial class DwarfRenderer : Node
 	/// <summary>Current zoom (1 = the reference view, above 1 zoomed in) and the art resolution, for readouts.</summary>
 	public float Zoom { get; private set; } = 1f;
 	public Vector2I ArtSize => new(_lw, _lh);
+	/// <summary>World units per art pixel at the focus (what one art pixel covers on the ground).</summary>
+	public float TexelWorld { get; private set; } = 1f;
+	/// <summary>Screen pixels per art pixel this frame (after zoom growth and between-step scaling).</summary>
+	public float PixelScreen { get; private set; } = 1f;
+
+	// Zoom steps: the current step (log of world units per texel, base ZoomStep); the pixel-grid anchor and its whole-texel base.
+	int _scaleStep = int.MinValue, _allocStep = int.MinValue + 1; float _stepBase;
+	Vector3 _gridAnchor; Vector2 _gridBase, _lastGrid; Basis _lastBasis; float _lastWpt; bool _gridSet;
 
 	Camera3D _game, _artCam, _idsCam;
 	SubViewport _art, _ids;
@@ -253,7 +261,6 @@ public partial class DwarfRenderer : Node
 		// ---- ASCII zoom logic (same as the prototype) -------------------------------------
 		bool asciiIn = s.AsciiMode is AsciiMode.WhenZoomedIn or AsciiMode.ZoomedInAndOut;
 		bool asciiOut = s.AsciiMode is AsciiMode.WhenZoomedOut or AsciiMode.ZoomedInAndOut;
-		float magnify = asciiIn ? Mathf.Max(1f, zoomF / s.ZoomInStart) : 1f;
 		float farK = 0f;
 		if (asciiOut)
 		{
@@ -262,53 +269,89 @@ public partial class DwarfRenderer : Node
 		}
 		float ps = Mathf.Max(1f, Mathf.Round(s.PixelSize));
 		if (s.AsciiMode == AsciiMode.Always) ps = Mathf.Max(ps, s.AlwaysCharSize);
-		float psF = farK > 0 ? ps * Mathf.Pow(Mathf.Max(1f, s.ZoomOutCharSize / ps), farK) : ps;   // far view: coarser pixels, continuously
+		float psF = farK > 0 ? ps * Mathf.Pow(Mathf.Max(1f, s.ZoomOutCharSize / ps), farK) : ps;   // far view: coarser pixels
+		// Zoomed in: past PixelGrowStart the pixels grow (by PixelGrowth of the zoom) up to MaxPixelSize, then detail returns.
+		float grow = zoomF > s.PixelGrowStart ? Mathf.Pow(zoomF / s.PixelGrowStart, Mathf.Clamp(s.PixelGrowth, 0f, 1f)) : 1f;
+		float ppsWant = Mathf.Max(psF, Mathf.Min(psF * grow, s.MaxPixelSize));
 
-		// ---- Art resolution (1 texel margin each side) -------------------------------------
-		float vw = W / psF, vh = H / psF;
-		int lw = Mathf.CeilToInt(vw) + 2, lh = Mathf.CeilToInt(vh) + 2;
-		if (lw != _lw || lh != _lh)
+		// ---- Scale steps: world units per art pixel, held between steps -----------------------
+		// The art is only redrawn at a new scale once the wanted one is a step away; in between the present pass scales
+		// the finished picture, so a zoom doesn't make every pixel crawl (or resize the render targets every frame).
+		float viewH = ortho ? _game.Size : 2f * dist * Mathf.Tan(Mathf.DegToRad(_game.Fov) * 0.5f);   // world height on screen at the focus
+		float wptWant = Mathf.Max(1e-4f, viewH * ppsWant / H);
+		float step = Mathf.Max(1f, s.ZoomStep);
+		bool stepped = step > 1.001f;
+		float wpt = wptWant;
+		if (stepped)
 		{
-			_lw = lw; _lh = lh;
-			_art.Size = new Vector2I(lw, lh); _ids.Size = new Vector2I(lw, lh);
+			float lk = Mathf.Log(wptWant) / Mathf.Log(step);
+			if (_scaleStep == int.MinValue || !Mathf.IsEqualApprox(_stepBase, step) || Mathf.Abs(lk - _scaleStep) > 0.6f)
+			{ _scaleStep = Mathf.RoundToInt(lk); _stepBase = step; }
+			wpt = Mathf.Pow(step, _scaleStep);
 		}
+		else _scaleStep = int.MinValue;
+		float pps = wpt * H / viewH;                                  // screen pixels per art pixel this frame
+		TexelWorld = wpt; PixelScreen = pps;
 
-		// ---- Render camera: copy, magnify, pixel-snap ---------------------------------------
+		// ---- Art resolution (a texel of margin each side; even, so the centre is a texel corner) ------------
+		// Within a step the target is sized for the smallest pixels the step shows, so zooming doesn't resize it.
+		static int Even(float v) { int i = Mathf.CeilToInt(v); return i + (i & 1); }
+		int needW = Even(W / pps) + 2, needH = Even(H / pps) + 2;
+		if (stepped ? (needW > _lw || needH > _lh || _scaleStep != _allocStep) : (needW != _lw || needH != _lh))
+		{
+			float alloc = stepped ? Mathf.Min(pps, ppsWant * Mathf.Pow(step, -0.6f)) : pps;
+			_lw = Mathf.Max(needW, Even(W / alloc) + 2); _lh = Mathf.Max(needH, Even(H / alloc) + 2);
+			_allocStep = _scaleStep;
+			_art.Size = new Vector2I(_lw, _lh); _ids.Size = new Vector2I(_lw, _lh);
+		}
+		int lw = _lw, lh = _lh;
+
+		// ---- Render camera: copy, pixel-snap ---------------------------------------------------
+		// The grid is anchored at a world point, so panning moves whole texels across it (world-locked pixels and dither).
+		// A turn or a new scale re-anchors it at the pivot, keeping the running whole-texel count, so the dither phase
+		// doesn't jump and the middle of the view holds still.
 		var rt = gt;
-		float distEff = dist;
-		if (!ortho && magnify > 1f) { rt.Origin = focus + (gt.Origin - focus) * magnify; distEff = dist * magnify; }
-		float wpt = ortho ? _game.Size * magnify / vh
-		                  : 2f * distEff * Mathf.Tan(Mathf.DegToRad(_game.Fov) * 0.5f) / vh;   // world units per art pixel
-		Vector2 sub = Vector2.Zero, ditherOff = Vector2.Zero, offFull = Vector2.Zero;
+		Vector3 right = rt.Basis.X.Normalized(), up = rt.Basis.Y.Normalized();
+		if (!_gridSet || !SameBasis(rt.Basis, _lastBasis) || !Mathf.IsEqualApprox(wpt, _lastWpt))
+		{
+			_gridBase = new Vector2(Mod(_gridBase.X + _lastGrid.X, 8192), Mod(_gridBase.Y + _lastGrid.Y, 8192));
+			_lastGrid = Vector2.Zero;
+			_gridAnchor = focus;
+			_gridSet = true;
+		}
+		_lastBasis = rt.Basis; _lastWpt = wpt;
+		Vector2 sub = Vector2.Zero, grid = Vector2.Zero;
 		if (s.CameraSnapping)
 		{
-			Vector3 right = rt.Basis.X.Normalized(), up = rt.Basis.Y.Normalized();
-			float pr = rt.Origin.Dot(right) / wpt, pu = rt.Origin.Dot(up) / wpt;
+			Vector3 rel = rt.Origin - _gridAnchor;
+			float pr = rel.Dot(right) / wpt, pu = rel.Dot(up) / wpt;
 			float sr = Mathf.Round(pr), su = Mathf.Round(pu);
 			rt.Origin += right * (sr - pr) * wpt + up * (su - pu) * wpt;
 			sub = new Vector2(pr - sr, -(pu - su));                      // texture axes: x right, y down
-			ditherOff = new Vector2(Mod(sr, 8), Mod(-su, 8));
-			offFull = new Vector2(Mod(sr, 4096), Mod(-su, 4096));
+			grid = new Vector2(sr, -su);
 		}
+		_lastGrid = grid;
+		Vector2 total = _gridBase + grid;
+		Vector2 ditherOff = new(Mod(total.X, 8), Mod(total.Y, 8)), offFull = new(Mod(total.X, 4096), Mod(total.Y, 4096));
 		foreach (var c in new[] { _artCam, _idsCam })
 		{
 			c.GlobalTransform = rt;
 			c.KeepAspect = Camera3D.KeepAspectEnum.Height;
 			c.Near = _game.Near; c.Far = _game.Far;
 			if (ortho) { c.Projection = Camera3D.ProjectionType.Orthogonal; c.Size = lh * wpt; }
-			else { c.Projection = Camera3D.ProjectionType.Perspective; c.Fov = Mathf.RadToDeg(2f * Mathf.Atan(lh * wpt / (2f * distEff))); }
+			else { c.Projection = Camera3D.ProjectionType.Perspective; c.Fov = Mathf.RadToDeg(2f * Mathf.Atan(lh * wpt / (2f * dist))); }
 		}
 		DwarfMaterials.SetFoliageScreenOffset(ditherOff);
 
 		// ---- Post uniforms --------------------------------------------------------------------
-		_post.SetShaderParameter("texel_world", ortho ? wpt : wpt / distEff);
+		_post.SetShaderParameter("texel_world", ortho ? wpt : wpt / dist);
 		_post.SetShaderParameter("is_ortho", ortho ? 1f : 0f);
-		_post.SetShaderParameter("fog_ref", distEff);
+		_post.SetShaderParameter("fog_ref", dist);
 		_post.SetShaderParameter("dither_offset", ditherOff);
 
 		// ---- ASCII amount + present uniforms ---------------------------------------------------
 		static float S01(float x) { x = Mathf.Clamp(x, 0f, 1f); return x * x * (3 - 2 * x); }
-		float inK = (asciiIn && magnify > 1f) ? Mathf.Log(magnify) / Mathf.Log(Mathf.Max(1.05f, s.ZoomInLength)) : 0f;
+		float inK = (asciiIn && zoomF > s.ZoomInStart) ? Mathf.Log(zoomF / s.ZoomInStart) / Mathf.Log(Mathf.Max(1.05f, s.ZoomInLength)) : 0f;
 		float amt = s.AsciiMode == AsciiMode.Always ? 1f : Mathf.Max(S01(inK), S01(farK));
 		AsciiAmount = amt;
 		FarViewIsText = farK > 0 && amt >= 0.999f;
@@ -318,7 +361,7 @@ public partial class DwarfRenderer : Node
 		var u = _present;
 		u.SetShaderParameter("low_res", new Vector2(lw, lh));
 		u.SetShaderParameter("screen_size", new Vector2(W, H));
-		u.SetShaderParameter("pps", psF * magnify);
+		u.SetShaderParameter("pps", pps);
 		u.SetShaderParameter("sub", sub);
 		u.SetShaderParameter("glyph_amt", amt);
 		u.SetShaderParameter("off_full", offFull);
@@ -393,4 +436,5 @@ public partial class DwarfRenderer : Node
 		_envOverride.BackgroundColor = Hex("#1c1a2a").Lerp(_skyDay, day).Lerp(Hex("#e8945c"), low * 0.75f);
 	}
 	static float Mod(float a, float m) => ((a % m) + m) % m;
+	static bool SameBasis(Basis a, Basis b) => a.X.IsEqualApprox(b.X) && a.Y.IsEqualApprox(b.Y) && a.Z.IsEqualApprox(b.Z);
 }

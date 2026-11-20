@@ -133,6 +133,10 @@ public static class GameLooks
             groups[i] = look.GlyphGroup;
             capGroups[i] = look.GlyphGroup is GlyphAtlas.Stone or GlyphAtlas.Brick ? CutRock : look.GlyphGroup;
         }
+        // Standing water in far blocks (FarMesher.Water): water's colour and symbols, no block texture.
+        int w = (int)Colony.Core.Meshing.FarMesher.Water;
+        palette[w] = new Vector4(0.16f, 0.40f, 0.60f, 1f);
+        groups[w] = capGroups[w] = GlyphAtlas.Water;
         return (palette, groups, capGroups);
     }
 

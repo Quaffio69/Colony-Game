@@ -50,20 +50,24 @@ vec3 tap(vec2 t) {
 	ivec2 p = clamp(ivec2(floor(t)), ivec2(0), ivec2(low_res) - 1);
 	return texelFetch(color_tex, p, 0).rgb;
 }
-vec2 ids(vec2 cell) {
+vec3 ids3(vec2 cell) {
 	ivec2 p = clamp(ivec2(cell), ivec2(0), ivec2(low_res) - 1);
-	return texelFetch(ids_tex, p, 0).rg;
+	return texelFetch(ids_tex, p, 0).rgb;
 }
+vec2 ids(vec2 cell) { return ids3(cell).rg; }
 
 vec3 ascii_pixel(vec2 t, vec3 c) {
 	vec2 cell = floor(t);
-	float h = h21(cell + off_full) * (1.0 - soft);
+	vec3 idd = ids3(cell);
+	bool sky = idd.g <= 0.0;
+	// Per-tile randomness (the ids pass hashes the world tile under the pixel): a tile keeps its symbol variant and
+	// its place in the dissolve however the camera turns or zooms. The sky has no tile: it hashes the screen cell.
+	float th = sky ? h21(cell + off_full) : idd.b;
+	float h = fract(th * 7.31 + 0.137) * (1.0 - soft);
 	float k = smoothstep(h, h + soft + 1e-4, glyph_amt);
 	if (k <= 0.0) return c;
-	vec2 idd = ids(cell);
 	float id = floor(idd.r * 255.0 + 0.5);
 	float dc = idd.g;
-	bool sky = dc <= 0.0;
 	// Rows: ramp style = group id (row 0 = sky), 127 = edge strokes; object style = 128 + group id.
 	float row = (materials_on > 0.5 || sky) ? id : 16.0;
 	float orow = 128.0 + id;
@@ -71,10 +75,10 @@ vec3 ascii_pixel(vec2 t, vec3 c) {
 	float lt = invert > 0.5 ? 1.0 - lum : lum;
 	float lv = clamp(floor(pow(clamp(lt, 0.0, 1.0), density_gamma) * 8.0), 0.0, 7.0);
 	bool water = abs(id - WATER_GROUP) < 0.5;
-	if (water) lv = clamp(lv + floor(h21(cell + off_full + floor(TIME * 3.0 + (cell.x + off_full.x) * 0.13)) * 3.0) - 1.0, 1.0, 7.0);
+	if (water) lv = clamp(lv + floor(h21(vec2(th * 977.0, floor(TIME * 3.0 + th * 5.0))) * 3.0) - 1.0, 1.0, 7.0);
 	if (style > 0.5) {
 		row = orow;
-		lv = floor(h21(cell + off_full + orow * 7.31 + (water ? floor(TIME * 2.0) * 3.7 : 0.0)) * 8.0);
+		lv = floor(fract(th + (water ? floor(TIME * 2.0 + th * 3.0) * 0.377 : 0.0)) * 8.0);
 	}
 	bool edge = false;
 	if (style < 0.5 && edges_on > 0.5 && !sky) {

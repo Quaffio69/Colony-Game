@@ -16,6 +16,12 @@ public partial class CameraRig : Node3D
     private float _yaw = 45f, _pitch = -50f, _distance = 120f, _targetDistance = 120f;
     /// <summary>Iso projection: the view keeps the size a perspective view would have at this distance, from far back.</summary>
     public bool Orthographic { get; set; }
+    /// <summary>Closest zoom (tiles from the pivot) and furthest.</summary>
+    public const float MinDistance = 4f, MaxDistance = 900f;
+    /// <summary>Turns (yaw and pitch) are shown in steps of this many degrees; 0 = smooth. The camera itself snaps, so picking matches the picture.</summary>
+    public float OrbitStep { get; set; }
+    private float ShownYaw => OrbitStep > 0 ? Mathf.Round(_yaw / OrbitStep) * OrbitStep : _yaw;
+    private float ShownPitch => OrbitStep > 0 ? Mathf.Clamp(Mathf.Round(_pitch / OrbitStep) * OrbitStep, -89f, -10f) : _pitch;
     private bool _orbiting;
 
     /// <summary>Height (Godot Y) of the visible ground at a Godot (x, z), or null to leave the pivot height alone.</summary>
@@ -51,7 +57,7 @@ public partial class CameraRig : Node3D
 
         if (input != Vector2.Zero)
         {
-            var yawBasis = new Basis(Vector3.Up, Mathf.DegToRad(_yaw));
+            var yawBasis = new Basis(Vector3.Up, Mathf.DegToRad(ShownYaw));
             var move = yawBasis * new Vector3(input.X, 0, input.Y).Normalized();
             Position += move * PanSpeed * dt * (_distance / 70f);
         }
@@ -73,10 +79,10 @@ public partial class CameraRig : Node3D
         switch (e)
         {
             case InputEventMouseButton { ButtonIndex: MouseButton.WheelUp, Pressed: true }:
-                _targetDistance = Mathf.Max(8f, _targetDistance * 0.9f);
+                _targetDistance = Mathf.Max(MinDistance, _targetDistance * 0.9f);
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.WheelDown, Pressed: true }:
-                _targetDistance = Mathf.Min(900f, _targetDistance * 1.1f);
+                _targetDistance = Mathf.Min(MaxDistance, _targetDistance * 1.1f);
                 break;
             case InputEventMouseButton { ButtonIndex: MouseButton.Middle } mb:
                 _orbiting = mb.Pressed;
@@ -93,8 +99,8 @@ public partial class CameraRig : Node3D
         if (_camera == null) return;
         _camera.Rotation = Vector3.Zero;
         _camera.Position = Vector3.Zero;
-        RotationDegrees = new Vector3(0, _yaw, 0);
-        var pitch = Mathf.DegToRad(_pitch);
+        RotationDegrees = new Vector3(0, ShownYaw, 0);
+        var pitch = Mathf.DegToRad(ShownPitch);
         if (Orthographic)
         {
             // Same framing as perspective at this distance, seen from far enough back that nothing behind the pivot is clipped.

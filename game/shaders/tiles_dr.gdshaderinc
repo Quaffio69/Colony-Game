@@ -13,7 +13,7 @@ uniform float dr_cap_group[32]; // ... on the cut surface (inside rock: cut-rock
 vec3 dr_tile_albedo(int t, vec3 cell, vec3 world, vec3 n, bool on_cut) {
 	float jitter = 0.93 + 0.14 * dr_hash3(cell);
 	vec3 albedo = dr_palette[t].rgb * jitter;
-	if (dr_tex_strength > 0.0) {
+	if (dr_tex_strength > 0.0 && t < 31) {                // 31: far-view water (no block texture)
 		vec3 an = abs(n);
 		vec2 fuv; float face = 1.0;
 		if (an.y >= an.x && an.y >= an.z) { fuv = world.xz; face = n.y > 0.0 ? 0.0 : 2.0; }

@@ -434,16 +434,18 @@ public partial class Main : Node3D
                     }
                 }
             }
-            if (float.TryParse(Arg("--zoom"), out float zoom)) _rig.Focus(_world.Center, zoom, yaw: 200f, pitch: -50f);
+            float benchYaw = float.TryParse(Arg("--yaw"), System.Globalization.CultureInfo.InvariantCulture, out float by) ? by : 200f; // dev: compare turns
+            if (float.TryParse(Arg("--zoom"), out float zoom)) _rig.Focus(_world.Center, zoom, yaw: benchYaw, pitch: -50f);
             if (Arg("--look")?.Split(',') is [var lx, var ly] && int.TryParse(lx, out int lookX) && int.TryParse(ly, out int lookY))
-                _rig.Focus(SimSpace.TileCenter(new TilePos(lookX, lookY, _sim.World.SurfaceLevel(lookX, lookY))), float.TryParse(Arg("--zoom"), out float lz) ? lz : 60f, yaw: 200f, pitch: -55f);
+                _rig.Focus(SimSpace.TileCenter(new TilePos(lookX, lookY, _sim.World.SurfaceLevel(lookX, lookY))), float.TryParse(Arg("--zoom"), out float lz) ? lz : 60f, yaw: benchYaw, pitch: -55f);
             _benchActive = Arg("--screenshot") != null || Arg("--bench") != null;
         }
         if (!_benchActive) return;
 
         if (_meshedAtMs == 0)
         {
-            if (_frames > 2 && _world.PendingSections == 0 && _flora.PendingRegions == 0 && _waterView.PendingSections == 0)
+            if (_frames > 2 && _world.PendingSections == 0 && _flora.PendingRegions == 0 && (_waterView.PendingSections == 0 || _world.FarView) &&
+                (_world.FarView || _renderer?.TexelWorld is not > 3f)) // far out: until the far blocks show
             {
                 _meshedAtMs = Time.GetTicksMsec();
                 _maxSimMs = 0;
@@ -471,6 +473,13 @@ public partial class Main : Node3D
         GD.Print($"[bench] draw calls {Performance.GetMonitor(Performance.Monitor.RenderTotalDrawCallsInFrame)}, " +
                  $"video mem {Performance.GetMonitor(Performance.Monitor.RenderVideoMemUsed) / 1048576:0} MB, " +
                  $"static mem {OS.GetStaticMemoryUsage() / 1048576} MB, managed {System.GC.GetTotalMemory(false) / 1048576} MB");
+        // Where the draw calls come from: visible geometry instances per view (each costs a draw per pass that sees it).
+        var counts = new List<string>();
+        foreach (var child in GetChildren())
+            if (child is Node3D n3 && CountDrawables(n3) is var k and > 0) counts.Add($"{n3.Name} {k}");
+        GD.Print("[bench] visible instances: " + string.Join(", ", counts) +
+                 (_renderer != null ? $"; art {_renderer.ArtSize.X}x{_renderer.ArtSize.Y}, {_renderer.TexelWorld:0.00} tiles/texel, pixel {_renderer.PixelScreen:0.0} px" : "") +
+                 $"; far view {(_world.FarView ? "on" : "off")}, {_world.FarProgress.Built}/{_world.FarProgress.Total} blocks, sampling {_world.FarSampleMs:0} ms total");
 
         if (Arg("--screenshot") is { Length: > 0 } path)
         {
@@ -479,6 +488,21 @@ public partial class Main : Node3D
         }
         _benchActive = false; // Quit takes effect a few frames later
         GetTree().Quit();
+    }
+
+    /// <summary>Visible mesh / multimesh instances with something to draw under a node (bench diagnostics).</summary>
+    private static int CountDrawables(Node3D root)
+    {
+        if (!root.Visible) return 0;
+        int n = root switch
+        {
+            MeshInstance3D { Mesh: not null } => 1,
+            MultiMeshInstance3D { Multimesh: { } mm } when mm.VisibleInstanceCount != 0 && mm.InstanceCount > 0 => 1,
+            _ => 0,
+        };
+        foreach (var child in root.GetChildren())
+            if (child is Node3D c) n += CountDrawables(c);
+        return n;
     }
 
     /// <summary>Designates a room into the mountain's flank at the current level.</summary>

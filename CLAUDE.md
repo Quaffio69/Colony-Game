@@ -64,6 +64,14 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   per frame and 8x the in-flight cap while >2000 sections are pending), ~650 MB managed. Use
   `--size=1024x1024x384` for faster iteration. Sim bench at 2048 (20 colonists, digging, felling, hauling):
   ~0.2-0.45 ms/tick avg; worst ticks ~5 ms per dig-driven connectivity rebuild.
+- **Far view (`WorldView.FarView`, `Meshing.FarMesher`):** once an art pixel covers 3+ tiles (off below 2.4; styled render
+  only) the sections give way to 64 far blocks (256² columns each, cells of 4 tiles): a heightfield of each cell's highest
+  top, or standing water (`FarMesher.Water` = tile code 31, coloured and given water symbols in `GameLooks.TileTables`)
+  when a third of its columns are wet; greedy tops plus sides, same terrain material (sliced by the shader). Sampling reads
+  the live world/water on the main thread (~2 ms a block), meshing on workers; all blocks are built in the background once
+  the near world is meshed and the switch waits for them; changed blocks rebuild at most every 2 s, one block refreshes
+  every 0.5 s (water), and WaterView hides and stops meshing its sections meanwhile. Full map at 2048: 30 ms / 23.6k draws
+  -> 9.8 ms / 1.3k. The render bench prints visible instances per view, art size, tiles/texel and the far state.
 - **Water** (`Fluids.Water`): per 16x16-column block (a chunk column) of spans; only awake blocks step (a block
   sleeps once its water is still; flowing rivers never are). Two passes per step (outflows, then volumes), each
   writing only its own block, so blocks run in parallel deterministically; pipes are precomputed per span
@@ -105,12 +113,21 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   nodes are added plus a 1 s sweep; transparent/unshaded overlays are left alone and draw after the post quad
   (`RenderPriorityMin`), so cursors, designations, ghosts and health bars stay visible, depth-tested. Label3Ds are taken out
   of the 3D render and drawn crisp in 2D by `ScreenTags` (layer 1). The renderer zooms about the rig pivot
-  (`FocusOverride`); `GameDefaults` retunes zoom: reference 40 tiles, glyphs under ~13, symbols from 160. The sun faces
+  (`FocusOverride`). **Stable pixels:** the render scale (world units per art pixel) moves in steps of `ZoomStep` (1.4x zoom,
+  hysteresis 0.6 step); between steps the present pass scales the finished picture and the art target is sized for the
+  step's smallest pixels, so zooming neither resamples nor resizes every frame. The snap grid is anchored at a world point
+  (re-anchored at the pivot on a turn or scale change, keeping its whole-texel count, so dither doesn't jump). The ids pass
+  writes a hash of the world tile under each pixel (B channel); symbol variants, the dissolve order and water ripples use
+  it, so a tile keeps its symbol through turns and zooms (a 0.25° turn used to change ~80% of pixels near the pivot, now
+  ~22%). `OrbitStep` (default smooth) snaps the rig's shown yaw/pitch, camera included, so picking matches. **Zoomed in:**
+  pixels grow from `PixelGrowStart` by `PixelGrowth` of the zoom up to `MaxPixelSize`, separately from the glyph fade
+  (`ZoomInStart`/`ZoomInLength`); the rig zooms in to 4 tiles (`CameraRig.MinDistance`). `--yaw=` sets the bench view's
+  turn (compare frames). The sun faces
   away from the default view (yaw 215) so we see lit faces (toon shade bands are dark). Render layers 19-20 are the kit's.
 - **Graphics window (F10, `UI.GraphicsWindow`):** every `DwarfRenderSettings` [Export] by group, built by reflection in
   Glyph controls (`GlyphSlider`, `GlyphCycler`, switches, colour pickers) with the diorama's labels/formats; presets,
   Save (`Main.SaveLook` -> `user://dwarf_render_settings.tres`, loaded with every world), Revert, Defaults
-  (`Main.GameDefaults`: the diorama's values, zoom 1x = 45 tiles); a live readout (zoom, ASCII %, art size, fps). The kit's
+  (`Main.GameDefaults`: the diorama's values, zoom 1x = 45 tiles); a live readout (zoom, ASCII %, art size, pixel size, fps). The kit's
   own F10 panel is off (`CreateTuningPanel = false`). Settings the port added from the diorama: sun angle / warmth /
   ambient / shadows / day-night (`DwarfRenderer.UpdateLighting`, the diorama's updateSun; `TimeOfDay` from the game clock),
   orthographic (iso) camera (`CameraRig.Orthographic`: same framing, camera 250 further back), shadow map size, profiler
