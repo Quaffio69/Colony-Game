@@ -64,19 +64,19 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   per frame and 8x the in-flight cap while >2000 sections are pending), ~650 MB managed. Use
   `--size=1024x1024x384` for faster iteration. Sim bench at 2048 (20 colonists, digging, felling, hauling):
   ~0.2-0.45 ms/tick avg; worst ticks ~5 ms per dig-driven connectivity rebuild.
-- **Far view (`WorldView.FarView`, `Meshing.FarMesher`):** once an art pixel covers 3+ tiles (off below 2.4; styled render
-  only) the sections give way to 64 far blocks (256² columns each, cells of 4 tiles): a heightfield of each cell's highest
+- **Far view (`WorldView.FarView`, `Meshing.FarMesher`):** once an art pixel covers 1.5+ tiles (off below 1.2; styled render
+  only) the sections give way to 64 far blocks (256² columns each, cells of 2 tiles; meshes vertex-compressed, `FlagCompressAttributes` with tangents: ~175 MB less VRAM, no visible change): a heightfield of each cell's highest
   top, or standing water (`FarMesher.Water` = tile code 31, coloured and given water symbols in `GameLooks.TileTables`)
-  when a third of its columns are wet; greedy tops, each hanging outward `FarMesher.Skirt`s from its edges (T-junction cracks showed the sky as stray outlined pixels; overlapping tops instead z-fought), plus sides, same terrain material (sliced by the shader). Sampling reads
+  when a third of its columns are wet; greedy tops, each hanging outward `FarMesher.Skirt`s where a level top of another rectangle meets it (T-junction cracks showed the sky as stray outlined pixels; overlapping tops instead z-fought), plus sides, same terrain material (sliced by the shader). Sampling reads
   the live world/water on the main thread (~2 ms a block), meshing on workers; all blocks are built in the background once
   the near world is meshed and the switch waits for them; changed blocks rebuild at most every 2 s, one block refreshes
   every 0.5 s (water), and WaterView hides and stops meshing its sections meanwhile. Full map at 2048: 30 ms / 23.6k draws
   -> 9.8 ms / 1.3k. The render bench prints visible instances per view, art size, tiles/texel and the far state.
   **In perspective** blocks are also level of detail: each is the Godot visibility parent of the sections and water
-  sections on its columns, shown beyond `FarRange` (where an art pixel covers 2 tiles, plus half a block diagonal), so the
+  sections on its columns, shown beyond `FarRange` (where an art pixel covers 1.5 tiles, plus half a block diagonal), so the
   horizon draws coarse (close up 44.7k -> 1.6k draws); in iso the range is off and the whole-view switch sets every block
   in range. Roots are never hidden and a section only keeps its parent while it has a mesh and is visible (`LinkFar`):
-  Godot errors (`dep_instance->array_index == -1`) on dependencies of hidden or empty instances. The bench waits for them.
+  Godot errors (`dep_instance->array_index == -1`) on dependencies of hidden or empty instances. Each block keeps its highest sampled top (`TopAround`): the iso camera stands back only far enough to clear the local terrain (the world top put it, and its shadow cascades, hundreds of tiles into empty air: shadows lost, more draws). The bench waits for them.
 - **Water** (`Fluids.Water`): per 16x16-column block (a chunk column) of spans; only awake blocks step (a block
   sleeps once its water is still; flowing rivers never are). Two passes per step (outflows, then volumes), each
   writing only its own block, so blocks run in parallel deterministically; pipes are precomputed per span
@@ -124,7 +124,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   (re-anchored at the pivot on a turn or scale change, keeping its whole-texel count, so dither doesn't jump). The ids pass
   writes a hash of the world tile under each pixel (B channel); symbol variants, the dissolve order and water ripples use
   it, so a tile keeps its symbol through turns and zooms (a 0.25° turn used to change ~80% of pixels near the pivot, now
-  ~22%). `OrbitStep` (default smooth) snaps the rig's shown yaw/pitch, camera included, so picking matches. **Map view:** past `TopDownZoom` (0.15; eased in from twice that distance) the rig looks straight down with its turn eased to the nearest 90° (quarter turns only; the camera is aimed by rotation, LookAt fails straight down), so far out the pixel grid lines up with the tiles. **Zoomed in:**
+  ~22%). `OrbitStep` (default smooth) snaps the rig's shown yaw/pitch, camera included, so picking matches. Past the map view's start the turn snaps to quarter turns and the camera glides to each (`UpdateShownYaw`; blending towards the nearest quarter jolted up to 45° at 45° boundaries; `--orbit-check` measures the worst frame). **Map view:** past `TopDownZoom` (0.15; eased in from twice that distance) the rig looks straight down with its turn eased to the nearest 90° (quarter turns only; the camera is aimed by rotation, LookAt fails straight down), so far out the pixel grid lines up with the tiles. **Zoomed in:**
   pixels grow from `PixelGrowStart` by `PixelGrowth` of the zoom up to `MaxPixelSize`, separately from the glyph fade
   (`ZoomInStart`/`ZoomInLength`); the rig zooms in to 4 tiles (`CameraRig.MinDistance`). `--yaw=` sets the bench view's
   turn (compare frames). The sun faces
@@ -144,7 +144,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   world-map style: grassland ", broadleaf ♣, conifers ♠ ↑, mountains ▲ (surface stone), cut rock ▓ (the cap uses
   `dr_cap_group`), water ≈ ~, sand ░, stairs < > X, ants a, nests ∩ (nodes named `Nest_*`), beds/tables Θ Π ╥, walls #; the
   UI's bitmap glyphs are imported into the kit font. No dither on the sky (a dot grid in the far view).
-- **Cost:** kit trees are ~1k triangles (no leaf cards unless that technique is on at load); full detail within 200 (measured from the pivot: `FloraView.RangeOffset` adds the iso camera's extra distance)
+- **Cost:** kit trees are ~1k triangles (no leaf cards unless that technique is on at load); full detail only below 0.6 tiles per art pixel (`MainRender`: in iso the range offset otherwise made all 130k trees full detail and shadowed, 570M triangles) and within 200 (measured from the pivot: `FloraView.RangeOffset` adds the iso camera's extra distance)
   tiles, and `FloraView.Detail` drops to the distant markers once the far view is mostly symbols.
 - Not ported yet: per-vertex AO / cave sky light and edge rounding (would need mesher changes), tree variants per species.
 
@@ -570,6 +570,11 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   food and settlers over game days with no player)
   (prints per-phase totals, slow-tick breakdowns and GC counts; the render bench prints a startup breakdown).
 - VS Code: F5 "Play Game" or "Open Godot Editor" (see `.vscode/launch.json`).
+- **Render perf flags:** `--bench-zooms=4,60,450,...` (after the world is built, per rig distance: avg/p95/max ms, draws, primitives,
+  art size, tiles per pixel, far view, shadows; the tool for frame-rate work), `--ortho`, `--persp`, `--default-look`, `--pixel=N`,
+  `--no-shadows`, `--shadow-cascades` (overrides on the loaded look, never saved), `--stutter-log`, `--orbit-check`. Findings: iso
+  shadows must stay 4 cascades (1, or 2 split at the pivot, lost most shadows); `ShadowsUpTo` (1.5 tiles/px) turns sun shadows
+  off further out; shadows are the remaining cost in iso at pixel size 1, 0.5-1 tiles/px (~11-15 ms at 1600x900).
 - **UI dev flags:** `--open=colonists,stocks,...` opens windows (ids: colonists stocks build chronicle housing work inspect
   tests appearance help), `--main-menu` starts on the menu, `--work-menu`/`--test-menu` (old names), `--ui-selftest` drives
   the window manager with real input events (hotkeys, Esc order, drag, resize, maximise, dock, tabs, menu, theme switch),

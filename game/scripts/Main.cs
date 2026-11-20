@@ -282,6 +282,7 @@ public partial class Main : Node3D
     public override void _Process(double delta)
     {
         StutterLog(delta);
+        OrbitCheck();
         HandleDevArgs(delta);
         UpdateRenderer();
         GameLooks.Tick(delta);
@@ -456,6 +457,8 @@ public partial class Main : Node3D
             }
             return;
         }
+        if (Arg("--bench-zooms") is { Length: > 0 } zooms) { ZoomSweep(zooms, delta); return; }
+        if (Arg("--orbit-check") != null) return; // OrbitCheck runs (and quits) instead
 
         _frameMs.Add(delta * 1000.0);
         if (_frameMs.Count < BenchFrames) return;
@@ -488,6 +491,64 @@ public partial class Main : Node3D
             GD.Print($"Saved screenshot to {path}");
         }
         _benchActive = false; // Quit takes effect a few frames later
+        GetTree().Quit();
+    }
+
+    private int _sweepIndex = -1, _sweepFrame;
+    private readonly List<double> _sweepMs = new();
+    private long _sweepDraws, _sweepPrims;
+
+    /// <summary>
+    /// --bench-zooms=8,30,120,...: after the world is built, steps the camera through rig distances (40 frames to settle,
+    /// 90 measured each) and prints frame time, draws, primitives and the renderer's state per zoom, then quits.
+    /// </summary>
+    private void ZoomSweep(string list, double delta)
+    {
+        var zooms = list.Split(',').Select(z => float.Parse(z, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        if (_sweepIndex < 0 || _sweepFrame >= 130)
+        {
+            if (_sweepIndex >= 0)
+            {
+                _sweepMs.Sort();
+                double avg = _sweepMs.Average();
+                string look = _renderer != null
+                    ? $"art {_renderer.ArtSize.X}x{_renderer.ArtSize.Y}, {_renderer.TexelWorld:0.00} t/px, far {(_world.FarView ? "on" : "off")}, ascii {_renderer.AsciiAmount * 100:0}%"
+                    : "classic";
+                GD.Print($"[zoom] {zooms[_sweepIndex],5:0} tiles: avg {avg,6:0.00} ms, p95 {_sweepMs[(int)(_sweepMs.Count * 0.95)],6:0.00}, max {_sweepMs[^1],6:0.00}; " +
+                         $"draws {_sweepDraws / _sweepMs.Count}, prims {_sweepPrims / _sweepMs.Count / 1000}k; {look}; shadow dist {_sun.DirectionalShadowMaxDistance:0} ({(_sun.ShadowEnabled ? "on" : "off")})");
+            }
+            _sweepIndex++;
+            _sweepFrame = 0;
+            _sweepMs.Clear();
+            _sweepDraws = _sweepPrims = 0;
+            if (_sweepIndex >= zooms.Length) { _benchActive = false; GetTree().Quit(); return; }
+            _rig.Focus(_rig.Position, zooms[_sweepIndex]);
+            return;
+        }
+        _sweepFrame++;
+        if (_sweepFrame <= 40) return;
+        _sweepMs.Add(delta * 1000.0);
+        _sweepDraws += (long)RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.TotalDrawCallsInFrame);
+        _sweepPrims += (long)RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.TotalPrimitivesInFrame);
+    }
+
+    private int _orbitFrame = -1;
+    private float _orbitLast, _orbitWorst;
+
+    /// <summary>
+    /// --orbit-check: half way into the top-down map view, turns 2° a frame for 400 frames like a steady mouse drag and prints
+    /// the biggest change of the shown turn in one frame (a jolt; a steady turn glides a few degrees a frame), then quits.
+    /// </summary>
+    private void OrbitCheck()
+    {
+        if (Arg("--orbit-check") == null || _meshedAtMs == 0) return;
+        if (_orbitFrame < 0) { _rig.Focus(_rig.Position, Mathf.Sqrt(_rig.TopDownFrom * _rig.TopDownAt)); _orbitFrame = 0; _orbitLast = _rig.ShownYawDegrees; return; }
+        _rig.DevTurn(2f);
+        float shown = _rig.ShownYawDegrees;
+        if (++_orbitFrame > 5) _orbitWorst = Mathf.Max(_orbitWorst, Mathf.Abs(Mathf.Wrap(shown - _orbitLast, -180f, 180f)));
+        _orbitLast = shown;
+        if (_orbitFrame < 400) return;
+        GD.Print($"[orbit] top-down {_rig.TopDown:0.00}: worst turn in one frame {_orbitWorst:0.0}°");
         GetTree().Quit();
     }
 

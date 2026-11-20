@@ -87,6 +87,9 @@ public partial class DwarfRenderSettings : Resource
 	[Export(PropertyHint.Range, "0,1,0.01")] public float SunWarmth { get; set; } = 0.55f;
 	[Export(PropertyHint.Range, "0,1.5,0.01")] public float Ambient { get; set; } = 0.5f;
 	[Export] public bool SunShadows { get; set; } = true;
+	/// <summary>Sun shadows only while an art pixel covers at most this many tiles (0 = always). Further out the shadow detail is
+	/// under a pixel but the shadow passes still draw the whole map several times.</summary>
+	[Export(PropertyHint.Range, "0,8,0.1")] public float ShadowsUpTo { get; set; } = 1.5f;
 	[Export] public bool DayNightCycle { get; set; } = false;                                  // the sun follows the game clock (DwarfRenderer.TimeOfDay)
 
 	// ----------------------------------------------------------------- Grade

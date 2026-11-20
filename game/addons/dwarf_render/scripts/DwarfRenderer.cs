@@ -53,6 +53,7 @@ public partial class DwarfRenderer : Node
 	public float TexelWorld { get; private set; } = 1f;
 	/// <summary>Screen pixels per art pixel this frame (after zoom growth and between-step scaling).</summary>
 	public float PixelScreen { get; private set; } = 1f;
+	bool _shadowsFar;
 
 	// Zoom steps: the current step (log of world units per texel, base ZoomStep); the pixel-grid anchor and its whole-texel base.
 	int _scaleStep = int.MinValue, _allocStep = int.MinValue + 1; float _stepBase;
@@ -375,7 +376,9 @@ public partial class DwarfRenderer : Node
 		u.SetShaderParameter("is_ortho", ortho ? 1f : 0f);
 
 		// ---- Shadows off in the all-text far view ------------------------------------------------
-		if (_sun != null) _sun.ShadowEnabled = s.SunShadows && !(FarViewIsText && s.SkipShadowsWhenAllText);
+		// ... and once a pixel covers more than ShadowsUpTo tiles (with a little hysteresis).
+		_shadowsFar = s.ShadowsUpTo > 0 && wpt > s.ShadowsUpTo * (_shadowsFar ? 0.85f : 1f);
+		if (_sun != null) _sun.ShadowEnabled = s.SunShadows && !(FarViewIsText && s.SkipShadowsWhenAllText) && !_shadowsFar;
 		if (ControlLighting) UpdateLighting(s);
 
 		// ---- Marker priority (dwarves etc.) ----------------------------------------------------

@@ -144,10 +144,36 @@ public static class FarMesher
             for (int k = 0; k < w; k++) done[(cy + j) * cellsX + cx + k] = true;
             float ax = x0 + cx * cell, ay = y0 + cy * cell, bx = x0 + (cx + w) * cell, by = y0 + (cy + d) * cell, lo = h - Skirt;
             output.Add(Make(new Vector3(ax, ay, h), new Vector3(bx, ay, h), new Vector3(bx, by, h), new Vector3(ax, by, h), FaceDir.PosZ, t));
-            output.Add(Make(new Vector3(ax, ay, lo), new Vector3(bx, ay, lo), new Vector3(bx, ay, h), new Vector3(ax, ay, h), FaceDir.NegY, t));
-            output.Add(Make(new Vector3(ax, by, lo), new Vector3(bx, by, lo), new Vector3(bx, by, h), new Vector3(ax, by, h), FaceDir.PosY, t));
-            output.Add(Make(new Vector3(ax, ay, lo), new Vector3(ax, by, lo), new Vector3(ax, by, h), new Vector3(ax, ay, h), FaceDir.NegX, t));
-            output.Add(Make(new Vector3(bx, ay, lo), new Vector3(bx, by, lo), new Vector3(bx, by, h), new Vector3(bx, ay, h), FaceDir.PosX, t));
+            // Skirts only where the cell across the edge is a top at the same height (another rectangle: a T-junction). A
+            // lower neighbour gets this cell's side, a higher one comes down to below this top with its own.
+            Skirts(cx, cy, w, 0, -1, FaceDir.NegY);
+            Skirts(cx, cy + d - 1, w, 0, 1, FaceDir.PosY);
+            Skirts(cx, cy, d, -1, 0, FaceDir.NegX);
+            Skirts(cx + w - 1, cy, d, 1, 0, FaceDir.PosX);
+
+            // Along one edge of the rectangle: runs of cells whose neighbour across it (dx, dy) is at height h.
+            void Skirts(int sx, int sy, int len, int dx, int dy, FaceDir dir)
+            {
+                bool alongX = dy != 0;
+                for (int k = 0; k < len;)
+                {
+                    int qx = alongX ? sx + k : sx, qy = alongX ? sy : sy + k;
+                    if (heights[At(qx + dx, qy + dy)] != h) { k++; continue; }
+                    int run = 1;
+                    while (k + run < len && heights[At(alongX ? sx + k + run + dx : sx + dx, alongX ? sy + dy : sy + k + run + dy)] == h) run++;
+                    if (alongX)
+                    {
+                        float y = dy > 0 ? by : ay, xa = x0 + (sx + k) * cell, xb = xa + run * cell;
+                        output.Add(Make(new Vector3(xa, y, lo), new Vector3(xb, y, lo), new Vector3(xb, y, h), new Vector3(xa, y, h), dir, t));
+                    }
+                    else
+                    {
+                        float x = dx > 0 ? bx : ax, ya = y0 + (sy + k) * cell, yb = ya + run * cell;
+                        output.Add(Make(new Vector3(x, ya, lo), new Vector3(x, yb, lo), new Vector3(x, yb, h), new Vector3(x, ya, h), dir, t));
+                    }
+                    k += run;
+                }
+            }
             cx += w;
         }
 

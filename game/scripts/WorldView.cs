@@ -63,7 +63,7 @@ public partial class WorldView : Node3D
     private sealed record MeshResult(Section Section, int[] Versions, MeshArrays Arrays);
 
     /// <summary>Vertex arrays for a list of quads (built on a worker, uploaded on the main thread).</summary>
-    private sealed record MeshArrays(Vector3[] Verts, Vector3[] Normals, Color[] Colors, Vector2[] Uvs, int[] Indices, int Quads)
+    private sealed record MeshArrays(Vector3[] Verts, Vector3[] Normals, float[] Tangents, Color[] Colors, Vector2[] Uvs, int[] Indices, int Quads)
     {
         public ArrayMesh ToMesh()
         {
@@ -71,11 +71,14 @@ public partial class WorldView : Node3D
             arrays.Resize((int)Mesh.ArrayType.Max);
             arrays[(int)Mesh.ArrayType.Vertex] = Verts;
             arrays[(int)Mesh.ArrayType.Normal] = Normals;
+            arrays[(int)Mesh.ArrayType.Tangent] = Tangents;
             arrays[(int)Mesh.ArrayType.Color] = Colors;
             arrays[(int)Mesh.ArrayType.TexUV] = Uvs;
             arrays[(int)Mesh.ArrayType.Index] = Indices;
             var mesh = new ArrayMesh();
-            mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+            // Compressed: positions 16-bit within the mesh bounds, normal+tangent and UVs 16-bit (Godot needs tangents for this).
+            // Roughly halves terrain and far-block video memory.
+            mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, flags: Mesh.ArrayFormat.FlagCompressAttributes);
             return mesh;
         }
     }
@@ -106,12 +109,14 @@ public partial class WorldView : Node3D
     private int _appliedViewLevel = -1;
 
     // Far view.
-    public const int FarBlock = 256, FarCell = 4;
+    public const int FarBlock = 256, FarCell = 2;
     private sealed class FarBlockState
     {
         public required int X0, Y0;
         public MeshInstance3D? Node;
         public bool Built, Dirty = true, InFlight;
+        public bool Sampled;
+        public float Top; // highest sampled top (ring included): the iso camera stands back just far enough to clear it
         public double BuiltAt = -1e9;
     }
     private sealed record FarResult(FarBlockState Block, MeshArrays? Arrays);
@@ -388,6 +393,7 @@ public partial class WorldView : Node3D
         int n = quads.Count;
         var verts = new Vector3[n * 4];
         var normals = new Vector3[n * 4];
+        var tangents = new float[n * 16];
         var colors = new Color[n * 4];
         var uvs = new Vector2[n * 4]; // x = tile type (the styled terrain shader looks its texture and glyph up by it)
         var indices = new int[n * 6];
@@ -396,6 +402,7 @@ public partial class WorldView : Node3D
             var q = quads[i];
             var (nx, ny, nz) = SectionMesher.Normal(q.Dir);
             var normal = SimSpace.ToGodot(nx, ny, nz);
+            var tangent = nx != 0 ? new Vector3(0, 0, 1) : new Vector3(1, 0, 0); // any direction in the face
             var color = TileColor(q.Tile);
             int v = i * 4;
             verts[v] = SimSpace.ToGodot(q.A.X, q.A.Y, q.A.Z);
@@ -405,6 +412,7 @@ public partial class WorldView : Node3D
             for (int k = 0; k < 4; k++)
             {
                 normals[v + k] = normal;
+                tangents[(v + k) * 4] = tangent.X; tangents[(v + k) * 4 + 1] = tangent.Y; tangents[(v + k) * 4 + 2] = tangent.Z; tangents[(v + k) * 4 + 3] = 1f;
                 colors[v + k] = color;
                 uvs[v + k] = new Vector2((int)q.Tile, 0);
             }
@@ -412,7 +420,7 @@ public partial class WorldView : Node3D
             indices[t] = v; indices[t + 1] = v + 1; indices[t + 2] = v + 2;
             indices[t + 3] = v; indices[t + 4] = v + 2; indices[t + 5] = v + 3;
         }
-        return new MeshArrays(verts, normals, colors, uvs, indices, n);
+        return new MeshArrays(verts, normals, tangents, colors, uvs, indices, n);
     }
 
     private void ApplyResults(Stopwatch clock)
@@ -519,6 +527,10 @@ public partial class WorldView : Node3D
             var types = new TileType[heights.Length];
             long t0 = Stopwatch.GetTimestamp();
             FarMesher.Sample(World, _sim.Water, b.X0, b.Y0, cx, cy, FarCell, heights, types);
+            float top = 0;
+            foreach (float hgt in heights) top = Math.Max(top, hgt);
+            b.Top = top;
+            b.Sampled = true;
             FarSampleMs += (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
             Task.Run(() =>
             {
@@ -563,6 +575,25 @@ public partial class WorldView : Node3D
     public event Action<int, int, MeshInstance3D>? FarBlockAdded;
 
     private FarBlockState FarBlockAt(int x, int y) => _farBlocks[(y / FarBlock) * _farBlocksX + x / FarBlock];
+
+    /// <summary>
+    /// The highest terrain top (Godot Y) over blocks within <paramref name="radius"/> of (x, z): sampled per far block, so
+    /// edits show after the block's rebuild (a couple of seconds). The world's height until every block there is sampled.
+    /// </summary>
+    public float TopAround(float x, float z, float radius)
+    {
+        int bx0 = Math.Max(0, (int)((x - radius) / FarBlock)), bx1 = Math.Min(_farBlocksX - 1, (int)((x + radius) / FarBlock));
+        int by0 = Math.Max(0, (int)((z - radius) / FarBlock)), by1 = Math.Min(_farBlocks.Count / _farBlocksX - 1, (int)((z + radius) / FarBlock));
+        float top = 0;
+        for (int by = by0; by <= by1; by++)
+        for (int bx = bx0; bx <= bx1; bx++)
+        {
+            var b = _farBlocks[by * _farBlocksX + bx];
+            if (!b.Sampled) return World.Height;
+            top = Math.Max(top, b.Top);
+        }
+        return top;
+    }
 
     /// <summary>The far block node over a column, to parent other views' nodes to (null until built).</summary>
     public MeshInstance3D? FarParent(int x, int y) => x >= 0 && y >= 0 && x < World.Width && y < World.Depth ? FarBlockAt(x, y).Node : null;

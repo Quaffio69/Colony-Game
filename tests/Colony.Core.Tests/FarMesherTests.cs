@@ -40,9 +40,9 @@ public class FarMesherTests
         Assert.Equal(TileType.Grass, top.Tile);
         Assert.All(new[] { top.A, top.B, top.C, top.D }, v => Assert.Equal(5f, v.Z)); // top of z = 4
         Assert.Equal(32f * 32f, Area(top), 0.01f);
-        // The block is the whole map: each map edge is one side down below the world, plus the top's four skirts.
-        Assert.Equal(4, quads.Count(IsSkirt));
-        Assert.Equal(4, quads.Count(q => q.Dir != FaceDir.PosZ && !IsSkirt(q)));
+        // The block is the whole map: each map edge is one side down below the world; no skirts (no equal top beside it).
+        Assert.Equal(0, quads.Count(IsSkirt));
+        Assert.Equal(4, quads.Count(q => q.Dir != FaceDir.PosZ));
     }
 
     [Fact]
@@ -51,7 +51,9 @@ public class FarMesherTests
         var w = Flat(64, 32, 4);
         var quads = Mesh(w, 16, 16, 8, 8, 4);
         Assert.Single(quads, q => q.Dir == FaceDir.PosZ);
-        Assert.All(quads.Where(q => q.Dir != FaceDir.PosZ), q => Assert.True(IsSkirt(q)));
+        // The neighbouring blocks' ground is level with it: one skirt along each border (their tops meet it there).
+        Assert.Equal(4, quads.Count(IsSkirt));
+        Assert.Equal(5, quads.Count);
     }
 
     [Fact]
@@ -88,25 +90,33 @@ public class FarMesherTests
     }
 
     [Fact]
-    public void EveryTop_HangsAnOutwardSkirtFromEachEdge_SoNoCrackShowsTheSky()
+    public void EveryEdgeBetweenLevelTops_HasASkirt_SoNoCrackShowsTheSky()
     {
-        // Greedy rectangles meet in T-junctions that rasterise with hairline cracks; under a crack there must be something.
+        // Greedy rectangles meet in T-junctions that rasterise with hairline cracks; under each such edge there must be a
+        // skirt (edges to lower or higher cells have sides).
         var w = Flat(64, 40, 4);
         for (int y = 0; y < 64; y++)
         for (int x = 0; x < 64; x++)
-        for (int z = 5; z < 5 + (x / 4 * 3 + y / 4 * 5) % 4; z++) w.Set(x, y, z, TileType.Soil);
+        if (x < 40 && y < 40 && !(x >= 20 && y >= 20)) w.Set(x, y, 5, x < 16 ? TileType.Soil : TileType.Clay); // an L of two kinds: level rectangles meet
         var quads = Mesh(w, 0, 0, 16, 16, 4);
+        var tops = quads.Where(q => q.Dir == FaceDir.PosZ).ToList();
         var skirts = quads.Where(IsSkirt).ToList();
-        foreach (var top in quads.Where(q => q.Dir == FaceDir.PosZ))
+        int Rect(float px, float py) => tops.FindIndex(q => MathF.Min(q.A.X, q.C.X) < px && px < MathF.Max(q.A.X, q.C.X) && MathF.Min(q.A.Y, q.C.Y) < py && py < MathF.Max(q.A.Y, q.C.Y));
+        int checkedEdges = 0;
+        for (int cy = 0; cy < 16; cy++)
+        for (int cx = 0; cx < 16; cx++)
+        foreach (var (dx, dy) in new[] { (1, 0), (0, 1) })
         {
-            float x0 = MathF.Min(top.A.X, top.C.X), x1 = MathF.Max(top.A.X, top.C.X), y0 = MathF.Min(top.A.Y, top.C.Y), y1 = MathF.Max(top.A.Y, top.C.Y);
-            float h = top.A.Z;
-            bool Has(FaceDir dir, Func<Quad, bool> on) => skirts.Any(s => s.Dir == dir && on(s) && MathF.Max(s.A.Z, s.C.Z) == h);
-            Assert.True(Has(FaceDir.NegX, s => s.A.X == x0 && MathF.Min(s.A.Y, s.C.Y) == y0 && MathF.Max(s.A.Y, s.C.Y) == y1));
-            Assert.True(Has(FaceDir.PosX, s => s.A.X == x1 && MathF.Min(s.A.Y, s.C.Y) == y0 && MathF.Max(s.A.Y, s.C.Y) == y1));
-            Assert.True(Has(FaceDir.NegY, s => s.A.Y == y0 && MathF.Min(s.A.X, s.C.X) == x0 && MathF.Max(s.A.X, s.C.X) == x1));
-            Assert.True(Has(FaceDir.PosY, s => s.A.Y == y1 && MathF.Min(s.A.X, s.C.X) == x0 && MathF.Max(s.A.X, s.C.X) == x1));
+            if (cx + dx >= 16 || cy + dy >= 16) continue;
+            int a = Rect(cx * 4 + 2, cy * 4 + 2), b = Rect((cx + dx) * 4 + 2, (cy + dy) * 4 + 2);
+            if (a == b || tops[a].A.Z != tops[b].A.Z) continue;
+            checkedEdges++;
+            float ex = (cx + dx) * 4, ey = (cy + dy) * 4, mid = dx != 0 ? cy * 4 + 2 : cx * 4 + 2;
+            Assert.Contains(skirts, s => dx != 0
+                ? s.A.X == ex && MathF.Min(s.A.Y, s.C.Y) < mid && mid < MathF.Max(s.A.Y, s.C.Y)
+                : s.A.Y == ey && MathF.Min(s.A.X, s.C.X) < mid && mid < MathF.Max(s.A.X, s.C.X));
         }
+        Assert.True(checkedEdges > 10, $"only {checkedEdges} level edges between rectangles");
     }
 
     [Fact]

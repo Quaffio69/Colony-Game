@@ -34,7 +34,27 @@ public partial class CameraRig : Node3D
     public float TopDownAt { get; set; }
     public float TopDown => TopDownAt <= 0 || TopDownFrom <= 0 || TopDownFrom >= TopDownAt ? 0f
         : Mathf.SmoothStep(0f, 1f, Mathf.Clamp(Mathf.Log(_distance / TopDownFrom) / Mathf.Log(TopDownAt / TopDownFrom), 0f, 1f));
-    private float ShownYaw => Mathf.Lerp(StepYaw, Mathf.Round(StepYaw / 90f) * 90f, TopDown);
+    // In the map view (from the first moment it eases in) the turn is a quarter turn, and the camera glides to each one;
+    // blending the angle towards the nearest quarter instead jolted by up to 90° x the blend whenever the turn crossed a
+    // 45° boundary. Outside it the turn follows the input directly, as before (with a glide back when leaving the map view).
+    private float YawTarget => TopDown > 0 ? Mathf.Round(StepYaw / 90f) * 90f : StepYaw;
+    private float _shownYaw = float.NaN;
+    private bool _yawGliding, _wasMap;
+    private float ShownYaw => float.IsNaN(_shownYaw) ? YawTarget : _shownYaw;
+    /// <summary>The turn the camera shows (degrees), and a dev hook to turn as the mouse would (orbit checks).</summary>
+    public float ShownYawDegrees => ShownYaw;
+    public void DevTurn(float degrees) => _yaw += degrees;
+
+    private void UpdateShownYaw(float dt)
+    {
+        float target = YawTarget;
+        bool map = TopDown > 0;
+        if (map != _wasMap) { _wasMap = map; _yawGliding = true; }
+        if (float.IsNaN(_shownYaw) || !(map || _yawGliding)) { _shownYaw = target; return; }
+        float diff = Mathf.Wrap(target - _shownYaw, -180f, 180f);
+        if (Mathf.Abs(diff) < 0.05f) { _shownYaw = target; _yawGliding = false; return; }
+        _shownYaw += diff * (1f - Mathf.Exp(-dt * 10f));
+    }
     private float ShownPitch => Mathf.Lerp(StepPitch, -90f, TopDown);
     private bool _orbiting;
 
@@ -53,6 +73,7 @@ public partial class CameraRig : Node3D
         Position = point;
         if (distance is { } d) _distance = _targetDistance = d;
         if (yaw is { } y) _yaw = y;
+        _shownYaw = float.NaN; // a jump, not a glide
         if (pitch is { } p) _pitch = p;
         ApplyTransform();
     }
@@ -85,6 +106,7 @@ public partial class CameraRig : Node3D
         if (GroundHeight?.Invoke(Position.X, Position.Z) is { } ground)
             Position = Position with { Y = Mathf.Lerp(Position.Y, ground, 1f - Mathf.Exp(-dt * 10f)) };
 
+        UpdateShownYaw(dt);
         ApplyTransform();
     }
 

@@ -46,6 +46,13 @@ public partial class Main
             CreateTuningPanel = false, // the Graphics window (F10) is in the game's own UI
         };
         AddChild(_renderer);
+        // Dev overrides for benches (never saved): the game's defaults, a projection, a pixel size.
+        if (Arg("--default-look") != null) _renderer.Settings = GameDefaults();
+        if (Arg("--ortho") != null) _renderer.Settings.Orthographic = true;
+        if (Arg("--persp") != null) _renderer.Settings.Orthographic = false;
+        if (float.TryParse(Arg("--pixel"), out float px)) _renderer.Settings.PixelSize = px;
+        if (Arg("--no-shadows") != null) _renderer.Settings.SunShadows = false;
+        _renderer.ApplySettings();
         if (Arg("--profiler") != null) _renderer.Settings.ShowProfiler = true; // dev: the profiler from the start
         GameLooks.Watch(this);
     }
@@ -82,6 +89,7 @@ public partial class Main
     }
 
     private int _shadowMapApplied;
+    private float _ceiling;
 
     /// <summary>Each frame: the renderer zooms about the rig's pivot (the ground under the view), not where the ray lands.</summary>
     private void UpdateRenderer()
@@ -94,20 +102,30 @@ public partial class Main
         _rig.OrbitStep = look.OrbitStep;
         _rig.TopDownAt = look.TopDownZoom > 0 ? look.ReferenceDistance / look.TopDownZoom : 0f; // the map view, eased in from half that distance
         _rig.TopDownFrom = _rig.TopDownAt * 0.5f;
-        _rig.Ceiling = Mathf.Min(_world.ViewLevel + 1, _sim.World.Height); // nothing above the cut is drawn
+        // The iso camera stands back to clear the highest drawable terrain: the local tops (far block samples round the view;
+        // the world top only made it, and its shadow cascades, reach hundreds of tiles through empty air, losing shadows and
+        // drawing more), never above the cut. Rises at once (nothing gets sliced), lowers gently (shadows don't twitch).
+        float ceiling = Mathf.Min(_world.ViewLevel + 1, _world.TopAround(_rig.GlobalPosition.X, _rig.GlobalPosition.Z, _rig.Distance * 2.5f + 32f) + 2f);
+        _ceiling = ceiling >= _ceiling ? ceiling : Mathf.Lerp(_ceiling, ceiling, 1f - Mathf.Exp(-(float)GetProcessDeltaTime() * 2f));
+        _rig.Ceiling = _ceiling;
         _flora.RangeOffset = _rig.CameraBack - _rig.Distance;            // detail ranges measure from the pivot, not the iso camera
         // Far out and mostly symbols, full-detail trees can't be seen (each is ~1k triangles): show the light markers instead.
-        _flora.Detail = !(_renderer.Zoom < 1f && _renderer.AsciiAmount > 0.6f);
-        // Once an art pixel covers several tiles, coarse far blocks (cells of 4 tiles) draw the terrain and water instead
-        // of ten thousand sections. On from 3 tiles a pixel, off below 2.4, so a zoom near the edge doesn't flip it.
-        _world.FarView = _renderer.TexelWorld > (_world.FarView ? 2.4f : 3f);
-        // Perspective sees to the horizon: blocks beyond the distance where an art pixel covers 2 tiles draw coarse (plus
+        // Full-detail plants only while a tile is a few pixels across (a tree is ~1k triangles; in iso every tree on screen is
+        // the same size, so past this the whole map's 130k trees drew in full and again into the shadows: 570M triangles), and
+        // not once the far view is mostly symbols. Hysteresis so a zoom near the edge doesn't flip it.
+        _flora.Detail = _renderer.TexelWorld < (_flora.Detail ? 0.75f : 0.6f) && !(_renderer.Zoom < 1f && _renderer.AsciiAmount > 0.6f);
+        // Once an art pixel covers more than a tile, coarse far blocks (cells of 2 tiles) draw the terrain and water instead
+        // of ten thousand sections. On from 1.5 tiles a pixel, off below 1.2, so a zoom near the edge doesn't flip it.
+        _world.FarView = _renderer.TexelWorld > (_world.FarView ? 1.2f : 1.5f);
+        // Perspective sees to the horizon: blocks beyond the distance where an art pixel covers 1.5 tiles draw coarse (plus
         // half a block's diagonal, so a block's near edge is never coarse). Iso has one scale: the switch above does it.
         _world.FarRange = look.Orthographic ? 1e9f
-            : 2f * _rig.Distance / Mathf.Max(0.01f, _renderer.TexelWorld) + WorldView.FarBlock * 0.71f;
+            : 1.5f * _rig.Distance / Mathf.Max(0.01f, _renderer.TexelWorld) + WorldView.FarBlock * 0.71f;
         _renderer.TimeOfDay = _sim.Tick % Colony.Core.Agents.Needs.Day / (float)Colony.Core.Agents.Needs.Day;
         // Shadows reach as far as the view does (Godot measures from the camera, which ortho puts further back).
-        _sun.DirectionalShadowMaxDistance = Mathf.Clamp(_rig.CameraBack + _rig.Distance * 2f, 100f, 2500f);
+        // Iso: the farthest ground in view is ~0.65 x the zoom past the pivot (Godot extends casters towards the sun itself),
+        // so camera + 1 x zoom; 2 x drew a much bigger shadow region for nothing. Perspective keeps 3 x.
+        _sun.DirectionalShadowMaxDistance = Mathf.Clamp(_rig.CameraBack + _rig.Distance * (look.Orthographic ? 1f : 2f), 100f, 2500f);
         if ((int)look.ShadowMap != _shadowMapApplied)
         {
             _shadowMapApplied = (int)look.ShadowMap;
