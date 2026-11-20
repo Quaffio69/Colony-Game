@@ -28,20 +28,21 @@ public class FarMesherTests
     }
 
     private static float Area(Quad q) => Vector3.Cross(q.B - q.A, q.D - q.A).Length();
+    private static float Height(Quad q) => MathF.Max(MathF.Max(q.A.Z, q.B.Z), MathF.Max(q.C.Z, q.D.Z)) - MathF.Min(MathF.Min(q.A.Z, q.B.Z), MathF.Min(q.C.Z, q.D.Z));
+    private static bool IsSkirt(Quad q) => q.Dir != FaceDir.PosZ && MathF.Abs(Height(q) - FarMesher.Skirt) < 1e-4f;
 
     [Fact]
     public void FlatGround_IsOneTop_AndTheMapEdgesGetSides()
     {
         var w = Flat(32, 32, 4);
         var quads = Mesh(w, 0, 0, 8, 8, 4);
-        var tops = quads.Where(q => q.Dir == FaceDir.PosZ).ToList();
-        var top = Assert.Single(tops);
+        var top = Assert.Single(quads, q => q.Dir == FaceDir.PosZ);
         Assert.Equal(TileType.Grass, top.Tile);
         Assert.All(new[] { top.A, top.B, top.C, top.D }, v => Assert.Equal(5f, v.Z)); // top of z = 4
-        float s = 32f + 2 * FarMesher.Seam;
-        Assert.Equal(s * s, Area(top), 0.01f);
-        // The block is the whole map: each map edge is one side down to the ground under the world.
-        Assert.Equal(4, quads.Count(q => q.Dir != FaceDir.PosZ));
+        Assert.Equal(32f * 32f, Area(top), 0.01f);
+        // The block is the whole map: each map edge is one side down below the world, plus the top's four skirts.
+        Assert.Equal(4, quads.Count(IsSkirt));
+        Assert.Equal(4, quads.Count(q => q.Dir != FaceDir.PosZ && !IsSkirt(q)));
     }
 
     [Fact]
@@ -49,8 +50,8 @@ public class FarMesherTests
     {
         var w = Flat(64, 32, 4);
         var quads = Mesh(w, 16, 16, 8, 8, 4);
-        Assert.Single(quads);
-        Assert.Equal(FaceDir.PosZ, quads[0].Dir);
+        Assert.Single(quads, q => q.Dir == FaceDir.PosZ);
+        Assert.All(quads.Where(q => q.Dir != FaceDir.PosZ), q => Assert.True(IsSkirt(q)));
     }
 
     [Fact]
@@ -61,13 +62,13 @@ public class FarMesherTests
         var quads = Mesh(w, 16, 16, 8, 8, 4);
         var raised = quads.Single(q => q.Dir == FaceDir.PosZ && q.A.Z == 10f);
         Assert.Equal(TileType.Stone, raised.Tile);
-        float c = 4f + 2 * FarMesher.Seam;
-        Assert.Equal(c * c, Area(raised), 0.01f);
-        var sides = quads.Where(q => q.Dir != FaceDir.PosZ).ToList();
+        Assert.Equal(16f, Area(raised), 0.01f);
+        var sides = quads.Where(q => q.Dir != FaceDir.PosZ && !IsSkirt(q)).ToList();
         Assert.Equal(4, sides.Count);
-        Assert.All(sides, q => Assert.Equal(c * 5.5f, Area(q), 0.01f)); // a cell wide (plus seams), from half below 5 up to 10
-        // The ground round it still covers the rest of the block.
-        Assert.True(quads.Where(q => q.Dir == FaceDir.PosZ).Sum(Area) >= 32f * 32f);
+        float wide = 4f + 2 * FarMesher.Seam;
+        Assert.All(sides, q => Assert.Equal(wide * (5f + FarMesher.Skirt), Area(q), 0.01f)); // from a skirt below 5 up to 10
+        // The ground round it covers the rest of the block exactly.
+        Assert.Equal(32f * 32f, quads.Where(q => q.Dir == FaceDir.PosZ).Sum(Area), 0.01f);
     }
 
     [Fact]
@@ -87,20 +88,24 @@ public class FarMesherTests
     }
 
     [Fact]
-    public void EveryCellCorner_IsInsideATop_SoNoCrackShowsTheSky()
+    public void EveryTop_HangsAnOutwardSkirtFromEachEdge_SoNoCrackShowsTheSky()
     {
-        // Greedy rectangles meet in T-junctions; without overlap the corners lie on edges and rasterise with cracks.
+        // Greedy rectangles meet in T-junctions that rasterise with hairline cracks; under a crack there must be something.
         var w = Flat(64, 40, 4);
         for (int y = 0; y < 64; y++)
         for (int x = 0; x < 64; x++)
         for (int z = 5; z < 5 + (x / 4 * 3 + y / 4 * 5) % 4; z++) w.Set(x, y, z, TileType.Soil);
-        var tops = Mesh(w, 0, 0, 16, 16, 4).Where(q => q.Dir == FaceDir.PosZ).ToList();
-        for (int cy = 0; cy <= 16; cy++)
-        for (int cx = 0; cx <= 16; cx++)
+        var quads = Mesh(w, 0, 0, 16, 16, 4);
+        var skirts = quads.Where(IsSkirt).ToList();
+        foreach (var top in quads.Where(q => q.Dir == FaceDir.PosZ))
         {
-            float px = cx * 4, py = cy * 4;
-            Assert.Contains(tops, q => Math.Min(q.A.X, q.C.X) < px && px < Math.Max(q.A.X, q.C.X) &&
-                                       Math.Min(q.A.Y, q.C.Y) < py && py < Math.Max(q.A.Y, q.C.Y));
+            float x0 = MathF.Min(top.A.X, top.C.X), x1 = MathF.Max(top.A.X, top.C.X), y0 = MathF.Min(top.A.Y, top.C.Y), y1 = MathF.Max(top.A.Y, top.C.Y);
+            float h = top.A.Z;
+            bool Has(FaceDir dir, Func<Quad, bool> on) => skirts.Any(s => s.Dir == dir && on(s) && MathF.Max(s.A.Z, s.C.Z) == h);
+            Assert.True(Has(FaceDir.NegX, s => s.A.X == x0 && MathF.Min(s.A.Y, s.C.Y) == y0 && MathF.Max(s.A.Y, s.C.Y) == y1));
+            Assert.True(Has(FaceDir.PosX, s => s.A.X == x1 && MathF.Min(s.A.Y, s.C.Y) == y0 && MathF.Max(s.A.Y, s.C.Y) == y1));
+            Assert.True(Has(FaceDir.NegY, s => s.A.Y == y0 && MathF.Min(s.A.X, s.C.X) == x0 && MathF.Max(s.A.X, s.C.X) == x1));
+            Assert.True(Has(FaceDir.PosY, s => s.A.Y == y1 && MathF.Min(s.A.X, s.C.X) == x0 && MathF.Max(s.A.X, s.C.X) == x1));
         }
     }
 

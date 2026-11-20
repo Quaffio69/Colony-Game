@@ -197,7 +197,7 @@ public partial class WorldView : Node3D
         _terrainMaterial = new ShaderMaterial { Shader = GameLooks.Shader("res://shaders/terrain.gdshader") };
         StyleTiles(_terrainMaterial);
         _nearRoot = new Node3D { Name = "Near" };
-        _farRoot = new Node3D { Name = "Far", Visible = false };
+        _farRoot = new Node3D { Name = "Far" }; // blocks show by range (FarRange), or all of them in the far view
         AddChild(_nearRoot);
         AddChild(_farRoot);
         _nearRoot.AddToGroup(GameLooks.SweepSkip); // built with the terrain material: nothing for the look's sweep to convert
@@ -281,7 +281,11 @@ public partial class WorldView : Node3D
         _appliedViewLevel = _viewLevel;
         _terrainMaterial.SetShaderParameter("cut_height", (float)(_viewLevel + 1));
         foreach (var s in _sections)
-            if (s.Instance != null) s.Instance.Visible = s.Z0 <= _viewLevel;
+            if (s.Instance != null && s.Instance.Visible != (s.Z0 <= _viewLevel))
+            {
+                s.Instance.Visible = s.Z0 <= _viewLevel;
+                LinkFar(s);
+            }
         RebuildCapFull();
     }
 
@@ -438,7 +442,7 @@ public partial class WorldView : Node3D
         s.QuadCount = quads;
         if (mesh == null)
         {
-            if (s.Instance != null) s.Instance.Mesh = null;
+            if (s.Instance != null) { s.Instance.VisibilityParent = new NodePath(); s.Instance.Mesh = null; } // see LinkFar
             return;
         }
         if (s.Instance == null)
@@ -448,6 +452,7 @@ public partial class WorldView : Node3D
         }
         s.Instance.Mesh = mesh;
         s.Instance.Visible = s.Z0 <= _viewLevel;
+        LinkFar(s);
     }
 
     // ---- Far view ------------------------------------------------------------------------------------
@@ -476,6 +481,9 @@ public partial class WorldView : Node3D
             {
                 b.Node = new MeshInstance3D { Name = $"Far_{b.X0}_{b.Y0}", MaterialOverride = _terrainMaterial };
                 _farRoot.AddChild(b.Node);
+                b.Node.VisibilityRangeBegin = _farShown ? AlwaysNear : _farRange;
+                LinkSections(b);
+                FarBlockAdded?.Invoke(b.X0, b.Y0, b.Node);
             }
             b.Node.Mesh = arrays.ToMesh();
         }
@@ -483,9 +491,8 @@ public partial class WorldView : Node3D
         bool show = _farWanted && all;
         if (show != _farShown)
         {
-            _farShown = show;
-            _nearRoot.Visible = !show;
-            _farRoot.Visible = show;
+            _farShown = show; // the sections hide by visibility parent (hiding their root upsets Godot's dependency lists)
+            ApplyFarRanges();
         }
 
         if (!_sim.WaterReady || (PendingSections > 0 && !_farWanted)) return; // the near world first
@@ -524,6 +531,61 @@ public partial class WorldView : Node3D
 
     /// <summary>Far blocks built so far, of all (loading progress, diagnostics).</summary>
     public (int Built, int Total) FarProgress => (_farBuilt, _farBlocks.Count);
+
+    // ---- Far blocks as level of detail (perspective) ------------------------------------------------------
+    // A far block is the visibility parent of the sections (and water sections) on its columns: beyond FarRange from the
+    // camera Godot shows the block and hides them. In perspective that draws the horizon coarse and the near ground in
+    // full; in iso every block is the same scale, so the range is off and the whole-view switch (FarView) does it.
+    private float _farRange = 1e9f;
+
+    /// <summary>Camera distance beyond which a block draws coarse (1e9: never). Set each frame by Main; applied on a 5% change.</summary>
+    public float FarRange
+    {
+        get => _farRange;
+        set
+        {
+            if (Mathf.Abs(value - _farRange) <= _farRange * 0.05f) return;
+            _farRange = value;
+            ApplyFarRanges();
+        }
+    }
+
+    /// <summary>Blocks begin at FarRange; in the whole-view far view at once (a range that starts at the camera: every block
+    /// in range, so every section hidden; 0 would switch the range off).</summary>
+    private void ApplyFarRanges()
+    {
+        foreach (var b in _farBlocks) if (b.Node != null) b.Node.VisibilityRangeBegin = _farShown ? AlwaysNear : _farRange;
+    }
+
+    private const float AlwaysNear = 0.001f;
+
+    /// <summary>A far block's node was created (WaterView links its sections there).</summary>
+    public event Action<int, int, MeshInstance3D>? FarBlockAdded;
+
+    private FarBlockState FarBlockAt(int x, int y) => _farBlocks[(y / FarBlock) * _farBlocksX + x / FarBlock];
+
+    /// <summary>The far block node over a column, to parent other views' nodes to (null until built).</summary>
+    public MeshInstance3D? FarParent(int x, int y) => x >= 0 && y >= 0 && x < World.Width && y < World.Depth ? FarBlockAt(x, y).Node : null;
+
+    private void LinkSections(FarBlockState b)
+    {
+        for (int sz = 0; sz * SectionZ < World.Height; sz++)
+        for (int sy = b.Y0 / SectionY; sy < Math.Min(_sectionsY, (b.Y0 + FarBlock) / SectionY); sy++)
+        for (int sx = b.X0 / SectionX; sx < Math.Min(_sectionsX, (b.X0 + FarBlock) / SectionX); sx++)
+            LinkFar(_sections[(sz * _sectionsY + sy) * _sectionsX + sx]);
+    }
+
+    /// <summary>
+    /// A section hides where its far block shows (visibility parent) only while it is drawn: Godot errors on a
+    /// dependency whose instance has no mesh or is hidden (sections above the view level are).
+    /// </summary>
+    private void LinkFar(Section s)
+    {
+        if (s.Instance == null) return;
+        bool drawn = s.Instance.Mesh != null && s.Instance.Visible;
+        var path = drawn && FarBlockAt(s.X0, s.Y0).Node is { } block ? block.GetPath() : new NodePath();
+        if (s.Instance.VisibilityParent.ToString() != path.ToString()) s.Instance.VisibilityParent = path;
+    }
 
     // ---- Cut-surface cap -----------------------------------------------------------------------------
 

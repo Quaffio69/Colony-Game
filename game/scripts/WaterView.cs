@@ -68,6 +68,7 @@ public partial class WaterView : Node3D
         _surfaces = new Node3D { Name = "Surfaces" };
         AddChild(_surfaces);
         _surfaces.AddToGroup(GameLooks.SweepSkip); // water material from the start
+        _worldView.FarBlockAdded += LinkToFarBlock;
 
         var world = sim.World;
         _capData = new byte[world.Width * world.Depth];
@@ -210,7 +211,6 @@ public partial class WaterView : Node3D
             _water.SetShaderParameter("cut_height", (float)(level + 1));
             foreach (var m in _sliced) m.SetShaderParameter("cut_height", (float)(level + 1));
         }
-        _surfaces.Visible = !_worldView.FarView;
         if (_sim.WaterReady) // nothing to mesh until the generated water has settled
         {
             var watch = Stopwatch.StartNew();
@@ -224,6 +224,20 @@ public partial class WaterView : Node3D
         if (_sim.Waterworks.Version != _drawnWorks || _sim.Constructions.Version != _drawnSites) RebuildStructures();
         foreach (var (wheel, rotor) in _wheels)
             rotor.RotateObjectLocal(Vector3.Forward, (float)delta * (0.2f + wheel.Power * 0.25f));
+    }
+
+    /// <summary>A far block appeared: its water sections hide wherever it shows (it draws their water coarsely).</summary>
+    private void LinkToFarBlock(int x0, int y0, MeshInstance3D block)
+    {
+        var path = block.GetPath();
+        foreach (var (key, (node, _, _)) in _sections)
+            if (key.X * 32 >= x0 && key.X * 32 < x0 + WorldView.FarBlock && key.Y * 32 >= y0 && key.Y * 32 < y0 + WorldView.FarBlock && node.Mesh != null)
+                node.VisibilityParent = path;
+    }
+
+    public override void _ExitTree()
+    {
+        if (_worldView != null) _worldView.FarBlockAdded -= LinkToFarBlock;
     }
 
     // ---- Water -------------------------------------------------------------------------------------------
@@ -281,6 +295,8 @@ public partial class WaterView : Node3D
                 _surfaces.AddChild(have.Node);
             }
             have.Node.Mesh = job.Mesh?.ToMesh(_water);
+            // Far blocks draw distant water: hidden where its block shows (an empty instance gets no dependency: Godot errors).
+            have.Node.VisibilityParent = have.Node.Mesh != null && _worldView.FarParent(job.Key.X * 32, job.Key.Y * 32) is { } far ? far.GetPath() : new NodePath();
             _sections[job.Key] = (have.Node, job.Signature, _now);
             SectionsBuilt++;
         }

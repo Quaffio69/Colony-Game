@@ -92,6 +92,8 @@ public partial class Main
         _renderer.ZoomOverride = look.ReferenceDistance / Mathf.Max(1f, _rig.Distance); // same zoom whatever the projection
         _rig.Orthographic = look.Orthographic;
         _rig.OrbitStep = look.OrbitStep;
+        _rig.TopDownAt = look.TopDownZoom > 0 ? look.ReferenceDistance / look.TopDownZoom : 0f; // the map view, eased in from half that distance
+        _rig.TopDownFrom = _rig.TopDownAt * 0.5f;
         _rig.Ceiling = Mathf.Min(_world.ViewLevel + 1, _sim.World.Height); // nothing above the cut is drawn
         _flora.RangeOffset = _rig.CameraBack - _rig.Distance;            // detail ranges measure from the pivot, not the iso camera
         // Far out and mostly symbols, full-detail trees can't be seen (each is ~1k triangles): show the light markers instead.
@@ -99,6 +101,10 @@ public partial class Main
         // Once an art pixel covers several tiles, coarse far blocks (cells of 4 tiles) draw the terrain and water instead
         // of ten thousand sections. On from 3 tiles a pixel, off below 2.4, so a zoom near the edge doesn't flip it.
         _world.FarView = _renderer.TexelWorld > (_world.FarView ? 2.4f : 3f);
+        // Perspective sees to the horizon: blocks beyond the distance where an art pixel covers 2 tiles draw coarse (plus
+        // half a block's diagonal, so a block's near edge is never coarse). Iso has one scale: the switch above does it.
+        _world.FarRange = look.Orthographic ? 1e9f
+            : 2f * _rig.Distance / Mathf.Max(0.01f, _renderer.TexelWorld) + WorldView.FarBlock * 0.71f;
         _renderer.TimeOfDay = _sim.Tick % Colony.Core.Agents.Needs.Day / (float)Colony.Core.Agents.Needs.Day;
         // Shadows reach as far as the view does (Godot measures from the camera, which ortho puts further back).
         _sun.DirectionalShadowMaxDistance = Mathf.Clamp(_rig.CameraBack + _rig.Distance * 2f, 100f, 2500f);

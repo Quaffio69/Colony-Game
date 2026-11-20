@@ -284,9 +284,12 @@ public partial class DwarfRenderer : Node
 		float wpt = wptWant;
 		if (stepped)
 		{
+			// Steps only ever make pixels bigger than asked (texels at least wptWant), never smaller: smaller pixels meant
+			// an art target bigger than the screen (pixel size 1 rendered ~4x the screen's pixels). A step is kept until
+			// the wanted scale passes it, or falls more than a step (and a bit) below it.
 			float lk = Mathf.Log(wptWant) / Mathf.Log(step);
-			if (_scaleStep == int.MinValue || !Mathf.IsEqualApprox(_stepBase, step) || Mathf.Abs(lk - _scaleStep) > 0.6f)
-			{ _scaleStep = Mathf.RoundToInt(lk); _stepBase = step; }
+			if (_scaleStep == int.MinValue || !Mathf.IsEqualApprox(_stepBase, step) || lk > _scaleStep + 1e-4f || lk < _scaleStep - 1.15f)
+			{ _scaleStep = Mathf.CeilToInt(lk - 1e-4f); _stepBase = step; }
 			wpt = Mathf.Pow(step, _scaleStep);
 		}
 		else _scaleStep = int.MinValue;
@@ -294,12 +297,15 @@ public partial class DwarfRenderer : Node
 		TexelWorld = wpt; PixelScreen = pps;
 
 		// ---- Art resolution (a texel of margin each side; even, so the centre is a texel corner) ------------
-		// Within a step the target is sized for the smallest pixels the step shows, so zooming doesn't resize it.
+		// Within a step the target is sized for the smallest pixels the step shows (the asked size), so zooming doesn't
+		// resize it; it shrinks again once it is well over what the screen needs.
 		static int Even(float v) { int i = Mathf.CeilToInt(v); return i + (i & 1); }
 		int needW = Even(W / pps) + 2, needH = Even(H / pps) + 2;
-		if (stepped ? (needW > _lw || needH > _lh || _scaleStep != _allocStep) : (needW != _lw || needH != _lh))
+		int fitW = Even(W / Mathf.Max(1f, Mathf.Min(pps, ppsWant))) + 2;
+		bool oversized = _lw > fitW * 5 / 4 + 4;
+		if (stepped ? (needW > _lw || needH > _lh || _scaleStep != _allocStep || oversized) : (needW != _lw || needH != _lh))
 		{
-			float alloc = stepped ? Mathf.Min(pps, ppsWant * Mathf.Pow(step, -0.6f)) : pps;
+			float alloc = stepped ? Mathf.Max(1f, Mathf.Min(pps, ppsWant)) : pps;
 			_lw = Mathf.Max(needW, Even(W / alloc) + 2); _lh = Mathf.Max(needH, Even(H / alloc) + 2);
 			_allocStep = _scaleStep;
 			_art.Size = new Vector2I(_lw, _lh); _ids.Size = new Vector2I(_lw, _lh);

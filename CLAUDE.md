@@ -67,11 +67,16 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - **Far view (`WorldView.FarView`, `Meshing.FarMesher`):** once an art pixel covers 3+ tiles (off below 2.4; styled render
   only) the sections give way to 64 far blocks (256² columns each, cells of 4 tiles): a heightfield of each cell's highest
   top, or standing water (`FarMesher.Water` = tile code 31, coloured and given water symbols in `GameLooks.TileTables`)
-  when a third of its columns are wet; greedy tops plus sides overlapping by `FarMesher.Seam` (T-junction cracks showed the sky as stray outlined pixels), same terrain material (sliced by the shader). Sampling reads
+  when a third of its columns are wet; greedy tops, each hanging outward `FarMesher.Skirt`s from its edges (T-junction cracks showed the sky as stray outlined pixels; overlapping tops instead z-fought), plus sides, same terrain material (sliced by the shader). Sampling reads
   the live world/water on the main thread (~2 ms a block), meshing on workers; all blocks are built in the background once
   the near world is meshed and the switch waits for them; changed blocks rebuild at most every 2 s, one block refreshes
   every 0.5 s (water), and WaterView hides and stops meshing its sections meanwhile. Full map at 2048: 30 ms / 23.6k draws
   -> 9.8 ms / 1.3k. The render bench prints visible instances per view, art size, tiles/texel and the far state.
+  **In perspective** blocks are also level of detail: each is the Godot visibility parent of the sections and water
+  sections on its columns, shown beyond `FarRange` (where an art pixel covers 2 tiles, plus half a block diagonal), so the
+  horizon draws coarse (close up 44.7k -> 1.6k draws); in iso the range is off and the whole-view switch sets every block
+  in range. Roots are never hidden and a section only keeps its parent while it has a mesh and is visible (`LinkFar`):
+  Godot errors (`dep_instance->array_index == -1`) on dependencies of hidden or empty instances. The bench waits for them.
 - **Water** (`Fluids.Water`): per 16x16-column block (a chunk column) of spans; only awake blocks step (a block
   sleeps once its water is still; flowing rivers never are). Two passes per step (outflows, then volumes), each
   writing only its own block, so blocks run in parallel deterministically; pipes are precomputed per span
@@ -113,13 +118,13 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   nodes are added plus a 1 s sweep (skipping subtrees in group `GameLooks.SweepSkip`: terrain near/far roots, water surfaces, flora; walking them was a ~90 ms hitch every second at 2048; `--stutter-log` prints frames over 50 ms with sim, sweep and GC); transparent/unshaded overlays are left alone and draw after the post quad
   (`RenderPriorityMin`), so cursors, designations, ghosts and health bars stay visible, depth-tested. Label3Ds are taken out
   of the 3D render and drawn crisp in 2D by `ScreenTags` (layer 1). The renderer zooms about the rig pivot
-  (`FocusOverride`). **Stable pixels:** the render scale (world units per art pixel) moves in steps of `ZoomStep` (1.4x zoom,
-  hysteresis 0.6 step); between steps the present pass scales the finished picture and the art target is sized for the
+  (`FocusOverride`). **Stable pixels:** the render scale (world units per art pixel) moves in steps of `ZoomStep` (1.4x zoom; steps only make pixels bigger than asked, never smaller, and the target shrinks when oversized: pixel size 1 once rendered 4x the screen;
+  a step holds until passed or 1.15 steps away); in iso only (perspective zoom really moves the camera), between steps the present pass scales the finished picture and the art target is sized for the
   step's smallest pixels, so zooming neither resamples nor resizes every frame. The snap grid is anchored at a world point
   (re-anchored at the pivot on a turn or scale change, keeping its whole-texel count, so dither doesn't jump). The ids pass
   writes a hash of the world tile under each pixel (B channel); symbol variants, the dissolve order and water ripples use
   it, so a tile keeps its symbol through turns and zooms (a 0.25° turn used to change ~80% of pixels near the pivot, now
-  ~22%). `OrbitStep` (default smooth) snaps the rig's shown yaw/pitch, camera included, so picking matches. **Zoomed in:**
+  ~22%). `OrbitStep` (default smooth) snaps the rig's shown yaw/pitch, camera included, so picking matches. **Map view:** past `TopDownZoom` (0.15; eased in from twice that distance) the rig looks straight down with its turn eased to the nearest 90° (quarter turns only; the camera is aimed by rotation, LookAt fails straight down), so far out the pixel grid lines up with the tiles. **Zoomed in:**
   pixels grow from `PixelGrowStart` by `PixelGrowth` of the zoom up to `MaxPixelSize`, separately from the glyph fade
   (`ZoomInStart`/`ZoomInLength`); the rig zooms in to 4 tiles (`CameraRig.MinDistance`). `--yaw=` sets the bench view's
   turn (compare frames). The sun faces

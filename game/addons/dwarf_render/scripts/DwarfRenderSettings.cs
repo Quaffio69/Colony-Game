@@ -141,6 +141,9 @@ public partial class DwarfRenderSettings : Resource
 	[ExportGroup("Camera")]
 	[Export] public float ReferenceOrthoSize { get; set; } = 88f;     // ortho Size that counts as "zoom 1x"
 	[Export] public bool Orthographic { get; set; } = true;            // iso projection (the game camera keeps its zoom)
+	/// <summary>Zoomed out past this (1 = reference), the view is a top-down map, turned only in 90° steps: the pixel grid
+	/// lines up with the tiles, so turning can't reshuffle the far view. It eases in from twice this distance. 0 = off.</summary>
+	[Export(PropertyHint.Range, "0,1,0.01")] public float TopDownZoom { get; set; } = 0.15f;
 	[Export(PropertyHint.Range, "5,300,1")] public float ReferenceDistance { get; set; } = 140f;     // perspective distance to the focus that counts as "zoom 1x"
 	[Export] public float FocusPlaneY { get; set; } = 0f;             // perspective focus = where the view ray hits this height
 

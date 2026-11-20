@@ -22,8 +22,20 @@ public partial class CameraRig : Node3D
     public const float MinDistance = 4f, MaxDistance = 900f;
     /// <summary>Turns (yaw and pitch) are shown in steps of this many degrees; 0 = smooth. The camera itself snaps, so picking matches the picture.</summary>
     public float OrbitStep { get; set; }
-    private float ShownYaw => OrbitStep > 0 ? Mathf.Round(_yaw / OrbitStep) * OrbitStep : _yaw;
-    private float ShownPitch => OrbitStep > 0 ? Mathf.Clamp(Mathf.Round(_pitch / OrbitStep) * OrbitStep, -89f, -10f) : _pitch;
+    private float StepYaw => OrbitStep > 0 ? Mathf.Round(_yaw / OrbitStep) * OrbitStep : _yaw;
+    private float StepPitch => OrbitStep > 0 ? Mathf.Clamp(Mathf.Round(_pitch / OrbitStep) * OrbitStep, -89f, -10f) : _pitch;
+
+    /// <summary>
+    /// Map view: zoomed out from <see cref="TopDownFrom"/> to <see cref="TopDownAt"/> (rig distances; 0 = off) the view eases
+    /// to straight down and its turn to the nearest 90°, so far out the pixel grid lines up with the tiles and turning goes
+    /// in quarter turns. Zooming back in restores the angle.
+    /// </summary>
+    public float TopDownFrom { get; set; }
+    public float TopDownAt { get; set; }
+    public float TopDown => TopDownAt <= 0 || TopDownFrom <= 0 || TopDownFrom >= TopDownAt ? 0f
+        : Mathf.SmoothStep(0f, 1f, Mathf.Clamp(Mathf.Log(_distance / TopDownFrom) / Mathf.Log(TopDownAt / TopDownFrom), 0f, 1f));
+    private float ShownYaw => Mathf.Lerp(StepYaw, Mathf.Round(StepYaw / 90f) * 90f, TopDown);
+    private float ShownPitch => Mathf.Lerp(StepPitch, -90f, TopDown);
     private bool _orbiting;
 
     /// <summary>Height (Godot Y) of the visible ground at a Godot (x, z), or null to leave the pivot height alone.</summary>
@@ -133,6 +145,6 @@ public partial class CameraRig : Node3D
             _camera.Far = 4000f;
             _camera.Position = new Vector3(0, -Mathf.Sin(pitch) * _distance, Mathf.Cos(pitch) * _distance);
         }
-        _camera.LookAt(GlobalPosition, Vector3.Up);
+        _camera.Rotation = new Vector3(pitch, 0, 0); // looking at the pivot from the offset above (also straight down: LookAt can't)
     }
 }

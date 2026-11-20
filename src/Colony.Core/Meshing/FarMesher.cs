@@ -17,10 +17,13 @@ public static class FarMesher
     public const TileType Water = (TileType)31;
 
     /// <summary>
-    /// How far quads reach past their edges. Greedy rectangles meet in T-junctions, which rasterise with hairline cracks;
-    /// under a far top there is nothing, so a crack showed the sky as a stray pixel (outlined dark) that jumped as the
-    /// camera moved. Tops overlap by this much, sides also and reach half a level below the lower neighbour's top.
+    /// Greedy rectangles meet in T-junctions, which rasterise with hairline cracks; under a far top there is nothing, so a
+    /// crack showed the sky as a stray pixel (outlined dark) that jumped as the camera moved. Every top hangs a skirt this
+    /// deep from each edge (facing out, so the two skirts of a shared edge never fight), and sides reach as far below the
+    /// lower neighbour's top. (Overlapping tops instead made different tiles fight for the same depth in slivers.)
     /// </summary>
+    public const float Skirt = 0.5f;
+    /// <summary>Sides overlap each other along an edge by this much (their seams are T-junctions too).</summary>
     public const float Seam = 0.05f;
 
     /// <summary>
@@ -139,8 +142,12 @@ public static class FarMesher
             }
             for (int j = 0; j < d; j++)
             for (int k = 0; k < w; k++) done[(cy + j) * cellsX + cx + k] = true;
-            float ax = x0 + cx * cell - Seam, ay = y0 + cy * cell - Seam, bx = x0 + (cx + w) * cell + Seam, by = y0 + (cy + d) * cell + Seam;
+            float ax = x0 + cx * cell, ay = y0 + cy * cell, bx = x0 + (cx + w) * cell, by = y0 + (cy + d) * cell, lo = h - Skirt;
             output.Add(Make(new Vector3(ax, ay, h), new Vector3(bx, ay, h), new Vector3(bx, by, h), new Vector3(ax, by, h), FaceDir.PosZ, t));
+            output.Add(Make(new Vector3(ax, ay, lo), new Vector3(bx, ay, lo), new Vector3(bx, ay, h), new Vector3(ax, ay, h), FaceDir.NegY, t));
+            output.Add(Make(new Vector3(ax, by, lo), new Vector3(bx, by, lo), new Vector3(bx, by, h), new Vector3(ax, by, h), FaceDir.PosY, t));
+            output.Add(Make(new Vector3(ax, ay, lo), new Vector3(ax, by, lo), new Vector3(ax, by, h), new Vector3(ax, ay, h), FaceDir.NegX, t));
+            output.Add(Make(new Vector3(bx, ay, lo), new Vector3(bx, by, lo), new Vector3(bx, by, h), new Vector3(bx, ay, h), FaceDir.PosX, t));
             cx += w;
         }
 
@@ -164,7 +171,7 @@ public static class FarMesher
                     run++;
                 }
                 // The face plane and its extent (overlapping its neighbours and the lower top: see Seam).
-                float lo = nh - 0.5f;
+                float lo = nh - Skirt;
                 if (alongX)
                 {
                     float y = y0 + (cy + (dy > 0 ? 1 : 0)) * cell, xa = x0 + cx * cell - Seam, xb = x0 + (cx + run) * cell + Seam;

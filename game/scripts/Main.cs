@@ -446,7 +446,7 @@ public partial class Main : Node3D
         if (_meshedAtMs == 0)
         {
             if (_frames > 2 && _world.PendingSections == 0 && _flora.PendingRegions == 0 && (_waterView.PendingSections == 0 || _world.FarView) &&
-                (_world.FarView || _renderer?.TexelWorld is not > 3f)) // far out: until the far blocks show
+                (_renderer == null || _world.FarProgress.Built == _world.FarProgress.Total)) // and the far blocks (play has them)
             {
                 _meshedAtMs = Time.GetTicksMsec();
                 _maxSimMs = 0;
