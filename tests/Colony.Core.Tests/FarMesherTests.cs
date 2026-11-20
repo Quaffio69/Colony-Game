@@ -38,7 +38,8 @@ public class FarMesherTests
         var top = Assert.Single(tops);
         Assert.Equal(TileType.Grass, top.Tile);
         Assert.All(new[] { top.A, top.B, top.C, top.D }, v => Assert.Equal(5f, v.Z)); // top of z = 4
-        Assert.Equal(32f * 32f, Area(top));
+        float s = 32f + 2 * FarMesher.Seam;
+        Assert.Equal(s * s, Area(top), 0.01f);
         // The block is the whole map: each map edge is one side down to the ground under the world.
         Assert.Equal(4, quads.Count(q => q.Dir != FaceDir.PosZ));
     }
@@ -60,12 +61,13 @@ public class FarMesherTests
         var quads = Mesh(w, 16, 16, 8, 8, 4);
         var raised = quads.Single(q => q.Dir == FaceDir.PosZ && q.A.Z == 10f);
         Assert.Equal(TileType.Stone, raised.Tile);
-        Assert.Equal(16f, Area(raised));
+        float c = 4f + 2 * FarMesher.Seam;
+        Assert.Equal(c * c, Area(raised), 0.01f);
         var sides = quads.Where(q => q.Dir != FaceDir.PosZ).ToList();
         Assert.Equal(4, sides.Count);
-        Assert.All(sides, s => Assert.Equal(4f * 5f, Area(s))); // a cell wide, from 5 up to 10
+        Assert.All(sides, q => Assert.Equal(c * 5.5f, Area(q), 0.01f)); // a cell wide (plus seams), from half below 5 up to 10
         // The ground round it still covers the rest of the block.
-        Assert.Equal(32f * 32f, quads.Where(q => q.Dir == FaceDir.PosZ).Sum(Area));
+        Assert.True(quads.Where(q => q.Dir == FaceDir.PosZ).Sum(Area) >= 32f * 32f);
     }
 
     [Fact]
@@ -81,6 +83,24 @@ public class FarMesherTests
         {
             var (nx, ny, nz) = SectionMesher.Normal(q.Dir);
             Assert.True(Vector3.Dot(Vector3.Cross(q.B - q.A, q.C - q.A), new Vector3(nx, ny, nz)) > 0, $"{q}");
+        }
+    }
+
+    [Fact]
+    public void EveryCellCorner_IsInsideATop_SoNoCrackShowsTheSky()
+    {
+        // Greedy rectangles meet in T-junctions; without overlap the corners lie on edges and rasterise with cracks.
+        var w = Flat(64, 40, 4);
+        for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++)
+        for (int z = 5; z < 5 + (x / 4 * 3 + y / 4 * 5) % 4; z++) w.Set(x, y, z, TileType.Soil);
+        var tops = Mesh(w, 0, 0, 16, 16, 4).Where(q => q.Dir == FaceDir.PosZ).ToList();
+        for (int cy = 0; cy <= 16; cy++)
+        for (int cx = 0; cx <= 16; cx++)
+        {
+            float px = cx * 4, py = cy * 4;
+            Assert.Contains(tops, q => Math.Min(q.A.X, q.C.X) < px && px < Math.Max(q.A.X, q.C.X) &&
+                                       Math.Min(q.A.Y, q.C.Y) < py && py < Math.Max(q.A.Y, q.C.Y));
         }
     }
 

@@ -67,6 +67,7 @@ public partial class WaterView : Node3D
         AddChild(_structures);
         _surfaces = new Node3D { Name = "Surfaces" };
         AddChild(_surfaces);
+        _surfaces.AddToGroup(GameLooks.SweepSkip); // water material from the start
 
         var world = sim.World;
         _capData = new byte[world.Width * world.Depth];

@@ -17,6 +17,13 @@ public static class FarMesher
     public const TileType Water = (TileType)31;
 
     /// <summary>
+    /// How far quads reach past their edges. Greedy rectangles meet in T-junctions, which rasterise with hairline cracks;
+    /// under a far top there is nothing, so a crack showed the sky as a stray pixel (outlined dark) that jumped as the
+    /// camera moved. Tops overlap by this much, sides also and reach half a level below the lower neighbour's top.
+    /// </summary>
+    public const float Seam = 0.05f;
+
+    /// <summary>
     /// Samples cells of <paramref name="cell"/> x <paramref name="cell"/> columns starting at (x0, y0), with a ring of
     /// one cell around the block (for its sides): arrays are (cellsX + 2) x (cellsY + 2), index (cy + 1) * (cellsX + 2) +
     /// cx + 1. A cell's height is the top of its highest column (levels above z = 0; 0 = nothing or off the map); a cell
@@ -132,9 +139,8 @@ public static class FarMesher
             }
             for (int j = 0; j < d; j++)
             for (int k = 0; k < w; k++) done[(cy + j) * cellsX + cx + k] = true;
-            float ax = x0 + cx * cell, ay = y0 + cy * cell;
-            output.Add(Make(new Vector3(ax, ay, h), new Vector3(ax + w * cell, ay, h), new Vector3(ax + w * cell, ay + d * cell, h),
-                new Vector3(ax, ay + d * cell, h), FaceDir.PosZ, t));
+            float ax = x0 + cx * cell - Seam, ay = y0 + cy * cell - Seam, bx = x0 + (cx + w) * cell + Seam, by = y0 + (cy + d) * cell + Seam;
+            output.Add(Make(new Vector3(ax, ay, h), new Vector3(bx, ay, h), new Vector3(bx, by, h), new Vector3(ax, by, h), FaceDir.PosZ, t));
             cx += w;
         }
 
@@ -157,16 +163,17 @@ public static class FarMesher
                     if (heights[At(qx, qy)] != h || heights[At(qx + dx, qy + dy)] != nh || types[At(qx, qy)] != t) break;
                     run++;
                 }
-                // The face plane and its extent.
+                // The face plane and its extent (overlapping its neighbours and the lower top: see Seam).
+                float lo = nh - 0.5f;
                 if (alongX)
                 {
-                    float y = y0 + (cy + (dy > 0 ? 1 : 0)) * cell, xa = x0 + cx * cell, xb = xa + run * cell;
-                    output.Add(Make(new Vector3(xa, y, nh), new Vector3(xb, y, nh), new Vector3(xb, y, h), new Vector3(xa, y, h), dir, t));
+                    float y = y0 + (cy + (dy > 0 ? 1 : 0)) * cell, xa = x0 + cx * cell - Seam, xb = x0 + (cx + run) * cell + Seam;
+                    output.Add(Make(new Vector3(xa, y, lo), new Vector3(xb, y, lo), new Vector3(xb, y, h), new Vector3(xa, y, h), dir, t));
                 }
                 else
                 {
-                    float x = x0 + (cx + (dx > 0 ? 1 : 0)) * cell, ya = y0 + cy * cell, yb = ya + run * cell;
-                    output.Add(Make(new Vector3(x, ya, nh), new Vector3(x, yb, nh), new Vector3(x, yb, h), new Vector3(x, ya, h), dir, t));
+                    float x = x0 + (cx + (dx > 0 ? 1 : 0)) * cell, ya = y0 + cy * cell - Seam, yb = y0 + (cy + run) * cell + Seam;
+                    output.Add(Make(new Vector3(x, ya, lo), new Vector3(x, yb, lo), new Vector3(x, yb, h), new Vector3(x, ya, h), dir, t));
                 }
                 p += run;
             }

@@ -41,6 +41,7 @@ public partial class FloraView : Node3D
     {
         _sim = sim;
         _world = world;
+        AddToGroup(GameLooks.SweepSkip); // thousands of plant nodes, materials set as they are built
         _flora = sim.Flora;
         _shader = GameLooks.Shader("res://shaders/flora.gdshader");
         BuildMeshes();

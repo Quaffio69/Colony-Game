@@ -281,6 +281,7 @@ public partial class Main : Node3D
 
     public override void _Process(double delta)
     {
+        StutterLog(delta);
         HandleDevArgs(delta);
         UpdateRenderer();
         GameLooks.Tick(delta);
@@ -488,6 +489,28 @@ public partial class Main : Node3D
         }
         _benchActive = false; // Quit takes effect a few frames later
         GetTree().Quit();
+    }
+
+    private int _gc0, _gc1, _gc2;
+    private double _sweepSeen;
+
+    /// <summary>
+    /// --stutter-log: prints every frame over 50 ms with what ran in the previous frame (sim ticks, the material sweep,
+    /// garbage collections), to find hitches that only show in play.
+    /// </summary>
+    private void StutterLog(double delta)
+    {
+        if (Arg("--stutter-log") == null) return;
+        int g0 = System.GC.CollectionCount(0), g1 = System.GC.CollectionCount(1), g2 = System.GC.CollectionCount(2);
+        bool swept = GameLooks.LastSweepMs != _sweepSeen;
+        if (delta > 0.05)
+            GD.Print($"[stutter] {delta * 1000:0} ms frame at tick {_sim.Tick}: sim {_simMsThisFrame:0.0} ms, " +
+                     $"sweep {(swept ? $"{GameLooks.LastSweepMs:0.0} ms" : "-")}, GC {g0 - _gc0}/{g1 - _gc1}/{g2 - _gc2} (gen0/1/2), " +
+                     $"world queue {_world.PendingSections}, far {(_world.FarView ? "on" : "off")}");
+        else if (swept && GameLooks.LastSweepMs > 5)
+            GD.Print($"[stutter] sweep {GameLooks.LastSweepMs:0.0} ms (frame {delta * 1000:0} ms)");
+        _sweepSeen = GameLooks.LastSweepMs;
+        (_gc0, _gc1, _gc2) = (g0, g1, g2);
     }
 
     /// <summary>Visible mesh / multimesh instances with something to draw under a node (bench diagnostics).</summary>

@@ -190,11 +190,24 @@ public static class GameLooks
     {
         if (_root == null || (_sweepIn -= delta) > 0) return;
         _sweepIn = 1.0;
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         Sweep(_root);
+        LastSweepMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
     }
+
+    /// <summary>How long the last full sweep took (stutter diagnostics).</summary>
+    public static double LastSweepMs;
+
+    /// <summary>
+    /// Subtrees the 1 s sweep skips: big views that build with their final (kit) materials and never swap them later
+    /// (terrain sections and far blocks, water surfaces, flora). They are still converted as their nodes are added.
+    /// Walking them was ~90 ms every second at 2048 (12k terrain nodes): a regular hitch in any view.
+    /// </summary>
+    public const string SweepSkip = "dr_sweep_skip";
 
     private static void Sweep(Node n)
     {
+        if (n.IsInGroup(SweepSkip)) return;
         if (n is GeometryInstance3D g) Convert(g);
         foreach (var c in n.GetChildren()) Sweep(c);
     }

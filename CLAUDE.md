@@ -67,7 +67,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - **Far view (`WorldView.FarView`, `Meshing.FarMesher`):** once an art pixel covers 3+ tiles (off below 2.4; styled render
   only) the sections give way to 64 far blocks (256² columns each, cells of 4 tiles): a heightfield of each cell's highest
   top, or standing water (`FarMesher.Water` = tile code 31, coloured and given water symbols in `GameLooks.TileTables`)
-  when a third of its columns are wet; greedy tops plus sides, same terrain material (sliced by the shader). Sampling reads
+  when a third of its columns are wet; greedy tops plus sides overlapping by `FarMesher.Seam` (T-junction cracks showed the sky as stray outlined pixels), same terrain material (sliced by the shader). Sampling reads
   the live world/water on the main thread (~2 ms a block), meshing on workers; all blocks are built in the background once
   the near world is meshed and the switch waits for them; changed blocks rebuild at most every 2 s, one block refreshes
   every 0.5 s (water), and WaterView hides and stops meshing its sections meanwhile. Full map at 2048: 30 ms / 23.6k draws
@@ -110,7 +110,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   our MultiMeshes; the kit's foliage/object shaders gained a `cut_height` slice). Every other view keeps making plain
   `StandardMaterial3D`s: `GameLooks.Watch` converts opaque lit ones to `DwarfMaterials.CreateObject` with a glyph group by
   owning view (colonists Dwarf, CreatureView Creature, ItemView Item, HomeView furniture, Edge/Cover construction...) as
-  nodes are added plus a 1 s sweep; transparent/unshaded overlays are left alone and draw after the post quad
+  nodes are added plus a 1 s sweep (skipping subtrees in group `GameLooks.SweepSkip`: terrain near/far roots, water surfaces, flora; walking them was a ~90 ms hitch every second at 2048; `--stutter-log` prints frames over 50 ms with sim, sweep and GC); transparent/unshaded overlays are left alone and draw after the post quad
   (`RenderPriorityMin`), so cursors, designations, ghosts and health bars stay visible, depth-tested. Label3Ds are taken out
   of the 3D render and drawn crisp in 2D by `ScreenTags` (layer 1). The renderer zooms about the rig pivot
   (`FocusOverride`). **Stable pixels:** the render scale (world units per art pixel) moves in steps of `ZoomStep` (1.4x zoom,

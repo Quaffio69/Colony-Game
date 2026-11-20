@@ -200,6 +200,8 @@ public partial class WorldView : Node3D
         _farRoot = new Node3D { Name = "Far", Visible = false };
         AddChild(_nearRoot);
         AddChild(_farRoot);
+        _nearRoot.AddToGroup(GameLooks.SweepSkip); // built with the terrain material: nothing for the look's sweep to convert
+        _farRoot.AddToGroup(GameLooks.SweepSkip);
         _farBlocksX = (World.Width + FarBlock - 1) / FarBlock;
         for (int y0 = 0; y0 < World.Depth; y0 += FarBlock)
         for (int x0 = 0; x0 < World.Width; x0 += FarBlock)
