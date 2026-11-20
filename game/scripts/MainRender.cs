@@ -92,6 +92,8 @@ public partial class Main
         _renderer.ZoomOverride = look.ReferenceDistance / Mathf.Max(1f, _rig.Distance); // same zoom whatever the projection
         _rig.Orthographic = look.Orthographic;
         _rig.OrbitStep = look.OrbitStep;
+        _rig.Ceiling = Mathf.Min(_world.ViewLevel + 1, _sim.World.Height); // nothing above the cut is drawn
+        _flora.RangeOffset = _rig.CameraBack - _rig.Distance;            // detail ranges measure from the pivot, not the iso camera
         // Far out and mostly symbols, full-detail trees can't be seen (each is ~1k triangles): show the light markers instead.
         _flora.Detail = !(_renderer.Zoom < 1f && _renderer.AsciiAmount > 0.6f);
         // Once an art pixel covers several tiles, coarse far blocks (cells of 4 tiles) draw the terrain and water instead

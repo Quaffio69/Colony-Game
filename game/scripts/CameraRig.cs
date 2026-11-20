@@ -12,7 +12,9 @@ public partial class CameraRig : Node3D
     public Camera3D Camera => _camera;
     public float Distance => _distance;
     /// <summary>How far the camera sits from the pivot (more than Distance in ortho).</summary>
-    public float CameraBack => Orthographic ? _distance + 250f : _distance;
+    public float CameraBack => Orthographic ? OrthoBack() : _distance;
+    /// <summary>Godot Y above which nothing is drawn (the world top, or the view level's cut): the iso camera stands back far enough to clear it.</summary>
+    public float Ceiling { get; set; } = 400f;
     private float _yaw = 45f, _pitch = -50f, _distance = 120f, _targetDistance = 120f;
     /// <summary>Iso projection: the view keeps the size a perspective view would have at this distance, from far back.</summary>
     public bool Orthographic { get; set; }
@@ -94,6 +96,21 @@ public partial class CameraRig : Node3D
         }
     }
 
+    /// <summary>
+    /// How far behind the pivot the iso camera stands: just enough that nothing drawable on screen is behind its near
+    /// plane. A point x tiles towards the camera and h above the pivot (pitch p) is on screen while
+    /// x sin p - h cos p &lt;= half the view height, and in front of the camera while x cos p + h sin p &lt; back; the worst
+    /// case is the highest drawable point at the bottom edge: back = half-height · cot p + h_max / sin p.
+    /// (A fixed 250 sliced mountains between the camera and a valley pivot, more so zoomed in.)
+    /// </summary>
+    private float OrthoBack()
+    {
+        float p = Mathf.DegToRad(Mathf.Max(5f, -ShownPitch));
+        float halfH = _distance * Mathf.Tan(Mathf.DegToRad((_camera?.Fov ?? 75f) * 0.5f));
+        float hMax = Mathf.Max(0f, Ceiling - GlobalPosition.Y);
+        return halfH / Mathf.Tan(p) + hMax / Mathf.Sin(p) + 16f;
+    }
+
     private void ApplyTransform()
     {
         if (_camera == null) return;
@@ -106,12 +123,14 @@ public partial class CameraRig : Node3D
             // Same framing as perspective at this distance, seen from far enough back that nothing behind the pivot is clipped.
             _camera.Projection = Camera3D.ProjectionType.Orthogonal;
             _camera.Size = 2f * _distance * Mathf.Tan(Mathf.DegToRad(_camera.Fov * 0.5f));
-            float back = _distance + 250f; // far enough back for hills between camera and pivot; shadows still reach
+            float back = OrthoBack();
+            _camera.Far = back + 4000f; // the map beyond the pivot, however far back the camera stands
             _camera.Position = new Vector3(0, -Mathf.Sin(pitch) * back, Mathf.Cos(pitch) * back);
         }
         else
         {
             _camera.Projection = Camera3D.ProjectionType.Perspective;
+            _camera.Far = 4000f;
             _camera.Position = new Vector3(0, -Mathf.Sin(pitch) * _distance, Mathf.Cos(pitch) * _distance);
         }
         _camera.LookAt(GlobalPosition, Vector3.Up);

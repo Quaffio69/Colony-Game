@@ -73,8 +73,25 @@ public partial class FloraView : Node3D
         }
     }
 
-    private float TreeEnd => _detail ? _treeRange : 0.01f;   // 0 would mean "no limit"
-    private float PlantEnd => _detail ? NearPlantRange : 0.01f;
+    private float TreeEnd => _detail ? _treeRange + _rangeOffset : 0.01f;   // 0 would mean "no limit"
+    private float PlantEnd => _detail ? NearPlantRange + _rangeOffset : 0.01f;
+    private float _rangeOffset;
+
+    /// <summary>
+    /// Added to every detail range: how much further the camera sits than the rig distance (the iso camera stands far back
+    /// so hills between it and the pivot aren't clipped; Godot measures ranges from the camera, so without this every tree
+    /// was a marker in iso).
+    /// </summary>
+    public float RangeOffset
+    {
+        get => _rangeOffset;
+        set
+        {
+            if (Mathf.Abs(_rangeOffset - value) < 8f) return; // the camera eases: don't touch every node each frame
+            _rangeOffset = value;
+            ApplyRanges();
+        }
+    }
 
     /// <summary>
     /// Full-detail plants (false: trees only as their light distant markers, plants hidden). The styled look turns detail

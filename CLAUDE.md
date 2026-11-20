@@ -130,7 +130,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   (`Main.GameDefaults`: the diorama's values, zoom 1x = 45 tiles); a live readout (zoom, ASCII %, art size, pixel size, fps). The kit's
   own F10 panel is off (`CreateTuningPanel = false`). Settings the port added from the diorama: sun angle / warmth /
   ambient / shadows / day-night (`DwarfRenderer.UpdateLighting`, the diorama's updateSun; `TimeOfDay` from the game clock),
-  orthographic (iso) camera (`CameraRig.Orthographic`: same framing, camera 250 further back), shadow map size, profiler
+  orthographic (iso) camera (`CameraRig.Orthographic`: same framing from far back: `OrthoBack` = half-height · cot pitch + (ceiling - pivot) / sin pitch, so terrain up to the world top or the view cut never crosses the near plane; Far follows), shadow map size, profiler
   (`UI.ProfilerPanel`: fps, worst frame, sim, world GPU, draws, prims, memory, zoom/ASCII; `--profiler`). Zoom is
   `ReferenceDistance / rig distance` (`ZoomOverride`); the rig eases zoom so ASCII transitions glide.
 - **Glyph ids:** Godot 4.7 stores roughness as is (or 1 - r for dynamic objects): ids decode as `round(a * 127)`, groups
@@ -139,7 +139,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   world-map style: grassland ", broadleaf ♣, conifers ♠ ↑, mountains ▲ (surface stone), cut rock ▓ (the cap uses
   `dr_cap_group`), water ≈ ~, sand ░, stairs < > X, ants a, nests ∩ (nodes named `Nest_*`), beds/tables Θ Π ╥, walls #; the
   UI's bitmap glyphs are imported into the kit font. No dither on the sky (a dot grid in the far view).
-- **Cost:** kit trees are ~1k triangles (no leaf cards unless that technique is on at load); full detail within 200
+- **Cost:** kit trees are ~1k triangles (no leaf cards unless that technique is on at load); full detail within 200 (measured from the pivot: `FloraView.RangeOffset` adds the iso camera's extra distance)
   tiles, and `FloraView.Detail` drops to the distant markers once the far view is mostly symbols.
 - Not ported yet: per-vertex AO / cave sky light and edge rounding (would need mesher changes), tree variants per species.
 
