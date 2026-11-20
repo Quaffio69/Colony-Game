@@ -96,9 +96,11 @@ public partial class GlyphPanel : Control
         }
         else
         {
-            sb.ShadowColor = light ? new Color(60 / 255f, 40 / 255f, 20 / 255f, 0.22f) : new Color(0, 0, 0, 0.55f);
-            sb.ShadowSize = Pill ? 14 : _active ? 34 : 22;
-            sb.ShadowOffset = new Vector2(0, Pill ? 4 : _active ? 12 : 7);
+            // A tight contact shadow: the old one (up to 34 px, offset 12 down, 55% black) smeared a dark band under every
+            // window over the bright pixel-art world.
+            sb.ShadowColor = light ? new Color(60 / 255f, 40 / 255f, 20 / 255f, 0.16f) : new Color(0, 0, 0, _active ? 0.32f : 0.24f);
+            sb.ShadowSize = Pill ? 4 : _active ? 10 : 6;
+            sb.ShadowOffset = new Vector2(0, Pill ? 1 : _active ? 3 : 2);
         }
         DrawStyleBox(sb, new Rect2(Vector2.Zero, Size));
     }

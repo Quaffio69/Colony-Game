@@ -136,7 +136,7 @@ public partial class DesignationTool : Node3D
 
     private static string BaseModeName(ToolMode m) => m switch
     {
-        ToolMode.None => "No tool (drag: levels · RMB drag: pan)",
+        ToolMode.None => "No tool (click: inspect · drag: levels)",
         ToolMode.Cancel => "Cancel orders (designations, plans and zone cells in a box)",
         ToolMode.Demolish => "Demolish (take down built walls, doors, windows, floors, roofs, racks, waterworks and room parts in a box)",
         ToolMode.Dig => "Dig",
@@ -353,7 +353,24 @@ public partial class DesignationTool : Node3D
             EndSelection();
             return true;
         }
-        return false;
+        return NothingToCancel?.Invoke() ?? false;
+    }
+
+    /// <summary>The last step back, once no tool is in hand (the game clears what is selected). True if it did something.</summary>
+    public Func<bool>? NothingToCancel { get; set; }
+
+    /// <summary>A click (not a drag) with no tool in hand: the tile under the cursor (null: nothing), to select what is there.</summary>
+    public event Action<TilePos?>? Clicked;
+
+    /// <summary>The box being dragged, in tiles (null when not boxing).</summary>
+    public (int W, int D, int H)? BoxSize
+    {
+        get
+        {
+            if (_selection == Selection.None || Mode == ToolMode.WallLine) return null;
+            var (a, b) = Corners();
+            return (Math.Abs(a.X - b.X) + 1, Math.Abs(a.Y - b.Y) + 1, IsAreaTool(Mode) ? 1 : Math.Abs(a.Z - b.Z) + 1);
+        }
     }
 
     /// <summary>Leaves any build tool (the Build window closed).</summary>
@@ -537,6 +554,7 @@ public partial class DesignationTool : Node3D
     private bool _rightPressed;
     private bool _levelDrag;
     private float _levelDragY;
+    private Vector2 _levelDragAt;
     private int _levelDragFrom;
     private Key _tap = Key.None;
 
@@ -576,9 +594,11 @@ public partial class DesignationTool : Node3D
                 Handled();
                 return;
             }
-            if (e is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false })
+            if (e is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false } lr)
             {
                 _levelDrag = false;
+                // Hardly moved: a click, which selects what is under the cursor.
+                if (lr.Position.DistanceTo(_levelDragAt) <= ClickSlop && _view.ViewLevel == _levelDragFrom) Clicked?.Invoke(Hovered);
                 Handled();
                 return;
             }
@@ -604,6 +624,7 @@ public partial class DesignationTool : Node3D
         {
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } lp when Mode == ToolMode.None && !SquadOrders:
                 _levelDrag = true;
+                _levelDragAt = lp.Position;
                 _levelDragY = lp.Position.Y;
                 _levelDragFrom = _view.ViewLevel;
                 Handled();

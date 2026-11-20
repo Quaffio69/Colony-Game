@@ -63,6 +63,17 @@ public partial class GameUi : CanvasLayer
         BuildHud();
         Ribbon = new OrdersRibbon(this) { Name = "OrdersRibbon" };
         _m.AddChild(Ribbon);
+        _m.AddChild(new Notices(this) { Name = "Notices" });
+        if (main != null)
+        {
+            // A click with no tool selects what is under the cursor and shows it in Inspect; Esc / a right click clears it.
+            main.Tool.Clicked += tile =>
+            {
+                main.Selection.PickAt(tile, Me);
+                if (main.Selection.Current != null && Window("inspect") is { IsShown: false } inspect) _m.Open(inspect);
+            };
+            main.Tool.NothingToCancel = () => main.Selection.Clear();
+        }
         _m.AddChild(new ProfilerPanel(this) { Name = "Profiler" });
         _menu = new MainMenu(this);
         _m.Overlay.AddChild(_menu);
@@ -287,7 +298,7 @@ public partial class GameUi : CanvasLayer
     }
 
     /// <summary>"Saw horse planned: 0/2 logs here · no logs to bring: chop trees (t)" or "... waiting for a builder".</summary>
-    private string Waiting(string name, ItemType material, int needed, int delivered)
+    public string Waiting(string name, ItemType material, int needed, int delivered)
     {
         string mat = material.Name.ToLowerInvariant();
         string s = $"{name} planned: {Math.Min(delivered, needed)}/{needed} {mat} here";
@@ -299,9 +310,11 @@ public partial class GameUi : CanvasLayer
     }
 
     /// <summary>What is under the cursor: tile, plant, water, waterworks, farm plot, machine.</summary>
-    public string HoverText()
+    public string HoverText() => Tool.Hovered is { } hovered ? Describe(hovered) : "";
+
+    /// <summary>A tile and what is on it, in one line.</summary>
+    public string Describe(TilePos h)
     {
-        if (Tool.Hovered is not { } h) return "";
         var above = h.Offset(0, 0, 1);
         string s = $"{TileInfo.Name(Sim.World.Get(h))} at {h.X},{h.Y},{h.Z}";
         if (Sim.Flora.TryGet(above, out var plant))

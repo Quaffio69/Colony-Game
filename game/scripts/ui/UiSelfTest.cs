@@ -253,6 +253,20 @@ public partial class UiSelfTest : Node
         Key(Godot.Key.Shift);
         await Frames();
         Check("tapping Shift goes a level up", _ui.Main.View.ViewLevel == level);
+        // A click with no tool selects what is under it and opens Inspect; a right click clears the selection.
+        foreach (var w in m.Windows.Where(w => w.IsShown).ToList()) w.Close();
+        await Frames();
+        Move(mid - Vector2.One, mid, false);
+        await Frames(2);
+        Mouse(mid, true);
+        Mouse(mid, false);
+        await Frames(3);
+        Check($"a click selects what is under it ({_ui.Main.Selection.Current?.GetType().Name}) and opens Inspect",
+            _ui.Main.Selection.Current != null && _ui.Window("inspect")!.IsShown);
+        Mouse(mid, true, MouseButton.Right);
+        Mouse(mid, false, MouseButton.Right);
+        await Frames();
+        Check("a right click clears the selection", _ui.Main.Selection.Current == null);
         _ui.Ribbon.Pinned = true;
         await Frames();
         Check("the Orders pill pins the ribbon open with no tool", _ui.Ribbon.Open && tool.Mode == DesignationTool.ToolMode.None);

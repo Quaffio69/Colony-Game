@@ -132,6 +132,10 @@ public partial class Main : Node3D
         if (_test != null) FocusOnTestWorld();
         else FocusOnColony();
 
+        Selection = new SelectionView { Name = "SelectionView" };
+        AddChild(Selection);
+        Selection.Initialize(_sim, _world, _rig, _tool);
+
         _ui = new GameUi(this) { Name = "GameUi" };
         AddChild(_ui);
         ReadyNet();
@@ -143,6 +147,8 @@ public partial class Main : Node3D
     public ColonySim Sim => _sim;
     public DesignationTool Tool => _tool;
     public WorldView View => _world;
+    /// <summary>What the player clicked in the world (Inspect shows it).</summary>
+    public SelectionView Selection { get; private set; } = null!;
     public bool Paused { get => _paused; set => _paused = value; }
     public static IReadOnlyList<int> SpeedSteps => Speeds;
     public int SpeedIndex { get => _speedIndex; set => _speedIndex = Math.Clamp(value, 0, Speeds.Length - 1); }
@@ -921,6 +927,14 @@ public partial class Main : Node3D
         for (; t < 30_000 && !_sim.Colonists.Any(k => k.OnScaffold && k.WorkDone * 2 > k.WorkRequired); t++) _sim.Step();
         _stairsDemoAt = mode == "racks" ? new TilePos(rx + 3, ry + 5, g + 1) : new TilePos((rx + cx) / 2, cy, g + 1);
         if (mode == "racks") for (int k = 0; k < 6000; k++) _sim.Step(); // let the haulers fill the shelves
+        if (mode == "racks")
+        {
+            // Show the UI at work: the zone selected in Inspect, a tool in hand, paused.
+            Selection.Select(new PickZone(a.Offset(4, 3, 1), false));
+            _ui.OpenWindow("inspect");
+            _tool.SelectOrder(DesignationTool.ToolMode.Dig);
+            _paused = true;
+        }
         GD.Print($"Storage demo: {_sim.Stockpiles.Racks.Count} racks up, scaffold in use: {_sim.Colonists.Any(k => k.OnScaffold)}, after {t} ticks");
     }
 

@@ -188,7 +188,19 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   up = up), RMB drag pans (`CameraRig.Pan`: the ground follows the mouse), tapping Shift / Ctrl alone goes a level up /
   down (`DesignationTool._Input`; any key or click while held cancels the tap; while boxing it moves the box's corner),
   RMB click (≤ 6 px) steps back: aborts the box, then drops the tool (`CancelPlacement`, also Esc). Shift+LMB starts
-  the removal box (or removes an edge piece) for any tool. `--orders` opens the ribbon pinned. **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
+  the removal box (or removes an edge piece) for any tool. `--orders` opens the ribbon pinned. **Selection (`SelectionView`, `Main.Selection`):** a click (≤ 6 px, level
+  unchanged) with no tool picks what is under it (`Pick` records: colonist in the cell, nest, room, stockpile or farm
+  field (`ZoneCells`: zoned cells joined 8-way or a level up/down), blueprint, pile, a colonist beside it, else the tile)
+  and opens Inspect; accent plates over a room/zone, a ring under a colonist, a box otherwise; with no tool the room or
+  zone under the cursor gets faint plates (what a click would select). Esc / RMB click clear it (`Tool.NothingToCancel`,
+  the last step of `CancelPlacement`). Colonists and Military rows select too. **Inspect** (V) shows the selection, else
+  whatever is under the cursor: colonists (doing, health/food/rest/mood bars, home, gear, work priorities, likes),
+  homes and workshops as before, stockpiles (cells, racks, stacks used/capacity, contents), farm fields (crops sown,
+  ripe), piles (role), blueprints (what they wait for), nests, tiles; Go to, Follow (camera tracks the colonist until
+  WASD/RMB), clear. **Notices** (`UI.Notices`): the tool card (bottom centre, accent pill: the tool in hand, what to do,
+  the box size or why it can't be placed), the box size at the cursor while dragging, a Paused pill, and toasts for the
+  colony's events (alerts red; click: Chronicle). Window shadows are a tight contact shadow (the old 34 px one smeared
+  a dark band under windows). **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
   map size; `Main.NewColony` reloads the scene), Multiplayer (disabled), Appearance, Tests, Quit; opened by Esc when
   nothing is left to close (the game does not start on it yet); the sim waits while it is up.
 - **Multiplayer direction:** freeform, each player a distinct colony (faction) in one world: cooperate against NPC

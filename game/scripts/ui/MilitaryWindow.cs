@@ -97,7 +97,7 @@ public partial class MilitaryWindow : GlyphWindow
             row.AddChild(doing);
             var draft = new GlyphSwitch("", c.Drafted, on => _ui.Tool.Issue(new SetDrafted(colonist.Id, on)));
             row.AddChild(draft);
-            row.Pressed += () => _ui.Main.FocusOn(colonist.Position);
+            row.Pressed += () => { _ui.Main.FocusOn(colonist.Position); _ui.Main.Selection.Select(new PickColonist(colonist)); };
             row.MouseEntered += () => GlyphStatus.Tip = $"{colonist.Name}: {colonist.Describe()} · {GearLine(colonist, full: true)} · click to find";
             row.MouseExited += () => GlyphStatus.Tip = null;
             _people.AddChild(row);

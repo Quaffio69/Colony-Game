@@ -5,6 +5,8 @@ using Colony.Core;
 using Colony.Core.Agents;
 using Colony.Core.Industry;
 using Colony.Core.Items;
+using Colony.Core.Orders;
+using Colony.Core.World;
 using Godot;
 
 namespace ColonyGame.UI;
@@ -116,6 +118,7 @@ public partial class ColonistsWindow : GlyphWindow
             {
                 _selected = colonist.Id;
                 _ui.Main.FocusOn(colonist.Position);
+                _ui.Main.Selection.Select(new PickColonist(colonist)); // and show it in Inspect
                 foreach (var r in _rows) r.Row.Selected = r.C.Id == _selected;
             };
             row.MouseEntered += () => GlyphStatus.Tip = $"{colonist.Name}: {colonist.Describe()} · likes {colonist.DescribeLikes(_ui.Sim.Tick)} · click to find";
@@ -304,34 +307,206 @@ public partial class ChronicleWindow : GlyphWindow
 
 // ---- Inspector (V) ----------------------------------------------------------------------------------------
 
-/// <summary>Details of the home or workshop under the cursor (it keeps the last one while the mouse is on the UI).</summary>
+/// <summary>
+/// Details of what is selected (click it in the world with no tool: a colonist, workshop, home, stockpile or farm
+/// field, blueprint, pile, nest or tile; the window opens by itself), else of whatever is under the cursor (it keeps
+/// the last thing while the mouse is on the UI). Go to, Follow (colonists) and Clear sit in the header.
+/// </summary>
 public partial class InspectorWindow : GlyphWindow
 {
     private readonly GameUi _ui;
-    private Room? _room;
+    private Pick? _hover;
+    private Label _mode = null!;
+    private Button _goto = null!, _follow = null!, _clear = null!;
 
     public InspectorWindow(GameUi ui) : base("inspect", "Inspect", "Θ", "info", "V")
     {
         _ui = ui;
-        MinCols = 36;
+        MinCols = 40;
         Default = new WindowState { X = -2, Y = 2, W = 52, H = 26 };
     }
     public InspectorWindow() : this(null!) { }
 
+    private SelectionView Sel => _ui.Main.Selection;
+
+    protected override void Build()
+    {
+        var bar = new HBoxContainer();
+        _mode = G.Text("", "Faint", expand: true);
+        _mode.ClipText = true;
+        bar.AddChild(_mode);
+        _goto = G.Button(" Go to ", () => { if (Sel.Where is { } w) _ui.Main.FocusOn(w); }, "Centre the camera on it");
+        _follow = G.Button(" Follow ", () => Sel.Follow = !Sel.Follow, "Keep the camera on this colonist (WASD or a right-drag stops)");
+        _clear = G.Button(" × ", () => Sel.Clear(), "Clear the selection (Esc, or a right click)");
+        bar.AddChild(_goto);
+        bar.AddChild(_follow);
+        bar.AddChild(_clear);
+        Header.AddChild(bar);
+        Header.AddChild(G.Gap(0.25f));
+    }
+
     public override void Tick()
     {
         var sim = _ui.Sim;
-        if (_ui.Tool.Hovered is { } h && sim.Rooms.RoomAt(h.Offset(0, 0, 1)) is { } room) _room = room;
-        if (_room != null && !sim.Rooms.All.Contains(_room)) _room = null;
+        var pick = Sel.Current;
+        if (pick == null && _ui.Tool.Hovered is { } h) _hover = Sel.PickFor(h, _ui.Me);
+        pick ??= _hover;
+        _mode.Text = Sel.Current != null ? "Selected · Esc clears" : "Under the cursor · click to keep";
+        G.Retone(_mode, Sel.Current != null ? "Accent" : "Faint");
+        _goto.Visible = Sel.Current != null;
+        _clear.Visible = Sel.Current != null;
+        _follow.Visible = Sel.Current is PickColonist;
+        _follow.Text = Sel.Follow ? " Following " : " Follow ";
         G.Clear(Content);
-        if (_room == null)
+        switch (pick)
         {
-            Content.AddChild(G.Para("Point at a home or a workshop in the world to see its details here.", "Faint"));
+            case null:
+                Content.AddChild(G.Para("Point at anything in the world, or click it (no tool in hand) to keep it here: colonists, workshops, homes, stockpiles, farms, blueprints, piles, nests.", "Faint"));
+                break;
+            case PickColonist c: ColonistPanel(c.Colonist); break;
+            case PickRoom r when sim.Rooms.All.Contains(r.Room):
+                var room = r.Room;
+                if (room.Faction != _ui.Me) Content.AddChild(G.Para($"Belongs to {sim.Factions[room.Faction].Name}.", "Warn"));
+                if (room.Type.IsHome && sim.Factions[room.Faction].Housing.HomeOf(room) is { } home) HomePanel(home);
+                else if (!room.Type.IsHome) RoomPanel(room);
+                break;
+            case PickZone z: ZonePanel(z); break;
+            case PickPile p: PilePanel(p.Cell); break;
+            case PickSite s: SitePanel(s.Blueprint); break;
+            case PickNest n: NestPanel(n.Nest); break;
+            case PickTile t: TilePanel(t.Tile); break;
+        }
+    }
+
+    private void ColonistPanel(Colonist c)
+    {
+        var sim = _ui.Sim;
+        Content.AddChild(new GlyphSection(c.Name));
+        if (sim.Factions.Count > 1) KV("Colony", sim.Factions[c.Faction].Name, c.Faction == _ui.Me ? "hi" : "warn");
+        KV("Schooling", c.IsChild ? "child" : c.EducationName);
+        KV("Doing", c.Describe(), "dim");
+        if (c.CarryingCount > 0) KV("Carrying", $"{c.CarryingCount} {c.CarryingType.Name.ToLowerInvariant()}");
+        Content.AddChild(G.Gap());
+        Content.AddChild(new GlyphSection("Condition"));
+        BarRow("Health", c.Health / (float)Colonist.MaxHealth, c.Downed ? "struck down" : $"{c.Health}/{Colonist.MaxHealth}", c.Health < 35 ? "bad" : null);
+        if (!c.IsAutomaton)
+        {
+            BarRow("Food", c.Satiety / (float)Needs.FullSatiety, c.Starving ? "starving" : c.Hungry ? "hungry" : "fed", c.Hungry ? "warn" : null);
+            BarRow("Rest", c.Rest / Needs.FullRest, c.Rest < Needs.FullRest * 0.25f ? "tired" : "rested");
+            BarRow("Mood", c.Happiness, $"{c.Happiness:P0}", c.Happiness < Needs.Unhappy ? "bad" : null);
+        }
+        KV("Home", c.Home?.Name ?? (c.IsAutomaton ? "-" : "homeless"), c.Home == null && !c.IsAutomaton ? "bad" : "hi");
+        if (c.Spouse != null) KV("Married to", c.Spouse.Name, "dim");
+        Content.AddChild(G.Gap());
+        Content.AddChild(new GlyphSection("Gear"));
+        KV("Weapon", c.Weapon?.Name ?? "bare hands", c.Weapon != null ? "hi" : "faint");
+        KV("Armour", c.Armour?.Name ?? "none", c.Armour != null ? "hi" : "faint");
+        if (!c.TwoHanded) KV("Shield", c.Shield?.Name ?? "none", c.Shield != null ? "hi" : "faint");
+        if (c.Drafted) KV("Drafted", "yes (Military, M)", "bad");
+        if (!c.IsChild)
+        {
+            Content.AddChild(G.Gap());
+            Content.AddChild(new GlyphSection("Work (J to change)"));
+            Content.AddChild(G.Para(string.Join(" · ", Enumerable.Range(0, Colonist.WorkTypes).Select(w =>
+                $"{ShortWork[w]} {(c.Priority((Work)w) is var p and > 0 ? p.ToString() : "-")}")), "Dim"));
+            Content.AddChild(G.Para($"Likes {c.FavoriteFood.Name.ToLowerInvariant()}, things of {c.LikedMaterial}, and {c.PreferredWork.ToString().ToLowerInvariant()} work", "Faint"));
+        }
+    }
+
+    private static readonly string[] ShortWork = ["Mine", "Wood", "Farm", "Build", "Haul", "Craft"];
+
+    private void ZonePanel(PickZone z)
+    {
+        var sim = _ui.Sim;
+        var cells = Sel.Current == z ? Sel.Zone : Sel.ZoneCells(z.Cell, z.Farm);
+        if (cells.Count == 0) cells = Sel.ZoneCells(z.Cell, z.Farm);
+        int levels = cells.Select(c => c.Z).Distinct().Count();
+        if (z.Farm)
+        {
+            Content.AddChild(new GlyphSection("Farm field"));
+            KV("Size", $"{cells.Count} plots on {G.Plural(levels, "level")}");
+            var crops = new Dictionary<string, (int Plots, int Growing, int Ripe)>();
+            foreach (var c in cells)
+            {
+                if (!sim.Farms.TryGet(c, out var crop)) continue;
+                string name = Colony.Core.Nature.PlantInfo.Name(crop);
+                var (n, g, r) = crops.GetValueOrDefault(name);
+                bool has = sim.Flora.TryGet(c, out var plant);
+                crops[name] = (n + 1, g + (has ? 1 : 0), r + (has && Colony.Core.Nature.PlantInfo.IsGatherable(plant) ? 1 : 0));
+            }
+            foreach (var (name, (n, g, r)) in crops) KV(name, $"{n} plots, {g} sown, {r} ripe");
+            Content.AddChild(G.Para("Twice as fast within 2 tiles of water. Shift+X over plots removes them.", "Faint"));
             return;
         }
-        if (_room.Faction != _ui.Me) Content.AddChild(G.Para($"Belongs to {sim.Factions[_room.Faction].Name}.", "Warn"));
-        if (_room.Type.IsHome && sim.Factions[_room.Faction].Housing.HomeOf(_room) is { } home) HomePanel(home);
-        else if (!_room.Type.IsHome) RoomPanel(_room);
+        Content.AddChild(new GlyphSection("Stockpile"));
+        if (sim.Factions.Count > 1) KV("Colony", sim.Factions[sim.Stockpiles.OwnerOf(z.Cell)].Name);
+        int racks = 0, capacity = 0, used = 0;
+        var goods = new Dictionary<Colony.Core.Items.ItemType, int>();
+        foreach (var c in cells)
+        {
+            int cap = sim.Stockpiles.CapacityAt(c);
+            capacity += cap;
+            if (cap > 1) racks++;
+            if (sim.Items.TryGet(c, out var pile) && pile.Count > 0)
+            {
+                goods[pile.Type] = goods.GetValueOrDefault(pile.Type) + pile.Count;
+                used += (pile.Count + Colony.Core.Items.ItemInfo.StackLimit(pile.Type) - 1) / Colony.Core.Items.ItemInfo.StackLimit(pile.Type);
+            }
+        }
+        KV("Size", $"{cells.Count} cells on {G.Plural(levels, "level")}");
+        KV("Racks", racks > 0 ? racks.ToString() : "none (Build, Zones: storage rack)", racks > 0 ? "hi" : "faint");
+        BarRow("Space", capacity == 0 ? 0 : used / (float)capacity, $"{used}/{capacity} stacks", used >= capacity ? "bad" : null);
+        Content.AddChild(G.Gap());
+        Content.AddChild(new GlyphSection("Holding"));
+        if (goods.Count == 0) Content.AddChild(G.Para("Nothing yet: haulers bring loose goods here.", "Faint"));
+        foreach (var (type, n) in goods.OrderByDescending(g => g.Value).Take(24))
+            Content.AddChild(new GlyphKV(ItemLook.Glyph(type), ItemLook.Color(type), type.Name, n.ToString()));
+    }
+
+    private void PilePanel(TilePos cell)
+    {
+        var sim = _ui.Sim;
+        if (!sim.Items.TryGet(cell, out var pile)) return;
+        Content.AddChild(new GlyphSection(pile.Type.Name));
+        KV("Here", $"{pile.Count} of {sim.Items.LimitAt(cell, pile.Type)}");
+        if (pile.Reserved > 0) KV("Promised to a hauler", pile.Reserved.ToString(), "dim");
+        if (pile.Incoming > 0) KV("On its way", pile.Incoming.ToString(), "dim");
+        var role = Colony.Core.Items.Hauling.RoleOf(cell, pile.Type, sim.Stockpiles, sim.Rooms, sim.Constructions);
+        KV("Lying", role switch
+        {
+            Colony.Core.Items.StorageRole.Loose => sim.Stockpiles.Count == 0 ? "loose (zone a stockpile, Shift+P, to store it)" : "loose: haulers will store it",
+            Colony.Core.Items.StorageRole.Stockpile => "in a stockpile",
+            Colony.Core.Items.StorageRole.Input => "in a factory's input crate",
+            Colony.Core.Items.StorageRole.Output => "in a factory's output crate",
+            _ => "on a building site (its materials)",
+        }, "dim");
+        if (pile.Type.Def.Uses.Count > 0) Content.AddChild(G.Para("Used for: " + string.Join(", ", pile.Type.Def.Uses), "Faint"));
+    }
+
+    private void SitePanel(Blueprint bp)
+    {
+        Content.AddChild(new GlyphSection(Colony.Core.Orders.Constructions.Name(bp.Kind) + " (planned)"));
+        Content.AddChild(G.Para(_ui.Waiting(Colony.Core.Orders.Constructions.Name(bp.Kind), bp.Cost.Material, bp.Cost.Count,
+            Colony.Core.Orders.Constructions.MaterialsOnSite(bp, _ui.Sim.Items)), "Dim"));
+        KV("Builder", bp.BuilderId >= 0 ? _ui.Sim.Colonists.FirstOrDefault(c => c.Id == bp.BuilderId)?.Name ?? "someone" : "nobody yet", "dim");
+        Content.AddChild(G.Para("Shift+X over it cancels the plan (what was delivered stays).", "Faint"));
+    }
+
+    private void NestPanel(Colony.Core.Combat.Nest n)
+    {
+        var sim = _ui.Sim;
+        Content.AddChild(new GlyphSection($"{n.Kind.Name} nest"));
+        KV("Ants", $"{n.Total} ({n.Out} out)");
+        BarRow("Mound", n.Health / (float)Math.Max(1, n.Kind.NestHealth), $"{n.Health}/{n.Kind.NestHealth}", "bad");
+        bool hostile = n.HostileTo(_ui.Me, sim.Tick);
+        KV("Mood", hostile ? "hostile to you" : n.Crowded > 0 ? "crowded by your land" : "calm: leave them be", hostile ? "bad" : "good");
+        Content.AddChild(G.Para("G then click the nest sends the drafted against it (Military, M).", "Faint"));
+    }
+
+    private void TilePanel(TilePos tile)
+    {
+        Content.AddChild(new GlyphSection(TileInfo.Name(_ui.Sim.World.Get(tile))));
+        Content.AddChild(G.Para(_ui.Describe(tile), "Dim"));
     }
 
     private void KV(string name, string value, string tone = "hi") => Content.AddChild(new GlyphKV(null, default, name, value, tone));
