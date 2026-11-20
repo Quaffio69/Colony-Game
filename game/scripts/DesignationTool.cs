@@ -37,7 +37,7 @@ public partial class DesignationTool : Node3D
     public enum ToolMode
     {
         // Orders
-        None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, Wall, Cancel,
+        None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, Wall, Demolish, Cancel,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
         Room, Part, Structure, Outline, Edge, WallLine, Floor, Roof, Rack,
     }
@@ -137,7 +137,8 @@ public partial class DesignationTool : Node3D
     private static string BaseModeName(ToolMode m) => m switch
     {
         ToolMode.None => "No tool (drag: levels · RMB drag: pan)",
-        ToolMode.Cancel => "Cancel orders (designations and zone cells in a box)",
+        ToolMode.Cancel => "Cancel orders (designations, plans and zone cells in a box)",
+        ToolMode.Demolish => "Demolish (take down built walls, doors, windows, floors, roofs, racks, waterworks and room parts in a box)",
         ToolMode.Dig => "Dig",
         ToolMode.Stairs => "Stairs (auto)",
         ToolMode.UpStair => "Up stair",
@@ -244,7 +245,7 @@ public partial class DesignationTool : Node3D
                 mode == ToolMode.Stockpile ? ItemView.StockpileColor with { A = 0.3f }
                 : CropFor(mode) is not null ? ItemView.FarmColor with { A = 0.3f }
                 : mode == ToolMode.Wall ? new Color(0.75f, 0.72f, 0.68f, 0.35f)
-                : mode == ToolMode.Cancel ? new Color(1f, 0.25f, 0.2f, 0.3f)
+                : mode is ToolMode.Cancel or ToolMode.Demolish ? new Color(1f, 0.25f, 0.2f, 0.3f)
                 : mode == ToolMode.None ? new Color(1, 1, 1, 0.2f)
                 : IsBuild(mode) ? new Color(1f, 0.68f, 0.3f, 0.3f)
                 : WorldView.DesignationColor(KindFor(mode, 0, 0, 0)) with { A = 0.3f });
@@ -676,7 +677,7 @@ public partial class DesignationTool : Node3D
 
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } mb
                 when Hovered is { } start && Mode != ToolMode.None:
-                _selection = mb.ShiftPressed && Mode != ToolMode.Cancel ? Selection.Cancel : Selection.Designate;
+                _selection = mb.ShiftPressed && Mode is not (ToolMode.Cancel or ToolMode.Demolish) ? Selection.Cancel : Selection.Designate;
                 _anchor = start;
                 (_cornerX, _cornerY, _cornerZ) = (start.X, start.Y, start.Z);
                 _surface.Clear(); // the ground may have changed since the last selection
@@ -789,6 +790,7 @@ public partial class DesignationTool : Node3D
             ToolMode.Part => new RemoveParts(a, b),
             ToolMode.Rack => cancel ? new RemoveStructures(a, b) : new PlaceRacks(a, b, _facing),
             ToolMode.Cancel => new CancelOrders(a, b),
+            ToolMode.Demolish => new Colony.Core.Commands.Demolish(a, b),
             ToolMode.Chop or ToolMode.Gather => cancel
                 ? new CancelPlants(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y)
                 : new DesignatePlants(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y),

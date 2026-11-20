@@ -465,7 +465,7 @@ public partial class HelpWindow : GlyphWindow
         ("Shift / Ctrl (tap)", "view level up / down"), ("Z X  (PgDn PgUp)", "view level down / up"), ("LMB drag, no tool", "move the view up / down levels"),
         ("Home", "look at the colony"), ("Space, 1 2 3", "pause, speed"),
         ("n y u k o", "dig, stairs, up, down, up/down stair"), ("t p", "chop trees, gather plants"),
-        ("Shift+P F B X", "stockpile, farm plot (again: next crop), dam wall, cancel box (also Del)"), ("Tab / Shift+Tab", "cycle the orders"),
+        ("Shift+P F B", "stockpile, farm plot (again: next crop), dam wall"), ("Shift+O, Shift+X", "demolish box, cancel box (also Del)"), ("Tab / Shift+Tab", "cycle the orders"),
         ("LMB, Shift+LMB", "start/confirm a box or place; removal box"), ("RMB click", "abort the box, then put the tool down"),
         ("Shift/Ctrl, Z X while boxing", "stretch the box over levels"),
         ("R, [ ]", "rotate, size of the part being placed"), ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor"),

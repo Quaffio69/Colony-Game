@@ -286,6 +286,18 @@ public partial class GameUi : CanvasLayer
         return (hover.Length > 0 ? $"{tool} · {hover}" : $"{tool} · n/u/k/o/t/p…: orders · B: build · RMB drag: pan · Esc: menu", false);
     }
 
+    /// <summary>"Saw horse planned: 0/2 logs here · no logs to bring: chop trees (t)" or "... waiting for a builder".</summary>
+    private string Waiting(string name, ItemType material, int needed, int delivered)
+    {
+        string mat = material.Name.ToLowerInvariant();
+        string s = $"{name} planned: {Math.Min(delivered, needed)}/{needed} {mat} here";
+        if (delivered >= needed) return s + " · waiting for a builder (Construction work)";
+        if (Count(material) - delivered > 0) return s + " · haulers will bring the rest";
+        string from = material == ItemType.Log ? "chop trees (t)" : material == ItemType.Plank ? "saw logs at a saw bench (Carpentry)"
+            : material == ItemType.Stone ? "dig rock (n)" : "make some";
+        return s + $" · no {mat} to bring: {from}";
+    }
+
     /// <summary>What is under the cursor: tile, plant, water, waterworks, farm plot, machine.</summary>
     public string HoverText()
     {
@@ -308,6 +320,11 @@ public partial class GameUi : CanvasLayer
         if (Tool.HoveredMachine() is { Recipe: { } making } hm)
             s += $", {hm.Name.ToLowerInvariant()} making {making.Name.ToLowerInvariant()} (F to change)";
         if (Sim.Rooms.RoomAt(above) is { } room) s += room.Faction == Me ? $" · {room.Name} (V: details)" : $" · {room.Name} of {Sim.Factions[room.Faction].Name}";
+        // Blueprints say what they wait for: their materials (and where those come from), or a builder.
+        if (Sim.Rooms.PartAt(above) is { Built: false } planned)
+            s += " · " + Waiting(planned.Name, planned.Cost.Material, planned.Cost.Count, planned.Cells.Sum(c => Sim.Items.TryGet(c, out var p) && p.Type == planned.Cost.Material ? p.Count : 0));
+        else if ((Sim.Constructions.At(above) ?? Sim.Constructions.CoverAt(above, false) ?? Sim.Constructions.CoverAt(above, true)) is { } site)
+            s += " · " + Waiting(Colony.Core.Orders.Constructions.Name(site.Kind), site.Cost.Material, site.Cost.Count, Colony.Core.Orders.Constructions.MaterialsOnSite(site, Sim.Items));
         if (Sim.Items.TryGet(above, out var pile) && pile.Count > 0) s += $" · {pile.Count} {pile.Type.Name.ToLowerInvariant()}";
         if (Sim.Wildlife.NestNear(above, 2) is { } nest)
             s += $" · {nest.Kind.Name.ToLowerInvariant()} nest of {nest.Total} ({(nest.HostileTo(Me, Sim.Tick) ? "hostile" : "calm, leave them be")}; G then click: attack)";

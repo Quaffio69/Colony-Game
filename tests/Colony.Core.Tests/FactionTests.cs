@@ -48,7 +48,7 @@ public class FactionTests
         var sim = TwoColonies();
         var dig = new TilePos(20, 20, 3);
         sim.Commands.Execute(new DesignateBox(dig, dig, DesignationKind.Dig));
-        Assert.Equal("Cancelled 0 designations, removed 0 stockpile and 0 farm cells", sim.Commands.Execute(new CancelOrders(dig, dig) { Player = 1 }));
+        Assert.Equal("Cancelled 0 designations and 0 plans, removed 0 stockpile and 0 farm cells", sim.Commands.Execute(new CancelOrders(dig, dig) { Player = 1 }));
         Assert.Equal("UpDownStair: designated 0 tiles", sim.Commands.Execute(new DesignateBox(dig, dig, DesignationKind.UpDownStair) { Player = 1 }));
         Assert.True(sim.Designations.TryGet(dig, out var kind) && kind == DesignationKind.Dig);
         Assert.StartsWith("Cancelled 1", sim.Commands.Execute(new CancelOrders(dig, dig)));

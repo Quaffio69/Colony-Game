@@ -175,3 +175,77 @@ public class StorageTests
         Assert.True(sim.Items.TryGet(sim.Colonists[0].Position, out var pile) && pile.Type == scaffold);
     }
 }
+
+/// <summary>Taking things away: the cancel box drops every plan, Demolish takes down what is built; founders can build a workshop.</summary>
+public class DemolishTests
+{
+    private static ColonySim Flat()
+    {
+        var w = new VoxelWorld(32, 32, 12);
+        for (int y = 0; y < 32; y++)
+        for (int x = 0; x < 32; x++)
+        {
+            for (int z = 0; z <= 2; z++) w.Set(x, y, z, TileType.Stone);
+            w.Set(x, y, 3, TileType.Grass);
+        }
+        return new ColonySim(w) { NeedsEnabled = false };
+    }
+
+    private static int WallsBuilt(ColonySim sim)
+    {
+        int n = 0;
+        for (int y = 0; y < 32; y++)
+        for (int x = 0; x < 32; x++)
+        {
+            if (sim.World.Edge(new TilePos(x, y, 4), EdgeInfo.East) != 0) n++;
+            if (sim.World.Edge(new TilePos(x, y, 4), EdgeInfo.North) != 0) n++;
+        }
+        return n;
+    }
+
+    [Fact]
+    public void TheCancelBox_DropsPlannedWalls()
+    {
+        var sim = Flat();
+        sim.Commands.Execute(new PlaceOutline(new TilePos(10, 10, 3), new TilePos(12, 12, 3), 2));
+        Assert.Equal(12, sim.Constructions.Count);
+        Assert.Contains("12 plans", sim.Commands.Execute(new CancelOrders(new TilePos(9, 9, 3), new TilePos(13, 13, 3))));
+        Assert.Equal(0, sim.Constructions.Count);
+    }
+
+    [Fact]
+    public void Demolish_TakesDownBuiltWalls_FloorsAndRacks_LeavingTheirMaterials()
+    {
+        var sim = Flat();
+        sim.Commands.Execute(new PlaceOutline(new TilePos(10, 10, 3), new TilePos(12, 12, 3), 2)); // plank walls
+        foreach (var bp in sim.Constructions.All.ToList()) sim.CompleteConstruction(bp);
+        Assert.Equal(12, WallsBuilt(sim));
+        sim.World.SetFloor(new TilePos(11, 11, 4), 1);
+        var rackCell = new TilePos(20, 20, 4);
+        sim.Stockpiles.Add(rackCell);
+        sim.Stockpiles.AddRack(rackCell, 2, 0);
+
+        // A box over the room's floor takes down its walls all round (the outline touches the box).
+        sim.Commands.Execute(new Demolish(new TilePos(10, 10, 3), new TilePos(12, 12, 3)));
+        Assert.Equal(0, WallsBuilt(sim));
+        Assert.Equal(0, sim.World.FloorAt(new TilePos(11, 11, 4)));
+        Assert.Equal(12 + 1, sim.Items.UnitsOf(ItemType.Plank)); // a plank a wall, and the plank floor
+        Assert.Contains("1 structures", sim.Commands.Execute(new Demolish(rackCell.Offset(0, 0, -1), rackCell.Offset(0, 0, -1))));
+        Assert.Empty(sim.Stockpiles.Racks);
+    }
+
+    [Fact]
+    public void Founders_BuildTheirFirstCarpentry_FromTheTimberTheyBring()
+    {
+        var sim = ColonySim.Generate(new Procedural.WorldGenSettings(Seed: 7, Width: 64, Depth: 64, Height: 40), colonists: 7);
+        Assert.Equal(ColonySim.StartingLogs, sim.Items.UnitsOf(ItemType.Log));
+        var c = sim.Colonists[0].Position;
+        var a = new TilePos(c.X + 2, c.Y + 2, c.Z - 1);
+        sim.Commands.Execute(new PaintRoom("carpentry", a, a.Offset(5, 4, 0)));
+        var room = Assert.Single(sim.Rooms.All);
+        foreach (var station in room.Type.Stations)
+            Assert.True(room.Cells.ToList().Exists(cell => sim.Commands.Execute(new PlacePart(station.Id, cell, false, 1)).StartsWith("Placed")), station.Name);
+        for (int t = 0; t < 8000 && !room.Parts.All(p => p.Built); t++) sim.Step();
+        Assert.All(room.Parts, p => Assert.True(p.Built, p.Name));
+    }
+}

@@ -67,7 +67,49 @@ public sealed record CancelOrders(TilePos A, TilePos B) : Command
         int orders = sim.Designations.CancelBox(A with { Z = Math.Min(A.Z, B.Z) }, B with { Z = Math.Max(A.Z, B.Z) + 1 }, Player);
         int zones = sim.Stockpiles.RemoveBox(A, B, Player);
         int plots = sim.Farms.RemoveBox(A, B, Player);
-        return $"Cancelled {orders} designations, removed {zones} stockpile and {plots} farm cells";
+        // Every plan in the box too: walls, doors, windows, floors, roofs, racks, waterworks and room parts not yet built.
+        int plans = sim.Constructions.CancelBox(A, B, Player) + sim.Rooms.RemovePartsIn(A, B, Player, onlyPlanned: true);
+        return $"Cancelled {orders} designations and {plans} plans, removed {zones} stockpile and {plots} farm cells";
+    }
+}
+
+/// <summary>
+/// Takes down everything built in a box (on the cells above its ground), at once, leaving its materials: thin walls,
+/// doors and windows on any edge touching the box, floors and roofs, storage racks, water wheels and pumps, and room
+/// parts. Plans there are cancelled too. (Solid dam walls are tiles: dig them out.)
+/// </summary>
+public sealed record Demolish(TilePos A, TilePos B) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        int x0 = Math.Min(A.X, B.X), x1 = Math.Max(A.X, B.X), y0 = Math.Min(A.Y, B.Y), y1 = Math.Max(A.Y, B.Y);
+        int z0 = Math.Min(A.Z, B.Z) + 1, z1 = Math.Max(A.Z, B.Z) + 1;
+        int plans = sim.Constructions.CancelBox(A, B, Player);
+        int walls = 0, structures = 0;
+        for (int z = z0; z <= z1; z++)
+        for (int y = y0 - 1; y <= y1; y++)
+        for (int x = x0 - 1; x <= x1; x++)
+        {
+            var c = new TilePos(x, y, z);
+            if (!sim.World.InBounds(c)) continue;
+            // Edges owned by this cell (east, north) that touch the box: inside it or on its outline.
+            if (y >= y0 && x <= x1 && sim.Constructions.Demolish(c, EdgeInfo.East, sim.Items)) walls++;
+            if (x >= x0 && y <= y1 && sim.Constructions.Demolish(c, EdgeInfo.North, sim.Items)) walls++;
+            if (x < x0 || y < y0) continue;
+            if (sim.Stockpiles.Racks.ContainsKey(c) && sim.Stockpiles.OwnerOf(c) != Player) continue; // another colony's rack
+            if (sim.RemoveStructure(c)) structures++;
+        }
+        int covers = sim.Constructions.ClearCoverBox(StructureKind.Floor, A, B, sim.Items, Player)
+                   + sim.Constructions.ClearCoverBox(StructureKind.Roof, A, B, sim.Items, Player);
+        // Built parts leave their materials (blueprints leave whatever was delivered, as ever).
+        var built = new List<Part>();
+        for (int z = z0; z <= z1; z++)
+        for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++)
+            if (sim.Rooms.PartAt(new TilePos(x, y, z)) is { Built: true } p && p.Room.Faction == Player && !built.Contains(p)) built.Add(p);
+        int parts = sim.Rooms.RemovePartsIn(A, B, Player);
+        foreach (var p in built) sim.Items.Drop(p.Cells[0], p.Cost.Material, p.Cost.Count);
+        return $"Demolished {walls} wall pieces, {covers} floors and roofs, {structures} structures, {parts} room parts; cancelled {plans} plans";
     }
 }
 

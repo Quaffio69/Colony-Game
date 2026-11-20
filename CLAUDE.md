@@ -181,7 +181,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   to march, a nest to attack; G/RMB/Esc: done), Shift+G stands everyone down. **Orders ribbon** (`UI.OrdersRibbon`): a
   pill row above the dock with every order's icon, name and hotkey (DF-style display: lowercase = the key, uppercase =
   Shift+key): n dig, y stairs, u up, k down, o up/down, t chop, p gather, P stockpile, F farm plot (again: next crop),
-  B dam wall, X (or Del) cancel box. DF letters where free (d/j/i are pan right, Work, Stocks). It shows while an order
+  B dam wall, O demolish box (DF o: remove construction), X (or Del) cancel box. DF letters where free (d/j/i are pan right, Work, Stocks). It shows while an order
   is in hand (any order hotkey brings it up) or while pinned by its own "Orders" pill (bottom left); clicking picks.
   Window hotkeys ignore Shift (shifted letters are orders). Ribbon and pill are `GlyphManager.Blockers` (no clicks
   through to the world). **Mouse:** no tool by default (`ToolMode.None`): LMB drag moves the view level (14 px a level,
@@ -369,7 +369,12 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - **Designations (DF-style UI):** click to anchor a corner, click again to apply; Z/X (or Shift/Ctrl taps) while
   selecting move the free corner between levels and the view follows. Tools (their ribbon hotkeys, or Tab/Shift+Tab):
   Dig, Stairs (auto: down on top, up/down between, up at bottom), Up, Down, Up/Down, ..., Cancel (the removal box as a
-  tool). Shift+click starts a removal box; a right click aborts the box, then puts the tool down.
+  tool: designations, zone cells and every plan in the box: walls, floors, racks, unbuilt room parts), Demolish (command
+  `Demolish`: takes down at once everything built in the box, leaving its materials: thin walls/doors/windows on any edge
+  touching it, so a box over a home's floor clears its walls all round; floors, roofs, racks, waterworks, room parts).
+  Shift+click starts a removal box; a right click aborts the box, then puts the tool down. Hovering a blueprint says
+  what it waits for (materials and where they come from, or a builder). Founders bring `StartingLogs` (20): enough for
+  a size-1 saw horse and joinery bench (2 logs each) and a scaffold.
   Exception: plant orders (Chop, Gather; `Designations.IsPlantOrder`) are 2D areas draped on the surface
   (`DesignatePlantArea`, any level, ignores the view level), since that work always happens on the surface;
   their marks are drawn whatever level is viewed. Dig/stairs/stockpiles/rooms stay level-based boxes.

@@ -185,7 +185,8 @@ public partial class BuildWindow : GlyphWindow
         ToolMode.Floor => "Floor over a box (homes count it)",
         ToolMode.Roof => "Roof over a box of floor (homes count it)",
         ToolMode.Rack => $"Shelving over stockpile cells: up to {Stockpiles.Capacity(Stockpiles.MaxRackLevels)} stacks a cell (Shift-drag takes racks down)",
-        ToolMode.Cancel => "Cancel designations and remove zone cells in a box",
+        ToolMode.Cancel => "Cancel designations and plans, remove zone cells in a box",
+        ToolMode.Demolish => "Take down what is built in a box; walls on its outline too",
         ToolMode.None => "Pick something to build or order",
         _ => "",
     };
@@ -216,7 +217,11 @@ public partial class BuildWindow : GlyphWindow
                 Order("♦", "good", "Gather plants", ToolMode.Gather, "Gather ripe plants in an area (berries, fiber, herbs)"),
             ]),
             new("Dams", () => [Order("#", "wall", "Stone wall", ToolMode.Wall, "Full wall cells for dams and canals (1 stone each)")]),
-            new("Cancel", () => [Order("×", "bad", "Cancel orders", ToolMode.Cancel, "Cancel designations and remove zone cells in a box")]),
+            new("Remove", () =>
+            [
+                Order("×", "bad", "Cancel orders", ToolMode.Cancel, "Cancel designations and plans (walls, floors, parts not yet built) and remove zone cells in a box"),
+                Order("▓", "warn", "Demolish", ToolMode.Demolish, "Take down everything built in a box (walls all round it, doors, windows, floors, roofs, racks, waterworks, room parts); materials are left"),
+            ]),
         ],
         1 =>
         [

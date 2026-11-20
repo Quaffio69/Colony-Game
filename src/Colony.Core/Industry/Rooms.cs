@@ -392,12 +392,12 @@ public sealed class Rooms
     }
 
     /// <summary>Removes every part with a cell in the box. Returns how many were removed.</summary>
-    public int RemovePartsIn(TilePos a, TilePos b, int faction = Owners.Any)
+    public int RemovePartsIn(TilePos a, TilePos b, int faction = Owners.Any, bool onlyPlanned = false)
     {
         var parts = new List<Part>();
         ForCells(a, b, c =>
         {
-            if (_cellPart.TryGetValue(c, out var p) && (faction == Owners.Any || p.Room.Faction == faction) && !parts.Contains(p)) parts.Add(p);
+            if (_cellPart.TryGetValue(c, out var p) && !(onlyPlanned && p.Built) && (faction == Owners.Any || p.Room.Faction == faction) && !parts.Contains(p)) parts.Add(p);
         });
         foreach (var p in parts) RemovePart(p);
         return parts.Count;

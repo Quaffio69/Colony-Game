@@ -360,6 +360,7 @@ public sealed partial class ColonySim
                     sim.Stockpiles.AddFloorBox(landing.Offset(-1, -1, -1), landing.Offset(1, 1, -1), f);
                 sim.Items.Drop(landing, ItemType.Berries, StartingBerries);
                 sim.Items.Drop(landing, Catalog.Item("bread"), StartingBread);
+                sim.Items.Drop(landing, ItemType.Log, StartingLogs);
             }
         }
 
@@ -496,6 +497,8 @@ public sealed partial class ColonySim
 
     /// <summary>Food the founders bring along, about two weeks for seven (dropped beside the landing place).</summary>
     public const int StartingBerries = 90, StartingBread = 48;
+    /// <summary>Timber the founders bring: enough for the first workshop stations (a saw horse and a joinery bench) and a scaffold.</summary>
+    public const int StartingLogs = 20;
 
     private readonly List<Colonist> _arriving = new();
     private bool _stepping;

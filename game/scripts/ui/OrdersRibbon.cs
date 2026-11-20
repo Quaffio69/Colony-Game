@@ -23,7 +23,7 @@ public partial class OrdersRibbon : Control
     /// <summary>
     /// The orders and their keys. DF: d mine, u/j/i stairs, t chop, p gather, x remove; d, j and i are taken here (pan
     /// right, Work, Stocks), so mine is n, down stair k, up/down stair o, and the removal box is X (Shift+X, or Del).
-    /// Stockpile (DF's p menu) is P, farm plot F (again: the next crop), dam wall B.
+    /// Stockpile (DF.s p menu) is P, farm plot F (again: the next crop), dam wall B, demolish O (DF o: remove construction).
     /// </summary>
     public static readonly Entry[] Entries =
     [
@@ -37,7 +37,8 @@ public partial class OrdersRibbon : Control
         new(ToolMode.Stockpile, "≡", "item", "Stockpile", Key.P, true, "Zone floor where haulers store goods (racks: Build, Zones)"),
         new(ToolMode.FarmGrain, "τ", "farm", "Farm", Key.F, true, "Farm plot: press again for the next crop (grain, herbs, glowcaps)"),
         new(ToolMode.Wall, "#", "wall", "Dam wall", Key.B, true, "Full stone wall cells for dams and canals (stack to raise)"),
-        new(ToolMode.Cancel, "×", "bad", "Cancel", Key.X, true, "Cancel designations and remove zone cells in a box (also Del)"),
+        new(ToolMode.Demolish, "▓", "warn", "Demolish", Key.O, true, "Take down what is built in a box: walls, doors, windows, floors, roofs, racks, waterworks, room parts (DF: o)"),
+        new(ToolMode.Cancel, "×", "bad", "Cancel", Key.X, true, "Cancel designations and plans (walls, floors, parts not yet built), remove zone cells (also Del)"),
     ];
 
     /// <summary>The order a key picks (null: not an order key).</summary>
