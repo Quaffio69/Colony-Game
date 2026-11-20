@@ -26,7 +26,7 @@ public partial class ColonistView : Node3D
     {
         public Colonist Colonist = null!;
         public Node3D Root = null!, Body = null!;
-        public MeshInstance3D Load = null!, Weapon = null!, Shield = null!, Armour = null!, Bar = null!, Marker = null!;
+        public MeshInstance3D Load = null!, Weapon = null!, Shield = null!, Armour = null!, Bar = null!, Marker = null!, Scaffold = null!;
         public ItemType? ShownWeapon, ShownShield, ShownArmour;
     }
 
@@ -99,10 +99,35 @@ public partial class ColonistView : Node3D
             Visible = false,
         };
         v.Root.AddChild(v.Marker);
+        v.Scaffold = new MeshInstance3D { Mesh = ScaffoldMesh, Visible = false, Name = "Scaffold" };
+        v.Root.AddChild(v.Scaffold);
         if (Main.StyledRender) // zoomed far out (all symbols), colonists always show as ☺ in their colour
             v.Root.AddChild(new DwarfRender.AsciiMarker { GlyphGroup = DwarfRender.GlyphAtlas.Dwarf, GlyphColour = Color.FromHsv(hue, 0.65f, 0.9f), Position = new Vector3(0, 0.5f, 0) });
         AddChild(v.Root);
         _views.Add(v);
+    }
+
+    private static Mesh? _scaffoldMesh;
+    /// <summary>A one-level scaffold standing in the colonist's cell: four poles, cross braces and a plank deck on top.</summary>
+    private static Mesh ScaffoldMesh => _scaffoldMesh ??= BuildScaffold();
+
+    private static Mesh BuildScaffold()
+    {
+        var pole = new StandardMaterial3D { AlbedoColor = new Color(0.62f, 0.47f, 0.3f), Roughness = 0.8f };
+        var deck = new StandardMaterial3D { AlbedoColor = new Color(0.74f, 0.6f, 0.4f), Roughness = 0.8f };
+        var rope = new StandardMaterial3D { AlbedoColor = new Color(0.82f, 0.76f, 0.6f), Roughness = 0.9f };
+        var p = new MeshKit.Parts();
+        foreach (float x in new[] { -0.38f, 0.38f })
+        foreach (float z in new[] { -0.38f, 0.38f })
+        {
+            p.Add(MeshKit.Cyl(0.03f, 1.0f, 6), x, 0.5f, z, pole);
+            p.Add(MeshKit.Cyl(0.04f, 0.05f, 6), x, 0.97f, z, rope); // lashing at the top
+        }
+        float len = Mathf.Sqrt(0.76f * 0.76f + 0.9f * 0.9f), a = Mathf.Atan2(0.76f, 0.9f);
+        foreach (float z in new[] { -0.38f, 0.38f }) p.Add(MeshKit.Box(0.03f, len, 0.03f), MeshKit.At(0, 0.5f, z, 0, 0, a), pole); // X braces on two sides
+        foreach (float x in new[] { -0.38f, 0.38f }) p.Add(MeshKit.Box(0.03f, len, 0.03f), MeshKit.At(x, 0.5f, 0, -a, 0, 0), pole);
+        for (int i = 0; i < 4; i++) p.Add(MeshKit.Box(0.86f, 0.04f, 0.2f), 0, 1.0f, -0.3f + i * 0.2f, deck);
+        return MeshKit.Compose(p);
     }
 
     private static MeshInstance3D Part(Node3D parent, Mesh mesh, Vector3 at)
@@ -158,7 +183,11 @@ public partial class ColonistView : Node3D
             v.Root.Scale = Vector3.One * (c.IsChild ? 0.6f : 1f);
             // Struck down: lying on its side.
             v.Body.Rotation = c.Downed ? new Vector3(0, v.Body.Rotation.Y, Mathf.Pi / 2) : new Vector3(0, v.Body.Rotation.Y, 0);
-            v.Body.Position = c.Downed ? new Vector3(-0.35f, 0.22f, 0) : Vector3.Zero;
+            // Working from a scaffold: it rises under the colonist as it is put up, and the colonist stands on its deck.
+            float scaffold = c.ScaffoldHeight;
+            v.Scaffold.Visible = scaffold > 0.01f;
+            if (v.Scaffold.Visible) v.Scaffold.Scale = new Vector3(1, scaffold, 1);
+            v.Body.Position = c.Downed ? new Vector3(-0.35f, 0.22f, 0) : new Vector3(0, scaffold > 0.01f ? scaffold * 1.02f : 0, 0);
             v.Weapon.Rotation = new Vector3(0, 0, swinging ? -1.2f * (1 - since / 8f) : 0.15f);
 
             // Carried load: a box on the head, coloured by item type.

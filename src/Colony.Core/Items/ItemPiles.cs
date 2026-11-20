@@ -79,9 +79,15 @@ public sealed class ItemPiles
     public int RoomAt(TilePos p, ItemType type)
     {
         if (!Movement.IsStandable(_world, p)) return 0;
-        if (!_piles.TryGetValue(p, out var pile)) return ItemInfo.StackLimit(type);
-        return pile.Type == type ? Math.Max(0, pile.Room) : 0;
+        if (!_piles.TryGetValue(p, out var pile)) return LimitAt(p, type);
+        return pile.Type == type ? Math.Max(0, LimitAt(p, type) - pile.Count - pile.Incoming) : 0;
     }
+
+    /// <summary>Stacks a cell holds (a storage rack holds several; set by <see cref="ColonySim"/>).</summary>
+    public Func<TilePos, int>? CapacityAt { get; set; }
+
+    /// <summary>Most units of <paramref name="type"/> the cell holds: a stack, times its rack's capacity.</summary>
+    public int LimitAt(TilePos p, ItemType type) => ItemInfo.StackLimit(type) * (CapacityAt?.Invoke(p) ?? 1);
 
     /// <summary>Promises <paramref name="amount"/> units of the pile to a hauler. False if not available.</summary>
     public bool Reserve(TilePos p, int amount)
@@ -158,9 +164,21 @@ public sealed class ItemPiles
         var to = Settle(p);
         if (to == p) return;
         _piles.Remove(p);
+        Tally(pile.Type, -pile.Count);
         Version++;
         LayoutVersion++;
         if (pile.Count > 0) Drop(to, pile.Type, pile.Count);
+    }
+
+    private int[] _units = new int[ItemInfo.TypeCount];
+
+    /// <summary>Units of a type lying anywhere (kept up to date as piles change: no scan).</summary>
+    public int UnitsOf(ItemType type) => type.Index < _units.Length ? _units[type.Index] : 0;
+
+    private void Tally(ItemType type, int delta)
+    {
+        if (type.Index >= _units.Length) Array.Resize(ref _units, type.Index + 1);
+        _units[type.Index] += delta;
     }
 
     /// <summary>Where something released at <paramref name="p"/> comes to rest.</summary>
@@ -192,12 +210,15 @@ public sealed class ItemPiles
         var pile = _piles.TryGetValue(p, out var existing) ? existing : new ItemPile(type, 0, 0, 0);
         if (pile.Type != type) throw new InvalidOperationException($"{p} holds {pile.Type}, not {type}");
         _piles[p] = pile with { Count = pile.Count + n };
+        Tally(type, n);
         Version++;
         LayoutVersion++;
     }
 
     private void Store(TilePos p, ItemPile pile)
     {
+        if (_piles.TryGetValue(p, out var old)) Tally(old.Type, -old.Count);
+        Tally(pile.Type, pile.Count);
         if (pile is { Count: 0, Reserved: 0, Incoming: 0 }) _piles.Remove(p);
         else _piles[p] = pile;
         Version++;
@@ -222,7 +243,12 @@ public sealed class ItemPiles
     {
         int n = r.ReadInt32();
         for (int i = 0; i < n; i++)
-            _piles[Net.SnapIO.ReadPos(r)] = new ItemPile(new ItemType(r.ReadUInt16()), r.ReadInt32(), r.ReadInt32(), r.ReadInt32());
+        {
+            var at = Net.SnapIO.ReadPos(r);
+            var pile = new ItemPile(new ItemType(r.ReadUInt16()), r.ReadInt32(), r.ReadInt32(), r.ReadInt32());
+            _piles[at] = pile;
+            Tally(pile.Type, pile.Count);
+        }
         Version = r.ReadInt32(); LayoutVersion = r.ReadInt32();
     }
 }

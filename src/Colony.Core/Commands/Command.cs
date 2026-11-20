@@ -189,8 +189,33 @@ public sealed record RemoveStructures(TilePos A, TilePos B) : Command
         for (int z = Math.Min(A.Z, B.Z); z <= Math.Max(A.Z, B.Z) + 1; z++)
         for (int y = Math.Min(A.Y, B.Y); y <= Math.Max(A.Y, B.Y); y++)
         for (int x = Math.Min(A.X, B.X); x <= Math.Max(A.X, B.X); x++)
-            if (sim.RemoveStructure(new TilePos(x, y, z))) built++;
-        return $"Removed {built} waterworks, cancelled {sim.Constructions.CancelBox(A, B, Player)} blueprints";
+        {
+            var c = new TilePos(x, y, z);
+            if (sim.Stockpiles.Racks.ContainsKey(c) && sim.Stockpiles.OwnerOf(c) != Player) continue; // another colony's rack
+            if (sim.RemoveStructure(c)) built++;
+        }
+        return $"Took down {built} structures, cancelled {sim.Constructions.CancelBox(A, B, Player)} blueprints";
+    }
+}
+
+/// <summary>Storage racks on every stockpile cell of this colony in a box (on the cells above its ground), fronts facing 0..3.</summary>
+public sealed record PlaceRacks(TilePos A, TilePos B, int Facing) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        int n = 0, planks = 0;
+        string? why = null;
+        for (int z = Math.Min(A.Z, B.Z); z <= Math.Max(A.Z, B.Z); z++)
+        for (int y = Math.Min(A.Y, B.Y); y <= Math.Max(A.Y, B.Y); y++)
+        for (int x = Math.Min(A.X, B.X); x <= Math.Max(A.X, B.X); x++)
+        {
+            var cell = new TilePos(x, y, z + 1);
+            if (!sim.World.InBounds(cell) || !TileInfo.IsSolid(sim.World.Get(x, y, z))) continue;
+            if (sim.Stockpiles.Contains(cell) && sim.Stockpiles.OwnerOf(cell) != Player) continue;
+            if (sim.Constructions.Place(StructureKind.Rack, cell, Facing, Player) is { } bp) { n++; planks += bp.Cost.Count; }
+            else why ??= sim.Constructions.CanPlace(StructureKind.Rack, cell);
+        }
+        return n > 0 ? $"Planned {n} storage racks: {planks} planks and builders" : $"No racks placed: {why ?? "no floor in the box"}";
     }
 }
 

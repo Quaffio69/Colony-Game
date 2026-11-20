@@ -214,8 +214,15 @@ public partial class GlyphManager : Control
         if (_overlay.GetChildren().OfType<Control>().Any(c => c.Visible)) return true;
         if (Hud.Visible && Hud.GetGlobalRect().HasPoint(point)) return true;
         if (_dock.GetGlobalRect().HasPoint(point)) return true;
+        if (Blockers.Any(c => c.IsVisibleInTree() && c.GetGlobalRect().HasPoint(point))) return true;
         return Windows.Any(w => w.Visible && w.GetGlobalRect().HasPoint(point));
     }
+
+    /// <summary>Other panels the world shouldn't see clicks through (the orders ribbon and its pill).</summary>
+    public readonly List<Control> Blockers = new();
+
+    /// <summary>The bottom row's dock pill, for panels laid out beside or above it.</summary>
+    public Rect2 DockRect => new(_dock.Position, _dock.Size);
 
     public bool MenuOpen => _overlay.GetChildren().OfType<Control>().Any(c => c.Visible);
 
@@ -260,7 +267,7 @@ public partial class GlyphManager : Control
             GetViewport().SetInputAsHandled();
             return;
         }
-        if (k.CtrlPressed || k.AltPressed) return;
+        if (k.CtrlPressed || k.AltPressed || k.ShiftPressed) return; // shifted letters are order hotkeys (OrdersRibbon)
         if (_hotkeys.TryGetValue(k.Keycode, out var w))
         {
             Toggle(w);

@@ -16,13 +16,15 @@ namespace ColonyGame;
 /// <summary>
 /// Mouse picking, DF-style box orders, zones, and the factory builder.
 /// <para>
-/// Box tools: click once to anchor a corner, move the mouse (Z/X extend the box across levels; the view
-/// follows), click again to apply. Right-click starts a removal box (or aborts a pending one); Esc aborts.
+/// No tool by default (<see cref="ToolMode.None"/>): left-drag moves the view up and down levels, right-drag pans (the
+/// camera rig), tapping Shift / Ctrl goes a level up / down. Box tools: click once to anchor a corner, move the mouse
+/// (Z/X or the Shift/Ctrl taps extend the box across levels; the view follows), click again to apply; Shift+click
+/// starts a removal box instead. A right click (not a drag) steps back: aborts the box, then drops the tool. Esc too.
 /// </para>
 /// <list type="bullet">
-/// <item>Orders (Tab / Shift+Tab): dig, stairs (auto / up / down / up-down), chop trees and gather plants
-/// (2D areas draped on the surface), stockpile zones, and farm plots (grain, herbs, glowcaps). Removal boxes
-/// cancel designations and remove zone cells.</item>
+/// <item>Orders (their DF-style hotkeys, see <see cref="UI.OrdersRibbon"/>; Tab / Shift+Tab cycle): dig, stairs
+/// (auto / up / down / up-down), chop trees and gather plants (2D areas draped on the surface), stockpile zones, farm
+/// plots (grain, herbs, glowcaps), dam walls, and the cancel box (designations and zone cells).</item>
 /// <item>Build (B opens the build menu): pick a workshop to paint its room (a box over the floor, any number
 /// of levels; it must stay one walkable piece, which the core enforces), then pick one of its stations, tools,
 /// lanterns or crates and click to place. R rotates, [ ] change size, F (Shift+F) changes what the machine
@@ -35,12 +37,12 @@ public partial class DesignationTool : Node3D
     public enum ToolMode
     {
         // Orders
-        Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, Wall,
+        None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, Wall, Cancel,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
-        Room, Part, Structure, Outline, Edge, WallLine, Floor, Roof,
+        Room, Part, Structure, Outline, Edge, WallLine, Floor, Roof, Rack,
     }
 
-    private const ToolMode LastOrder = ToolMode.Wall;
+    private const ToolMode LastOrder = ToolMode.Cancel;
     private enum Selection { None, Designate, Cancel }
 
     private ColonySim _sim = null!;
@@ -77,7 +79,7 @@ public partial class DesignationTool : Node3D
         _ => null,
     };
 
-    public ToolMode Mode { get; private set; } = ToolMode.Dig;
+    public ToolMode Mode { get; private set; } = ToolMode.None;
     /// <summary>The workshop the build menu is on (its room is painted by <see cref="ToolMode.Room"/>).</summary>
     public RoomType Workshop { get; private set; } = RoomType.Carpentry;
     /// <summary>The part placed by <see cref="ToolMode.Part"/>.</summary>
@@ -121,11 +123,12 @@ public partial class DesignationTool : Node3D
                 : $"Build: {PartInfo.Name(part)}";
         if (m == ToolMode.Structure) return $"Build: {Constructions.Name(Structure)} (facing {FacingName(_facing)}, R turns)";
         string mat = WallMaterials.All[WallMaterial].Name.ToLowerInvariant();
-        if (m == ToolMode.Outline) return $"Build: {mat} walls round a box (drag over the floor; RMB box clears walls)";
-        if (m == ToolMode.Edge) return $"Build: {Constructions.Name(EdgePiece).ToLowerInvariant()} ({mat}) on the cell edge under the cursor; RMB removes";
-        if (m == ToolMode.WallLine) return $"Build: a line of {Constructions.Name(EdgePiece).ToLowerInvariant()}s ({mat}): click an edge, drag along it, click; RMB drag removes";
-        if (m == ToolMode.Floor) return $"Build: {FloorMaterials.All[FloorMaterial].Name.ToLowerInvariant()} over a box of floor (RMB box takes floors up)";
-        if (m == ToolMode.Roof) return $"Build: {RoofMaterials.All[RoofMaterial].Name.ToLowerInvariant()} roof over a box of floor (RMB box takes roofs down)";
+        if (m == ToolMode.Outline) return $"Build: {mat} walls round a box (drag over the floor; Shift-drag clears walls)";
+        if (m == ToolMode.Edge) return $"Build: {Constructions.Name(EdgePiece).ToLowerInvariant()} ({mat}) on the cell edge under the cursor; Shift+click removes";
+        if (m == ToolMode.WallLine) return $"Build: a line of {Constructions.Name(EdgePiece).ToLowerInvariant()}s ({mat}): click an edge, drag along it, click; Shift starts a removal line";
+        if (m == ToolMode.Floor) return $"Build: {FloorMaterials.All[FloorMaterial].Name.ToLowerInvariant()} over a box of floor (Shift-drag takes floors up)";
+        if (m == ToolMode.Roof) return $"Build: {RoofMaterials.All[RoofMaterial].Name.ToLowerInvariant()} roof over a box of floor (Shift-drag takes roofs down)";
+        if (m == ToolMode.Rack) return $"Build: storage racks over stockpile cells (fronts face {FacingName(_facing)}, R turns; Shift-drag takes them down)";
         return m == ToolMode.Room ? $"Build: {Workshop.Name} room" : BaseModeName(m);
     }
 
@@ -133,6 +136,8 @@ public partial class DesignationTool : Node3D
 
     private static string BaseModeName(ToolMode m) => m switch
     {
+        ToolMode.None => "No tool (drag: levels · RMB drag: pan)",
+        ToolMode.Cancel => "Cancel orders (designations and zone cells in a box)",
         ToolMode.Dig => "Dig",
         ToolMode.Stairs => "Stairs (auto)",
         ToolMode.UpStair => "Up stair",
@@ -161,7 +166,13 @@ public partial class DesignationTool : Node3D
                 if (IsAreaTool(Mode))
                     return $"{what}: {w}x{d} area on the surface   click to confirm, Esc/RMB: abort";
                 string levels = h > 1 ? $"levels {Math.Min(a.Z, b.Z)}..{Math.Max(a.Z, b.Z)}" : $"level {a.Z}";
-                return $"{what}: {w}x{d}x{h} ({levels})   click to confirm, Z/X: change level, Esc/RMB: abort";
+                return $"{what}: {w}x{d}x{h} ({levels})   click to confirm, Shift/Ctrl or Z/X: change level, Esc/RMB: abort";
+            }
+            if (Mode == ToolMode.Rack)
+            {
+                int planks = Constructions.Cost(StructureKind.Rack, Colony.Core.Items.Stockpiles.MaxRackLevels).Count;
+                return $"Storage rack: rises up to {Colony.Core.Items.Stockpiles.MaxRackLevels} levels, holding {Colony.Core.Items.Stockpiles.Capacity(Colony.Core.Items.Stockpiles.MaxRackLevels)} stacks" +
+                       $"   cost {Constructions.RackPlanksPerLevel} planks a level ({planks} full height)   R: turn   drag a box over stockpile cells";
             }
             if (Mode == ToolMode.Structure)
             {
@@ -210,6 +221,7 @@ public partial class DesignationTool : Node3D
         ToolMode.Room => "Erase room",
         ToolMode.Part => "Remove parts",
         ToolMode.Structure => "Remove waterworks",
+        ToolMode.Rack => "Take racks down",
         ToolMode.Wall => "Cancel walls",
         _ => "Cancel",
     };
@@ -232,6 +244,8 @@ public partial class DesignationTool : Node3D
                 mode == ToolMode.Stockpile ? ItemView.StockpileColor with { A = 0.3f }
                 : CropFor(mode) is not null ? ItemView.FarmColor with { A = 0.3f }
                 : mode == ToolMode.Wall ? new Color(0.75f, 0.72f, 0.68f, 0.35f)
+                : mode == ToolMode.Cancel ? new Color(1f, 0.25f, 0.2f, 0.3f)
+                : mode == ToolMode.None ? new Color(1, 1, 1, 0.2f)
                 : IsBuild(mode) ? new Color(1f, 0.68f, 0.3f, 0.3f)
                 : WorldView.DesignationColor(KindFor(mode, 0, 0, 0)) with { A = 0.3f });
         _cancelMat = Overlay.Material(new Color(1f, 0.25f, 0.2f, 0.3f));
@@ -316,7 +330,10 @@ public partial class DesignationTool : Node3D
             _sizes[part] = PartInfo.ClampSize(part, SizeFor(part) + step);
     }
 
-    /// <summary>Esc: aborts a box or line in progress, else drops a build tool back to digging. False if neither applied.</summary>
+    /// <summary>
+    /// Esc, or a right click: one step back. Ends squad orders, aborts a box or line in progress, else drops the tool
+    /// (no tool: drag moves levels). False if there was nothing to undo.
+    /// </summary>
     public bool CancelPlacement()
     {
         if (SquadOrders)
@@ -329,9 +346,9 @@ public partial class DesignationTool : Node3D
             EndSelection();
             return true;
         }
-        if (IsBuild(Mode))
+        if (Mode != ToolMode.None)
         {
-            Mode = ToolMode.Dig;
+            Mode = ToolMode.None;
             EndSelection();
             return true;
         }
@@ -341,8 +358,41 @@ public partial class DesignationTool : Node3D
     /// <summary>Leaves any build tool (the Build window closed).</summary>
     public void LeaveBuild()
     {
-        if (IsBuild(Mode)) Mode = ToolMode.Dig;
+        if (IsBuild(Mode)) Mode = ToolMode.None;
         EndSelection();
+    }
+
+    /// <summary>Storage racks over stockpile cells (a box; R turns their fronts).</summary>
+    public void SelectRack()
+    {
+        Mode = ToolMode.Rack;
+        EndSelection();
+    }
+
+    /// <summary>
+    /// An order's hotkey (see <see cref="UI.OrdersRibbon"/>): picks it; the farm key again goes on to the next crop.
+    /// </summary>
+    public void PickOrder(ToolMode mode)
+    {
+        if (mode == ToolMode.FarmGrain && CropFor(Mode) is not null)
+            mode = Mode switch { ToolMode.FarmGrain => ToolMode.FarmHerbs, ToolMode.FarmHerbs => ToolMode.FarmGlowcaps, _ => ToolMode.FarmGrain };
+        SelectOrder(mode);
+    }
+
+    /// <summary>
+    /// One level up (+1) or down: moves a box's free corner while boxing (the view follows), else the view level.
+    /// Shift / Ctrl taps, Z/X and PgUp/PgDn.
+    /// </summary>
+    public void StepLevel(int step)
+    {
+        if (_sim == null) return;
+        if (_selection != Selection.None && !IsAreaTool(Mode))
+        {
+            _cornerZ = Math.Clamp(_cornerZ + step, 1, _sim.World.Height - 1);
+            _view.ViewLevel = _cornerZ;
+            UpdateBox();
+        }
+        else _view.ViewLevel += step;
     }
 
     public bool Selecting => _selection != Selection.None;
@@ -474,13 +524,90 @@ public partial class DesignationTool : Node3D
         }
     }
 
+    // ---- Mouse and keys -------------------------------------------------------------------------------------
+    // RMB: a drag pans (the camera rig does it); a click steps back (CancelPlacement). LMB with no tool: a drag moves
+    // the view level (up the screen = up). Shift / Ctrl tapped on their own: a level up / down.
+
+    /// <summary>Pixels of mouse travel that turn a click into a drag.</summary>
+    private const float ClickSlop = 6f;
+    /// <summary>Pixels of vertical drag per level, with no tool.</summary>
+    private const float PixelsPerLevel = 14f;
+    private Vector2 _rightDown;
+    private bool _rightPressed;
+    private bool _levelDrag;
+    private float _levelDragY;
+    private int _levelDragFrom;
+    private Key _tap = Key.None;
+
+    public override void _Input(InputEvent e)
+    {
+        // Shift / Ctrl on their own (pressed and released with nothing else in between): a level up / down. Watched
+        // here, before the UI, so a click or key while held (Shift+click, Ctrl+Tab) cancels the tap.
+        switch (e)
+        {
+            case InputEventKey { Keycode: Key.Shift or Key.Ctrl, Echo: true }:
+                break;
+            case InputEventKey { Keycode: Key.Shift or Key.Ctrl, Pressed: true } mk:
+                _tap = mk.Keycode;
+                break;
+            case InputEventKey { Keycode: Key.Shift or Key.Ctrl, Pressed: false } mk:
+                if (_tap == mk.Keycode && GetViewport().GuiGetFocusOwner() is not LineEdit && !(UI.GlyphManager.Instance?.MenuOpen ?? false))
+                    StepLevel(mk.Keycode == Key.Shift ? 1 : -1);
+                _tap = Key.None;
+                break;
+            case InputEventKey { Pressed: true }:
+            case InputEventMouseButton { Pressed: true }:
+                _tap = Key.None;
+                break;
+        }
+    }
+
     public override void _UnhandledInput(InputEvent e)
     {
         if (_sim == null || !_sim.WaterReady) return; // the world can't be edited while its water settles
+
+        // No tool: dragging moves the view level; let go to stop.
+        if (_levelDrag)
+        {
+            if (e is InputEventMouseMotion lm)
+            {
+                _view.ViewLevel = _levelDragFrom + (int)MathF.Round((_levelDragY - lm.Position.Y) / PixelsPerLevel);
+                Handled();
+                return;
+            }
+            if (e is InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false })
+            {
+                _levelDrag = false;
+                Handled();
+                return;
+            }
+        }
+        // A right click (not a drag: the rig pans with that) steps back. The press isn't taken, so the rig sees it.
+        if (e is InputEventMouseButton { ButtonIndex: MouseButton.Right } rb)
+        {
+            if (rb.Pressed)
+            {
+                _rightPressed = !OverMenu;
+                _rightDown = rb.Position;
+            }
+            else if (_rightPressed)
+            {
+                _rightPressed = false;
+                if (rb.Position.DistanceTo(_rightDown) <= ClickSlop && CancelPlacement()) Handled();
+            }
+            return;
+        }
         if (e is InputEventMouseButton && OverMenu) return;
 
         switch (e)
         {
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } lp when Mode == ToolMode.None && !SquadOrders:
+                _levelDrag = true;
+                _levelDragY = lp.Position.Y;
+                _levelDragFrom = _view.ViewLevel;
+                Handled();
+                break;
+
             // Squad orders: click the ground to march the drafted there, a nest to send them against it; RMB: done.
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when SquadOrders && _selection == Selection.None:
                 if (Hovered is { } spot)
@@ -489,10 +616,6 @@ public partial class DesignationTool : Node3D
                     if (_sim.Wildlife.NestNear(cell, 2) is { } nest) Issue(new SquadAttack(nest.Id));
                     else Issue(new SquadMove(cell));
                 }
-                Handled();
-                break;
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right } when SquadOrders && _selection == Selection.None:
-                SquadOrders = false;
                 Handled();
                 break;
             // G: draft everyone and give squad orders (again: done giving orders); Shift+G: stand everyone down.
@@ -512,21 +635,15 @@ public partial class DesignationTool : Node3D
                 break;
 
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when _selection != Selection.None:
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right } when _selection == Selection.Cancel:
                 Apply();
                 Handled();
                 break;
 
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Right } when _selection == Selection.Designate:
-                EndSelection();
-                Handled();
-                break;
-
-            // A wall line: click an edge to start it; then the free end follows the mouse along it (see UpdateLine).
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left or MouseButton.Right } lb when Mode == ToolMode.WallLine && _selection == Selection.None:
+            // A wall line: click an edge to start it (Shift: a removal line); then the free end follows the mouse along it (see UpdateLine).
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } lb when Mode == ToolMode.WallLine && _selection == Selection.None:
                 if (_hoverEdge is { } first)
                 {
-                    _selection = lb.ButtonIndex == MouseButton.Left ? Selection.Designate : Selection.Cancel;
+                    _selection = lb.ShiftPressed ? Selection.Cancel : Selection.Designate;
                     _lineStart = _lineEnd = first;
                     _anchor = first.Cell.Offset(0, 0, -1);
                     (_cornerX, _cornerY, _cornerZ) = (_anchor.X, _anchor.Y, _anchor.Z);
@@ -535,31 +652,31 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
-            // Edge pieces: click the edge under the cursor; right-click removes what is on it.
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left or MouseButton.Right } eb when Mode == ToolMode.Edge && _selection == Selection.None:
+            // Edge pieces: click the edge under the cursor; Shift+click removes what is on it.
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } eb when Mode == ToolMode.Edge && _selection == Selection.None:
                 if (_hoverEdge is { } edge)
                 {
-                    if (eb.ButtonIndex == MouseButton.Left) PlaceEdgePiece(edge);
+                    if (!eb.ShiftPressed) PlaceEdgePiece(edge);
                     else RemoveEdgePiece(edge);
                 }
                 Handled();
                 break;
 
-            // Waterworks go down with a single click too.
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when Mode == ToolMode.Structure:
+            // Waterworks go down with a single click too (Shift: a removal box).
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left, ShiftPressed: false } when Mode == ToolMode.Structure:
                 if (Hovered is { } st) PlaceStructure(st.Offset(0, 0, 1));
                 Handled();
                 break;
 
-            // Parts go down with a single click (no box).
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when PartFor(Mode) is { } part:
+            // Parts go down with a single click (no box; Shift: a removal box).
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left, ShiftPressed: false } when PartFor(Mode) is { } part:
                 if (Hovered is { } at) PlacePart(part, at.Offset(0, 0, 1));
                 Handled();
                 break;
 
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left or MouseButton.Right } mb
-                when Hovered is { } start:
-                _selection = mb.ButtonIndex == MouseButton.Left ? Selection.Designate : Selection.Cancel;
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } mb
+                when Hovered is { } start && Mode != ToolMode.None:
+                _selection = mb.ShiftPressed && Mode != ToolMode.Cancel ? Selection.Cancel : Selection.Designate;
                 _anchor = start;
                 (_cornerX, _cornerY, _cornerZ) = (start.X, start.Y, start.Z);
                 _surface.Clear(); // the ground may have changed since the last selection
@@ -571,9 +688,7 @@ public partial class DesignationTool : Node3D
             // While selecting, Z/X move the free corner between levels and the view follows it (DF-style cursor).
             case InputEventKey { Pressed: true, Keycode: Key.Z or Key.X or Key.Pagedown or Key.Pageup } k
                 when _selection != Selection.None && !IsAreaTool(Mode):
-                int step = k.Keycode is Key.X or Key.Pageup ? 1 : -1;
-                _cornerZ = Math.Clamp(_cornerZ + step, 1, _sim.World.Height - 1);
-                _view.ViewLevel = _cornerZ;
+                StepLevel(k.Keycode is Key.X or Key.Pageup ? 1 : -1);
                 Handled();
                 break;
 
@@ -583,7 +698,7 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
-            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.R } when PartFor(Mode) is not null || Mode == ToolMode.Structure:
+            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.R } when PartFor(Mode) is not null || Mode is ToolMode.Structure or ToolMode.Rack:
                 Rotate();
                 Handled();
                 break;
@@ -609,6 +724,12 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
             }
+
+            // The orders' hotkeys (DF-style; the ribbon shows them).
+            case InputEventKey { Pressed: true, Echo: false, CtrlPressed: false, AltPressed: false } ok when UI.OrdersRibbon.OrderFor(ok.Keycode, ok.ShiftPressed) is { } order:
+                PickOrder(order);
+                Handled();
+                break;
 
             case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Enter or Key.KpEnter }:
                 Issue(new DebugCompleteAll());
@@ -666,6 +787,8 @@ public partial class DesignationTool : Node3D
             ToolMode.Wall => cancel ? new CancelWalls(a, b) : new PlaceWalls(a, b),
             ToolMode.Structure => new RemoveStructures(a, b),
             ToolMode.Part => new RemoveParts(a, b),
+            ToolMode.Rack => cancel ? new RemoveStructures(a, b) : new PlaceRacks(a, b, _facing),
+            ToolMode.Cancel => new CancelOrders(a, b),
             ToolMode.Chop or ToolMode.Gather => cancel
                 ? new CancelPlants(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y)
                 : new DesignatePlants(KindFor(Mode, 0, 0, 0), a.X, a.Y, b.X, b.Y),

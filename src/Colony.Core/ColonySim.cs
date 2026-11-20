@@ -78,6 +78,11 @@ public sealed partial class ColonySim
     public Fluids.Waterworks Waterworks { get; } = new();
     /// <summary>Walls, wheels and pumps waiting to be built.</summary>
     public Constructions Constructions { get; }
+    /// <summary>Grass growing back over dug-out dirt.</summary>
+    public Regrowth Regrowth { get; } = new();
+
+    /// <summary>Whether a scaffold lies anywhere (a running count, so colonists don't scan the piles for one).</summary>
+    internal bool AnyScaffold => Items.UnitsOf(Colonist.ScaffoldItem) > 0;
     /// <summary>Wild creatures and their nests (giant ants).</summary>
     public Combat.Wildlife Wildlife { get; } = new();
     /// <summary>Colonists who died (stats).</summary>
@@ -102,7 +107,9 @@ public sealed partial class ColonySim
         Rooms = new Rooms(world);
         Farms = new Farms(world);
         Water = new Fluids.Water(world);
-        Constructions = new Constructions(world) { IsOccupied = c => Waterworks.Occupied(c) };
+        Constructions = new Constructions(world) { IsOccupied = c => Waterworks.Occupied(c) || Stockpiles.Racks.ContainsKey(c), IsStorage = c => Stockpiles.Contains(c) };
+        Items.CapacityAt = Stockpiles.CapacityAt;
+        Stockpiles.RackLost = (c, rack) => Items.Drop(c, ItemType.Plank, Constructions.Cost(StructureKind.Rack, rack.Levels).Count);
         // A floor cell is storage, factory or farm: never two of them.
         Stockpiles.IsBlocked = c => Rooms.RoomAt(c) is not null || Farms.Contains(c);
         Rooms.IsBlocked = c => Stockpiles.Contains(c) || Farms.Contains(c);
@@ -157,7 +164,11 @@ public sealed partial class ColonySim
         Rooms.ValidateCell(above); // a room floor dug out (or carved into stairs)
         Rooms.ValidateCell(p);
 
-        if (kind == DesignationKind.Dig) CheckSupport(p);
+        if (kind == DesignationKind.Dig)
+        {
+            Regrowth.Watch(World, p.Offset(0, 0, -1), Tick); // fresh dirt laid bare: grass creeps back over it
+            CheckSupport(p);
+        }
         return true;
     }
 
@@ -200,6 +211,9 @@ public sealed partial class ColonySim
             case StructureKind.WaterWheel:
                 Waterworks.AddWheel(Water, cell, bp.Facing);
                 break;
+            case StructureKind.Rack:
+                if (!Stockpiles.AddRack(cell, bp.Material, bp.Facing)) Items.Drop(cell, bp.Cost.Material, bp.Cost.Count); // its zone went meanwhile
+                break;
             default:
                 Waterworks.AddPump(cell, bp.Facing);
                 break;
@@ -209,6 +223,7 @@ public sealed partial class ColonySim
     /// <summary>Takes down the wheel or pump in a cell, leaving its materials behind. False if there is none.</summary>
     public bool RemoveStructure(TilePos cell)
     {
+        if (Stockpiles.RemoveRack(cell)) return true; // its planks are dropped (RackLost)
         var thing = Waterworks.Remove(cell);
         if (thing is null) return false;
         var cost = Constructions.Cost(thing is Fluids.Pump ? StructureKind.Pump : StructureKind.WaterWheel);
@@ -596,6 +611,7 @@ public sealed partial class ColonySim
         _tickNodeStart = Pathfinder.NodesExpanded;
         if (_waterworksDue) RunWaterworks(); // the step begun at the end of the last tick lands first
         Farms.Tick(Tick, Flora, Designations, Water);
+        Regrowth.Tick(this);
         CheckEvents();
         if (_arriving.Count > 0)
         {
@@ -754,6 +770,7 @@ public sealed partial class ColonySim
             f.Housing.SnapSave(w);
         }
         Net.SnapIO.Section(w, "wildlife"); Wildlife.SnapSave(w);
+        Net.SnapIO.Section(w, "regrowth"); Regrowth.SnapSave(w);
         Net.SnapIO.Section(w, "sim");
         w.Write(Tick); w.Write(PathSearches); w.Write(CaveInCount); w.Write(ItemsProduced); w.Write(ColonistsEver);
         w.Write(_families); w.Write(_eventRoomsVersion); w.Write(_waterworksDue); w.Write(NeedsEnabled); w.Write(Deaths);
@@ -812,6 +829,7 @@ public sealed partial class ColonySim
             f.Housing.SnapLoad(r, sim.Rooms, byId);
         }
         Net.SnapIO.Section(r, "wildlife"); sim.Wildlife.SnapLoad(r);
+        if (!Net.SnapIO.Before(3)) { Net.SnapIO.Section(r, "regrowth"); sim.Regrowth.SnapLoad(r); }
         Net.SnapIO.Section(r, "sim");
         sim.Tick = r.ReadInt64(); sim.PathSearches = r.ReadInt64(); sim.CaveInCount = r.ReadInt32(); sim.ItemsProduced = r.ReadInt64();
         sim.ColonistsEver = r.ReadInt32(); sim._families = r.ReadInt32(); sim._eventRoomsVersion = r.ReadInt32();

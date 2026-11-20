@@ -33,6 +33,8 @@ public partial class GameUi : CanvasLayer
     private readonly Dictionary<string, GlyphWindow> _windows = new();
     private readonly MainMenu _menu;
     private BuildWindow _build = null!;
+    /// <summary>The orders ribbon above the dock (and its pill).</summary>
+    public OrdersRibbon Ribbon { get; private set; } = null!;
 
     public GameUi(Main main)
     {
@@ -59,6 +61,8 @@ public partial class GameUi : CanvasLayer
         Add(new GraphicsWindow(this), Key.F10);
 
         BuildHud();
+        Ribbon = new OrdersRibbon(this) { Name = "OrdersRibbon" };
+        _m.AddChild(Ribbon);
         _m.AddChild(new ProfilerPanel(this) { Name = "Profiler" });
         _menu = new MainMenu(this);
         _m.Overlay.AddChild(_menu);
@@ -138,7 +142,7 @@ public partial class GameUi : CanvasLayer
         row.AddChild(Space(2));
         _level = G.Text("", "Dim");
         _level.MouseFilter = Control.MouseFilterEnum.Pass;
-        _level.WithBanner(() => "View level · Z/X or PgDn/PgUp: down/up");
+        _level.WithBanner(() => "View level · tap Shift / Ctrl: up / down · drag with no tool · Z/X, PgDn/PgUp");
         row.AddChild(_level);
         row.AddChild(Space(2));
         _speed = new GlyphSegmented(["‖", "►", "►►", "►►►"], 1, i =>
@@ -279,7 +283,7 @@ public partial class GameUi : CanvasLayer
         if (Tool.SelectionInfo is { } sel) return (sel, true);
         string tool = Tool.SquadOrders ? "Squad orders: click ground to march, a nest to attack it · RMB: done" : Tool.ModeName(Tool.Mode);
         string hover = HoverText();
-        return (hover.Length > 0 ? $"{tool} · {hover}" : $"{tool} · Tab: orders · B: build · Esc: menu", false);
+        return (hover.Length > 0 ? $"{tool} · {hover}" : $"{tool} · n/u/k/o/t/p…: orders · B: build · RMB drag: pan · Esc: menu", false);
     }
 
     /// <summary>What is under the cursor: tile, plant, water, waterworks, farm plot, machine.</summary>

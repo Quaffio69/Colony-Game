@@ -149,6 +149,7 @@
     { "id": "gold_leaf", "name": "Gold Leaf", "category": "metal", "uses": ["temple decoration"], "model": "paper", "color": "#ffd94d" },
 
     { "id": "tools", "name": "Tools", "category": "component", "uses": ["tool racks and cribs (aux parts)", "construction"], "model": "crates", "color": "#8c6640" },
+    { "id": "scaffold", "name": "Scaffold", "category": "component", "uses": ["reaching high work: a colonist carries it there, sets it up, stands on it and takes it down after"], "model": "scaffold", "color": "#c49a5e", "stack": 10, "carry": 1 },
     { "id": "cogs", "name": "Cogs", "category": "component", "model": "gears", "color": "#c79a4d" },
     { "id": "springs", "name": "Springs", "category": "component", "model": "springs", "color": "#a6b3c4" },
     { "id": "wire", "name": "Copper Wire", "category": "component", "model": "coils", "color": "#e0803a" },
@@ -220,6 +221,7 @@
     { "output": "spear", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks*2", "stone"] },
     { "output": "bow", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks*2", "rope"] },
     { "output": "wooden_shield", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks*3"] },
+    { "output": "scaffold", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["logs*2"] },
     { "output": "wooden_ware", "count": 3, "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks"] },
 
     { "output": "charcoal", "count": 2, "workshop": "kiln", "station": "charcoal_clamp", "education": "Unskilled", "inputs": ["logs"] },

@@ -2,7 +2,7 @@ using Godot;
 
 namespace ColonyGame;
 
-/// <summary>Orbiting strategy camera: WASD pan, Q/E rotate, wheel zoom, middle-mouse drag to orbit.</summary>
+/// <summary>Orbiting strategy camera: WASD or right-drag pan, Q/E rotate, wheel zoom, middle-mouse drag to orbit.</summary>
 public partial class CameraRig : Node3D
 {
     [Export] public float PanSpeed { get; set; } = 30f;
@@ -123,11 +123,36 @@ public partial class CameraRig : Node3D
             case InputEventMouseButton { ButtonIndex: MouseButton.Middle } mb:
                 _orbiting = mb.Pressed;
                 break;
+            case InputEventMouseButton { ButtonIndex: MouseButton.Right } rb:
+                _panning = rb.Pressed;
+                _panTravel = 0;
+                break;
             case InputEventMouseMotion motion when _orbiting:
                 _yaw -= motion.Relative.X * 0.3f;
                 _pitch = Mathf.Clamp(_pitch - motion.Relative.Y * 0.3f, -89f, -10f);
                 break;
+            case InputEventMouseMotion motion when _panning:
+                if ((motion.ButtonMask & MouseButtonMask.Right) == 0) { _panning = false; break; } // let go outside the window
+                _panTravel += motion.Relative.Length();
+                if (_panTravel > 6f) Pan(motion.Relative); // under that it is a right click (DesignationTool: step back)
+                break;
         }
+    }
+
+    private bool _panning;
+    private float _panTravel;
+
+    /// <summary>
+    /// Right-drag: the ground follows the mouse. One pixel is the view's height over the screen's at the pivot; up and
+    /// down the screen cover more ground the flatter the view (1 / sin pitch).
+    /// </summary>
+    private void Pan(Vector2 pixels)
+    {
+        float height = Mathf.Max(1f, GetViewport().GetVisibleRect().Size.Y);
+        float perPixel = 2f * _distance * Mathf.Tan(Mathf.DegToRad((_camera?.Fov ?? 75f) * 0.5f)) / height;
+        float sin = Mathf.Max(0.25f, Mathf.Abs(Mathf.Sin(Mathf.DegToRad(ShownPitch))));
+        var yawBasis = new Basis(Vector3.Up, Mathf.DegToRad(ShownYaw));
+        Position += yawBasis * new Vector3(-pixels.X * perPixel, 0, -pixels.Y * perPixel / sin);
     }
 
     /// <summary>

@@ -9,7 +9,7 @@ namespace Colony.Core.Agents;
 public enum ColonistState { Idle, Moving, Working }
 
 /// <summary>What a colonist is doing beyond walking: a designation, one leg of a haul trip, factory work, or a meal.</summary>
-public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver, Equip, Fight, Flee, Rally }
+public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver, Equip, Fight, Flee, Rally, ScaffoldFetch }
 
 /// <summary>Broad kinds of work a colonist may prefer (see <see cref="Colonist.Labors"/>); each covers some <see cref="Work"/> types.</summary>
 public enum Labor { Designations, Hauling, Industry }
@@ -173,7 +173,7 @@ public sealed partial class Colonist
     /// <summary>The work type of what it is doing now (null when idle, eating or sleeping).</summary>
     public Work? CurrentWork => Task switch
     {
-        ColonistTask.Designation => WorkOf(_jobKind),
+        ColonistTask.Designation or ColonistTask.ScaffoldFetch => WorkOf(_jobKind),
         ColonistTask.Build => Work.Construction,
         ColonistTask.CraftFetch or ColonistTask.CraftWork or ColonistTask.CraftStore => Work.Industry,
         ColonistTask.HaulPickup or ColonistTask.HaulDeliver or ColonistTask.FurnishPickup or ColonistTask.FurnishDeliver => Work.Hauling,
@@ -278,7 +278,7 @@ public sealed partial class Colonist
 
     private static Labor LaborOf(ColonistTask task) => task switch
     {
-        ColonistTask.Designation or ColonistTask.Build => Labor.Designations,
+        ColonistTask.Designation or ColonistTask.Build or ColonistTask.ScaffoldFetch => Labor.Designations,
         ColonistTask.CraftFetch or ColonistTask.CraftWork or ColonistTask.CraftStore => Labor.Industry,
         _ => Labor.Hauling,
     };
@@ -463,6 +463,8 @@ public sealed partial class Colonist
 
     private string DescribeWork() => (Task, State) switch
     {
+        (ColonistTask.ScaffoldFetch, _) => DescribeScaffold(),
+        (ColonistTask.Designation, _) when _scaffold != ScaffoldStep.None => DescribeScaffold(),
         (ColonistTask.Designation, ColonistState.Moving) => $"walking to job at {JobTarget}",
         (ColonistTask.Designation, ColonistState.Working) =>
             $"working at {JobTarget} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
@@ -499,8 +501,10 @@ public sealed partial class Colonist
         TickRest(sim);
         if (TickCombat(sim)) return; // down, drafted, fighting back or fleeing: that is the whole tick
 
-        if (Task == ColonistTask.Designation && JobTarget is { } job && !sim.Designations.IsClaimedBy(job, Id))
+        if (Task == ColonistTask.Designation && _scaffold != ScaffoldStep.Strike && JobTarget is { } job && !sim.Designations.IsClaimedBy(job, Id))
             Abandon(sim); // cancelled, re-designated, or completed by someone else
+        else if (Task == ColonistTask.ScaffoldFetch && !sim.Designations.IsClaimedBy(_scaffoldJob, Id))
+            Abandon(sim); // the work it wanted the scaffold for went away
         else if (Task == ColonistTask.Build && _build.Removed)
             Abandon(sim); // the blueprint was cancelled (or its floor lost)
         else if (Task is ColonistTask.CraftFetch or ColonistTask.CraftWork && _craft.Machine.Removed)
@@ -544,7 +548,11 @@ public sealed partial class Colonist
                 if (++WorkDone < WorkRequired) return;
                 switch (Task)
                 {
+                    case ColonistTask.ScaffoldFetch:
+                        PickUpScaffold(sim);
+                        break;
                     case ColonistTask.Designation:
+                        if (ScaffoldWorkStep(sim)) break;
                         if (!InReach(Position, JobTarget!.Value))
                         {
                             Abandon(sim);
@@ -694,12 +702,22 @@ public sealed partial class Colonist
     private bool TryTakeJob(ColonySim sim, int component, int kinds)
     {
         var orders = sim.Designations;
-        foreach (var job in sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed, kinds, Filter(sim)))
+        var candidates = sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed, kinds, Filter(sim), scaffolds: sim.AnyScaffold);
+        // Jobs only a scaffold reaches crowd out the rest when there is no scaffold to fetch: look again without them.
+        TilePos? scaffold = null;
+        if (candidates.Exists(j => Array.IndexOf(j.Components, component) < 0) && (scaffold = NearestScaffold(sim, component)) is null)
+            candidates = sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed, kinds, Filter(sim));
+        foreach (var job in candidates)
         {
             if (sim.PathBudgetExhausted)
             {
                 _deferred = true;
                 return false;
+            }
+            if (Array.IndexOf(job.Components, component) < 0)
+            {
+                if (scaffold is { } at && TryFetchScaffold(sim, job, at, component)) return true;
+                continue;
             }
             var goals = new HashSet<TilePos>();
             foreach (var s in job.WorkSpots)
@@ -1083,7 +1101,7 @@ public sealed partial class Colonist
         {
             ColonistTask.CraftWork => _craft.Machine.Cells.Any(c => InReach(Position, c)), // machines can be several tiles long
             ColonistTask.Build => _build.InReach(Position),
-            _ => InReach(Position, target),
+            _ => InReach(ReachFrom, target), // from the cell above when bringing a scaffold
         };
         if (!inReach)
         {
@@ -1124,7 +1142,15 @@ public sealed partial class Colonist
                     Abandon(sim);
                     return;
                 }
+                if (_scaffold == ScaffoldStep.Carry)
+                {
+                    if (!BeginErect(sim)) Abandon(sim);
+                    return;
+                }
                 StartWorking(sim.WorkTicks(target, kind));
+                break;
+            case ColonistTask.ScaffoldFetch:
+                StartWorking(HandleTicks);
                 break;
             case ColonistTask.HaulPickup:
             case ColonistTask.HaulDeliver:
@@ -1182,6 +1208,7 @@ public sealed partial class Colonist
     /// <summary>Task done: back to idle, looking for work straight away.</summary>
     private void Finish()
     {
+        _scaffold = ScaffoldStep.None;
         _trip = null;
         Task = ColonistTask.None;
         JobTarget = null;
@@ -1192,6 +1219,7 @@ public sealed partial class Colonist
     /// <summary>Gives up the current task, releasing every claim and reservation and dropping any load.</summary>
     private void Abandon(ColonySim sim)
     {
+        AbandonScaffold(sim);
         switch (Task)
         {
             case ColonistTask.Designation when JobTarget is { } t:
@@ -1371,6 +1399,8 @@ public sealed partial class Colonist
         _meal = default;
         _furnish = default;
         _haulDestination = "stockpile";
+        _scaffold = ScaffoldStep.None;
+        _scaffoldSource = _scaffoldJob = default;
         SettleCombat();
         JobTarget = null;
         NextStep = null;

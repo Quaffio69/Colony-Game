@@ -101,7 +101,7 @@ public partial class ItemView : Node3D
         if (level != _drawnLevel)
             foreach (var m in _materials) m.SetShaderParameter("cut_height", (float)(level + 1));
 
-        if (_sim.Items.LayoutVersion != _drawnLayout) RedrawPiles();
+        if (_sim.Items.LayoutVersion != _drawnLayout || _sim.Stockpiles.RackVersion != _drawnRacks) RedrawPiles();
         if (_sim.Stockpiles.Version != _drawnZones || level != _drawnLevel)
         {
             _drawnZones = _sim.Stockpiles.Version;
@@ -115,13 +115,29 @@ public partial class ItemView : Node3D
         _drawnLevel = level;
     }
 
+    private int _drawnRacks = -1;
+
     private void RedrawPiles()
     {
         _drawnLayout = _sim.Items.LayoutVersion;
-        var byType = new List<(TilePos Pos, ItemPile Pile)>[ItemInfo.TypeCount];
-        for (int t = 0; t < byType.Length; t++) byType[t] = new List<(TilePos, ItemPile)>();
+        _drawnRacks = _sim.Stockpiles.RackVersion;
+        // One instance per pile, or on a storage rack one per stack it holds, shelf by shelf from the floor up.
+        var byType = new List<(Vector3 At, float Fill, float Shrink, float Turn)>[ItemInfo.TypeCount];
+        for (int t = 0; t < byType.Length; t++) byType[t] = new List<(Vector3, float, float, float)>();
         foreach (var (p, pile) in _sim.Items.All)
-            if (pile.Count > 0) byType[pile.Type.Index].Add((p, pile));
+        {
+            if (pile.Count <= 0) continue;
+            int limit = ItemInfo.StackLimit(pile.Type);
+            var foot = new Vector3(p.X + 0.5f, p.Z, p.Y + 0.5f);
+            float turn = (p.X * 7 + p.Y * 13) % 4 * Mathf.Pi / 2; // neighbouring piles don't look stamped
+            if (_sim.Stockpiles.Racks.TryGetValue(p, out var rack))
+            {
+                int shelves = Stockpiles.Capacity(rack.Levels);
+                for (int s = 0, left = pile.Count; s < shelves && left > 0; s++, left -= limit)
+                    byType[pile.Type.Index].Add((foot + new Vector3(0, s * RackView.ShelfStep + (s > 0 ? RackView.BoardThickness : 0), 0), Mathf.Min(1f, left / (float)limit), 0.62f, rack.Facing * Mathf.Pi / 2));
+            }
+            else byType[pile.Type.Index].Add((foot, Mathf.Clamp(pile.Count / (float)limit, 0.05f, 1.5f), 1f, turn));
+        }
 
         for (int t = 0; t < byType.Length; t++)
         {
@@ -130,12 +146,10 @@ public partial class ItemView : Node3D
             mm.InstanceCount = list.Count;
             for (int i = 0; i < list.Count; i++)
             {
-                var (p, pile) = list[i];
-                float fill = Mathf.Clamp(pile.Count / (float)ItemInfo.StackLimit(pile.Type), 0.05f, 1.5f);
+                var (at, fill, shrink, turn) = list[i];
                 // Heaps rise as they fill; piles of objects scale as a whole (they'd look squashed otherwise).
-                var scale = _growsTall[t] ? new Vector3(1, 0.25f + 0.75f * fill, 1) : Vector3.One * (0.6f + 0.4f * Mathf.Min(fill, 1f));
-                float turn = (p.X * 7 + p.Y * 13) % 4 * Mathf.Pi / 2; // neighbouring piles don't look stamped
-                mm.SetInstanceTransform(i, new Transform3D(new Basis(Vector3.Up, turn).Scaled(scale), new Vector3(p.X + 0.5f, p.Z, p.Y + 0.5f)));
+                var scale = (_growsTall[t] ? new Vector3(1, 0.25f + 0.75f * fill, 1) : Vector3.One * (0.6f + 0.4f * Mathf.Min(fill, 1f))) * shrink;
+                mm.SetInstanceTransform(i, new Transform3D(new Basis(Vector3.Up, turn).Scaled(scale), at));
                 mm.SetInstanceCustomData(i, new Color(1, 1, 1));
             }
         }
@@ -417,6 +431,17 @@ public partial class ItemView : Node3D
                 p.Add(Ring(0.24f, 0.26f, 20), At(0, 0.45f, 0, 0.3f), m);
                 p.Add(Ring(0.17f, 0.19f, 20), At(0, 0.45f, 0, -0.4f, 0.5f), m);
                 p.Add(Ball(0.04f), 0.25f, 0.5f, 0, _metal);
+                break;
+            case "scaffold": // folded down: two ladder-like side frames and the deck boards, lashed together
+                foreach (float z in new[] { -0.22f, 0.22f })
+                {
+                    p.Add(Cyl(0.03f, 0.82f, 6), AlongX(0, 0.05f, z - 0.06f), m);
+                    p.Add(Cyl(0.03f, 0.82f, 6), AlongX(0, 0.05f, z + 0.06f), m);
+                    for (int i = 0; i < 4; i++) p.Add(Box(0.03f, 0.03f, 0.14f), -0.3f + i * 0.2f, 0.05f, z, m);
+                }
+                for (int i = 0; i < 3; i++) p.Add(Box(0.8f, 0.04f, 0.16f), 0, 0.12f + i * 0.045f, -0.16f + i * 0.16f, _wood);
+                p.Add(Cyl(0.035f, 0.08f, 8), AlongZ(-0.2f, 0.12f, 0), _cloth); // the lashing
+                p.Add(Cyl(0.035f, 0.08f, 8), AlongZ(0.2f, 0.12f, 0), _cloth);
                 break;
             default:
                 p.Add(Box(0.6f, 0.4f, 0.6f), 0, 0.2f, 0, m);

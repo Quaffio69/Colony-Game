@@ -119,7 +119,8 @@ public static class Hauling
             foreach (var cell in stockpiles.Cells)
             {
                 int space = items.RoomAt(cell, pile.Type);
-                if (space > 0 && (faction == Owners.Any || stockpiles.OwnerOf(cell) == faction) && connectivity.ComponentOf(cell) == component) dest.Offer(Dist(cell, src), (cell, space), cell);
+                if (space > 0 && sites?.At(cell) is null && // a rack going up here wants only its planks
+ (faction == Owners.Any || stockpiles.OwnerOf(cell) == faction) && connectivity.ComponentOf(cell) == component) dest.Offer(Dist(cell, src), (cell, space), cell);
             }
             foreach (var (cell, space) in dest.Items)
                 plans.Add(new HaulPlan(src, cell, pile.Type, Math.Min(Math.Min(pile.Available, space), ItemInfo.CarryLimit(pile.Type))));

@@ -152,7 +152,7 @@ public partial class BuildWindow : GlyphWindow
         _footName.Text = colon > 0 && name.StartsWith("Build") ? name[(colon + 2)..].Split(" (")[0] : name.Split(" (")[0];
         _footInfo.Text = "  " + (Tool.SelectionInfo is { } s ? s : Describe(mode));
         G.Clear(_footActions);
-        bool placing = DesignationTool.IsBuild(mode) || mode != ToolMode.Dig || Tool.Selecting;
+        bool placing = mode != ToolMode.None || Tool.Selecting;
         _footPrompt.Text = Tool.Selecting ? "Boxing · click again to confirm, Z/X for levels"
             : Tool.PartFor(mode) is not null || mode == ToolMode.Structure || mode == ToolMode.Edge ? "Placing · click the map"
             : "Drag a box on the map: click a corner, then the other";
@@ -184,6 +184,9 @@ public partial class BuildWindow : GlyphWindow
         ToolMode.WallLine => "A straight line of pieces along cell edges",
         ToolMode.Floor => "Floor over a box (homes count it)",
         ToolMode.Roof => "Roof over a box of floor (homes count it)",
+        ToolMode.Rack => $"Shelving over stockpile cells: up to {Stockpiles.Capacity(Stockpiles.MaxRackLevels)} stacks a cell (Shift-drag takes racks down)",
+        ToolMode.Cancel => "Cancel designations and remove zone cells in a box",
+        ToolMode.None => "Pick something to build or order",
         _ => "",
     };
 
@@ -213,10 +216,18 @@ public partial class BuildWindow : GlyphWindow
                 Order("♦", "good", "Gather plants", ToolMode.Gather, "Gather ripe plants in an area (berries, fiber, herbs)"),
             ]),
             new("Dams", () => [Order("#", "wall", "Stone wall", ToolMode.Wall, "Full wall cells for dams and canals (1 stone each)")]),
+            new("Cancel", () => [Order("×", "bad", "Cancel orders", ToolMode.Cancel, "Cancel designations and remove zone cells in a box")]),
         ],
         1 =>
         [
-            new("Storage", () => [Order("≡", "item", "Stockpile", ToolMode.Stockpile, "Zone floor where haulers store goods")]),
+            new("Storage", () =>
+            [
+                Order("≡", "item", "Stockpile", ToolMode.Stockpile, "Zone floor where haulers store goods"),
+                new Item("╥", Tone("wood"), "Storage rack", (Colony.Core.Items.ItemType.Plank, Constructions.Cost(StructureKind.Rack, Stockpiles.MaxRackLevels).Count),
+                    $"Shelving on stockpile cells, up to {Stockpiles.MaxRackLevels} levels tall with a sliding ladder: {Stockpiles.Capacity(Stockpiles.MaxRackLevels)} stacks a cell " +
+                    $"({Constructions.RackPlanksPerLevel} planks a level); drag a box over the zone, R turns the fronts",
+                    () => Tool.Mode == ToolMode.Rack, () => Tool.SelectRack()),
+            ]),
             new("Farms", () =>
             [
                 Order("τ", "farm", "Grain plot", ToolMode.FarmGrain, "Wheat: grain and herbs, on grass or soil"),

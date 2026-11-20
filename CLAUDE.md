@@ -178,7 +178,17 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   (fighters: health, gear, draft switches; nearby nests with Look/Attack), Tests & demos
   F1, Appearance F2 (theme, frame, corners, font, size, spacing, UI scale, glass/shadows/chips), Help F3 (keys, debug).
   Home key looks at the colony; G drafts everyone and turns on squad orders (`DesignationTool.SquadOrders`: click ground
-  to march, a nest to attack; G/RMB/Esc: done), Shift+G stands everyone down. **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
+  to march, a nest to attack; G/RMB/Esc: done), Shift+G stands everyone down. **Orders ribbon** (`UI.OrdersRibbon`): a
+  pill row above the dock with every order's icon, name and hotkey (DF-style display: lowercase = the key, uppercase =
+  Shift+key): n dig, y stairs, u up, k down, o up/down, t chop, p gather, P stockpile, F farm plot (again: next crop),
+  B dam wall, X (or Del) cancel box. DF letters where free (d/j/i are pan right, Work, Stocks). It shows while an order
+  is in hand (any order hotkey brings it up) or while pinned by its own "Orders" pill (bottom left); clicking picks.
+  Window hotkeys ignore Shift (shifted letters are orders). Ribbon and pill are `GlyphManager.Blockers` (no clicks
+  through to the world). **Mouse:** no tool by default (`ToolMode.None`): LMB drag moves the view level (14 px a level,
+  up = up), RMB drag pans (`CameraRig.Pan`: the ground follows the mouse), tapping Shift / Ctrl alone goes a level up /
+  down (`DesignationTool._Input`; any key or click while held cancels the tap; while boxing it moves the box's corner),
+  RMB click (≤ 6 px) steps back: aborts the box, then drops the tool (`CancelPlacement`, also Esc). Shift+LMB starts
+  the removal box (or removes an edge piece) for any tool. `--orders` opens the ribbon pinned. **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
   map size; `Main.NewColony` reloads the scene), Multiplayer (disabled), Appearance, Tests, Quit; opened by Esc when
   nothing is left to close (the game does not start on it yet); the sim waits while it is up.
 - **Multiplayer direction:** freeform, each player a distinct colony (faction) in one world: cooperate against NPC
@@ -215,7 +225,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   `--join=127.0.0.1:7781 --net-orders --net-check=1500`; the two `[net] ... hash` lines must match (they did).
 - Limits: demos edit the world outside commands, so they're off online (a world a demo changed can still be hosted:
   snapshots hold its edits).
-- **Snapshots (`Net.Snapshot`):** the whole state in a gzip blob: the `GameSettings` (the terrain is regenerated, a
+- **Snapshots (`Net.Snapshot`, version 3: racks and regrowth; version 2 still loads, `SnapIO.Before(v)` skips newer sections):** the whole state in a gzip blob: the `GameSettings` (the terrain is regenerated, a
   second at 2048), the chunks changed since generation (`VoxelWorld.Seal` after generation starts tracking them), then
   flora, piles, orders, stockpiles, farms, rooms and parts, blueprints, waterworks, water (spans, volumes, flow
   momentum, sleep state, springs; natural levels from the terrain; pipes rebuilt), colonists, colonies (society,
@@ -280,7 +290,11 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   stand-ins. They don't block movement (deliberate for now). `Plant.Growth` (0-255) and
   `PlantInfo.MatureHeight` are meant to drive future yields. Ground changes go through
   `ColonySim.CompleteDesignation`/cave-ins, which remove or carry plants; code that edits tiles elsewhere
-  should call `Flora.Validate`. No growth/regrowth simulation yet.
+  should call `Flora.Validate`. No growth/regrowth simulation yet. **Grass regrowth (`Nature.Regrowth`):** soil a dig
+  lays bare (the tile below a dug one, registered in `CompleteDesignation`) turns to grass after 0.5-1.5 days (hashed per
+  cell) if it is open to the sky (top of its column, no floor/roof over it, not flooded: then it waits), when a
+  neighbouring top is grass (so patches fill in from their edges), or anyway after `Rounds` (3) checks. A watched list
+  checked every 240 ticks; nothing scans the map. In snapshots (v3).
 - **Items (`Items` namespace):** counted piles, not objects: at most one `ItemPile` (type, count) per
   walkable cell, resting on a floor. Drops settle downward and spill to nearby cells when a stack is full.
   `Reserved` (promised to a hauler picking up) and `Incoming` (space promised to a delivery) keep haulers
@@ -290,10 +304,25 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   leaves logs scaled by tree size (`ColonySim.MiningYield`/`LogYield`). Piles re-settle when their ground changes (digs,
   cave-ins). `Stockpiles` are zoned floor cells (all types for now); `Hauling.Plans` pairs the nearest loose
   piles with the nearest stockpile cell with room (linear scans; spatial index is the scale-up path).
-  Who hauls is set by work priorities (see Work priorities).
+  Who hauls is set by work priorities (see Work priorities). `ItemPiles.UnitsOf(type)` is a running per-type tally
+  (no scan). **Storage racks** (`Stockpiles.Racks`, `StructureKind.Rack`): warehouse shelving built on a stockpile cell
+  (command `PlaceRacks` over a box, R turns the fronts; Build, Zones, Storage; removed by `RemoveStructures`, with its
+  zone, or walled over: planks refunded via `Stockpiles.RackLost`). It rises into the open cells above, up to 3 levels
+  (`RackLevelsAt`, fixed when planned: the blueprint's `Material`), costs 3 planks a level and holds
+  `Capacity(levels)` = 1 + 2 x levels stacks (`ItemPiles.LimitAt` = stack x `CapacityAt`). Racks don't block movement.
+  A rack blueprint's cell takes no stored goods (haulers clear it, then bring its planks). `RackView` draws them
+  (uprights, two shelves a level, braced back, front rail) with a ladder per run of tall racks sharing a front, rolling
+  along the rail to the colonist nearest it; `ItemView` puts one pile model per stack on the shelves.
+  **Scaffolds** (`Agents/ColonistScaffold.cs`, item "scaffold", 2 logs at a joinery bench): work out of reach (a ceiling
+  two levels over the floor) has `Job.HighSpots` (standable cells two below the reach with open air above:
+  `HighComponents`). When the colony has a scaffold (`AnyScaffold`), `TryTakeJob` may pick such a job: the colonist
+  claims it, fetches the nearest free scaffold (task `ScaffoldFetch`), carries it to a high spot, puts it up
+  (`ErectTicks`), works from the cell above where it stands (`OnScaffold`, `ReachFrom`), takes it down (`StrikeTicks`)
+  and leaves it as a pile (haulers return it). Abandoned at any point, the scaffold stays where it stood. Designations
+  only (dig and stairs) for now. `ColonistView` raises the colonist on a pole-and-deck scaffold as it goes up.
 - **Production tree is data (`data/tech-tree.json`, embedded in Core, loaded by `Industry.Catalog`):** items
   (stack/carry sizes, pile model, colour), 12 broad DF-style workshops (`RoomType`), their 32 stations
-  (`PartType`s with role Machine; build material by size) and 78 recipes (multi-input `Ingredient`s, output
+  (`PartType`s with role Machine; build material by size) and 79 recipes (multi-input `Ingredient`s, output
   count, labour ticks, education). Adding a product is one item + one recipe line; tiers are computed. Load
   errors throw naming the entry. Tests check the tree bootstraps from raw resources and batches fit crates.
   **Home fixtures** (category "home"): items with `fixture` (slot: bed, furniture, tableware, lighting, decor), `tier`
@@ -337,9 +366,10 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   onto an existing stair adds directions (up onto down = up/down). `TileInfo`: `IsSolid` blocks movement,
   `IsStructural` carries cave-in load, `IsStair`/`GoesUp`/`GoesDown`. `Chunk.SolidCount` counts solid only;
   `NonAirCount` is for emptiness checks.
-- **Designations (DF-style UI):** click to anchor a corner, click again to apply; Z/X while selecting move
-  the free corner between levels and the view follows. Tools (Tab/Shift+Tab): Dig, Stairs (auto: down on
-  top, up/down between, up at bottom), Up, Down, Up/Down. Right-click starts a cancel box or aborts.
+- **Designations (DF-style UI):** click to anchor a corner, click again to apply; Z/X (or Shift/Ctrl taps) while
+  selecting move the free corner between levels and the view follows. Tools (their ribbon hotkeys, or Tab/Shift+Tab):
+  Dig, Stairs (auto: down on top, up/down between, up at bottom), Up, Down, Up/Down, ..., Cancel (the removal box as a
+  tool). Shift+click starts a removal box; a right click aborts the box, then puts the tool down.
   Exception: plant orders (Chop, Gather; `Designations.IsPlantOrder`) are 2D areas draped on the surface
   (`DesignatePlantArea`, any level, ignores the view level), since that work always happens on the surface;
   their marks are drawn whatever level is viewed. Dig/stairs/stockpiles/rooms stay level-based boxes.
@@ -561,7 +591,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - Visual check / render benchmark: `<godot_console.exe> --path game -- --screenshot=out.png` (or `--bench`)
   plus optional `--size=WxDxH --seed=N --level=N --zoom=DIST --dig-demo --stairs-demo --ticks=N`, and
   `--look=X,Y` (camera on a column), `--water-demo` (terrace spring, waterfall wheel, pond, pump, irrigated field), `--showroom[=WORKSHOP_ID]` (every workshop with every station in sizes 1-5, stocked raw goods, farms;
-  the id focuses one) with `--build-menu=WORKSHOP_ID` to open the build menu, `--ants-demo[=calm]` (a full ant nest
+  the id focuses one) with `--build-menu=WORKSHOP_ID` to open the build menu, `--storage-demo[=racks]` (a racked stockpile and a ceiling dug from a scaffold; =racks frames the racks), `--ants-demo[=calm]` (a full ant nest
   beside the colony; everyone armed, drafted and sent against it; =calm: just the nest).
   Waits until the world is fully meshed, measures 120 frames, prints `[bench]` lines (startup phases,
   frame ms, draw calls, memory), saves the PNG and quits.
@@ -635,7 +665,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 - [ ] Next for industry: conveyors between output and input crates; rooms themselves costing
       (walls/floors); stockpile filters; standing orders ("keep 50 planks") instead of fixed recipes;
       wonders as aux parts (philosopher's stone, farseer orb, orrery); real ratios.
-- [ ] Next for flora: wild growth and spreading/regrowth (staggered, deterministic).
+- [~] Flora: grass grows back over dug dirt (`Regrowth`). Next: wild growth and spreading/regrowth of plants (staggered, deterministic).
 - [ ] Geology: several stone types in layered/warped strata (palette now has room).
 - [~] M5: Needs and homes. Done: hunger, eating, starving leaves; daily goods standard (clothing, tinctures); homes
       (sized rooms, housing policies, tiered fixtures with wear, salvage, auto layout), rest in beds, residents by

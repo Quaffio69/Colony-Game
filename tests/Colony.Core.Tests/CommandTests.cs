@@ -22,6 +22,7 @@ public class CommandTests
         new EdgeLine(StructureKind.Window, A, EdgeInfo.East, 12, 4, true), new PlaceOutline(A, B, 3), new ClearWalls(A, B),
         new Covers(StructureKind.Roof, A, B, 2, false), new SetWorkPriority(7, Work.Hauling, 1) { Player = 3 }, new SetHomePolicy(A, 2),
         new SetPolicyTier(1, 4, 3), new SetPolicyPerResident(0, 2, 1.25f), new SetPolicyShared(3, true), new AddPolicy(),
+        new PlaceRacks(A, B, 2),
     }.Select(c => new object[] { c });
 
     [Theory]

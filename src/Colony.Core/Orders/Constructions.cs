@@ -24,6 +24,8 @@ public enum StructureKind : byte
     Floor,
     /// <summary>A roof over a cell (thatch, shingle, slate, clay tile).</summary>
     Roof,
+    /// <summary>Warehouse shelving on a stockpile cell, rising up to three levels: holds several stacks (see <see cref="Stockpiles.Racks"/>).</summary>
+    Rack,
 }
 
 /// <summary>A structure waiting for its material and a builder.</summary>
@@ -80,6 +82,7 @@ public sealed class Constructions
         StructureKind.Door => new BuildCost(ItemType.Plank, 2),
         StructureKind.Window => new BuildCost(Catalog.Item("glass"), 1),
         StructureKind.Floor => new BuildCost(Catalog.Item(FloorMaterials.All[Math.Clamp(material, 1, FloorMaterials.Count - 1)].Item), 1),
+        StructureKind.Rack => new BuildCost(ItemType.Plank, RackPlanksPerLevel * Math.Clamp(material, 1, Stockpiles.MaxRackLevels)), // material = its levels
         _ => new BuildCost(Catalog.Item(RoofMaterials.All[Math.Clamp(material, 1, RoofMaterials.Count - 1)].Item), 1),
     };
 
@@ -90,8 +93,15 @@ public sealed class Constructions
         StructureKind.Floor => 30,
         StructureKind.Roof => 45,
         StructureKind.Door or StructureKind.Window => 80,
+        StructureKind.Rack => 90,
         _ => 120,
     };
+
+    /// <summary>Planks a storage rack costs per level it rises.</summary>
+    public const int RackPlanksPerLevel = 3;
+
+    /// <summary>Stockpile cells (set by <see cref="ColonySim"/>): racks only go on them.</summary>
+    public Func<TilePos, bool>? IsStorage { get; set; }
 
     public static string Name(StructureKind kind) => kind switch
     {
@@ -102,6 +112,7 @@ public sealed class Constructions
         StructureKind.Door => "Door",
         StructureKind.Floor => "Floor",
         StructureKind.Roof => "Roof",
+        StructureKind.Rack => "Storage rack",
         _ => "Window",
     };
 
@@ -288,6 +299,8 @@ public sealed class Constructions
         if (_byCell.ContainsKey(cell) || IsOccupied?.Invoke(cell) == true) return "something is already planned or built here";
         var below = cell.Offset(0, 0, -1);
         bool onFloor = TileInfo.IsSolid(_world.Get(below));
+        if (kind == StructureKind.Rack)
+            return IsStorage?.Invoke(cell) != true ? "racks go on stockpile cells" : onFloor ? null : "needs ground below";
         if (kind == StructureKind.Wall)
             return onFloor || _byCell.TryGetValue(below, out var under) && under.Kind == StructureKind.Wall ? null : "a wall needs ground or a wall below";
         if (kind == StructureKind.WaterWheel)
@@ -303,7 +316,11 @@ public sealed class Constructions
     public Blueprint? Place(StructureKind kind, TilePos cell, int facing = 0, int faction = 0)
     {
         if (CanPlace(kind, cell) is not null) return null;
-        var bp = new Blueprint { Cell = cell, Kind = kind, Facing = facing & 3, Faction = faction };
+        var bp = new Blueprint
+        {
+            Cell = cell, Kind = kind, Facing = facing & 3, Faction = faction,
+            Material = kind == StructureKind.Rack ? Stockpiles.RackLevelsAt(_world, cell) : 0, // a rack's levels set its size and cost
+        };
         _byCell[cell] = bp;
         _order.Add(bp);
         Version++;

@@ -12,8 +12,16 @@ public sealed class Job
     public IReadOnlyList<TilePos> WorkSpots => _spots;
     /// <summary>Connectivity components of the work spots; a colonist in one of these can reach the job.</summary>
     public int[] Components { get; internal set; } = [];
+    /// <summary>
+    /// Standable tiles two levels below the job's reach: a colonist standing on a scaffold set up there (see
+    /// <c>Colonist</c>) can work it. A ceiling dug two levels over the floor is the usual case.
+    /// </summary>
+    public IReadOnlyList<TilePos> HighSpots => _high;
+    /// <summary>Components of <see cref="HighSpots"/>: a colonist in one of these can reach the job with a scaffold.</summary>
+    public int[] HighComponents { get; internal set; } = [];
 
     internal readonly List<TilePos> _spots = new(8);
+    internal readonly List<TilePos> _high = new(0);
     internal int Stamp;
 }
 
@@ -101,7 +109,7 @@ public sealed class JobBoard
         foreach (var target in designations.All.Keys)
         {
             var job = _byTarget[target];
-            if (job._spots.Count > 0) _jobs.Add(job);
+            if (job._spots.Count > 0 || job._high.Count > 0) _jobs.Add(job);
             else InaccessibleCount++;
         }
     }
@@ -124,29 +132,58 @@ public sealed class JobBoard
             if (!comps.Contains(c)) comps.Add(c);
         }
         job.Components = comps.ToArray();
+
+        // Scaffold spots: standing two below the reach, with open air between (where the scaffold stands up).
+        job._high.Clear();
+        comps.Clear();
+        if (_world is { } world && job.Kind is not (DesignationKind.Chop or DesignationKind.Gather or DesignationKind.Sow))
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                var s = target.Offset(dx, dy, -2);
+                var up = s.Offset(0, 0, 1);
+                if (!world.InBounds(up) || world.Get(up) != TileType.Air) continue; // the scaffold needs open air above its foot
+                int c = connectivity.ComponentOf(s);
+                if (c < 0) continue;
+                job._high.Add(s);
+                if (!comps.Contains(c)) comps.Add(c);
+            }
+        job.HighComponents = comps.ToArray();
         job.Stamp = -_stamp;
     }
 
     private static void RefreshComponents(Job job, Connectivity connectivity, List<int> comps)
     {
-        if (job._spots.Count == 0) return;
-        comps.Clear();
-        foreach (var s in job._spots)
+        if (job._spots.Count > 0)
         {
-            int c = connectivity.ComponentOf(s);
-            if (c >= 0 && !comps.Contains(c)) comps.Add(c);
+            comps.Clear();
+            foreach (var s in job._spots)
+            {
+                int c = connectivity.ComponentOf(s);
+                if (c >= 0 && !comps.Contains(c)) comps.Add(c);
+            }
+            if (comps.Count != job.Components.Length || !comps.TrueForAll(c => Array.IndexOf(job.Components, c) >= 0))
+                job.Components = comps.ToArray();
         }
-        if (comps.Count != job.Components.Length || !comps.TrueForAll(c => Array.IndexOf(job.Components, c) >= 0))
-            job.Components = comps.ToArray();
+        if (job._high.Count > 0)
+        {
+            comps.Clear();
+            foreach (var s in job._high)
+            {
+                int c = connectivity.ComponentOf(s);
+                if (c >= 0 && !comps.Contains(c)) comps.Add(c);
+            }
+            job.HighComponents = comps.ToArray();
+        }
     }
 
-    /// <summary>Whether any chunk overlapping the job's reach (target +-1, plus 2 below for floors) changed.</summary>
+    /// <summary>Whether any chunk overlapping the job's reach (target +-1, scaffold spots 2 below, plus 2 below those for floors) changed.</summary>
     private bool NearChange(TilePos t, VoxelWorld world)
     {
         if (_changedChunks.Count == 0) return false;
         int cx0 = (t.X - 1) >> Chunk.Shift, cx1 = (t.X + 1) >> Chunk.Shift;
         int cy0 = (t.Y - 1) >> Chunk.Shift, cy1 = (t.Y + 1) >> Chunk.Shift;
-        int cz0 = (t.Z - 3) >> Chunk.Shift, cz1 = (t.Z + 1) >> Chunk.Shift;
+        int cz0 = Math.Max(0, t.Z - 4) >> Chunk.Shift, cz1 = (t.Z + 1) >> Chunk.Shift;
         for (int cz = cz0; cz <= cz1; cz++)
         for (int cy = cy0; cy <= cy1; cy++)
         for (int cx = cx0; cx <= cx1; cx++)
@@ -161,13 +198,13 @@ public sealed class JobBoard
     /// proceeds top-down.
     /// </summary>
     public List<Job> Candidates(int component, TilePos from, Designations designations, int max,
-        IReadOnlySet<TilePos>? exclude = null, int kinds = -1, int faction = Owners.Any)
+        IReadOnlySet<TilePos>? exclude = null, int kinds = -1, int faction = Owners.Any, bool scaffolds = false)
     {
         var best = new List<(long Key, Job Job)>(max + 1);
         foreach (var job in _jobs)
         {
             if ((kinds & (1 << (int)job.Kind)) == 0) continue; // a kind of work this colonist isn't looking for now
-            if (Array.IndexOf(job.Components, component) < 0) continue;
+            if (Array.IndexOf(job.Components, component) < 0 && !(scaffolds && Array.IndexOf(job.HighComponents, component) >= 0)) continue;
             if (!designations.Contains(job.Target) || designations.IsClaimed(job.Target)) continue; // board may lag a tick
             if (exclude != null && exclude.Contains(job.Target)) continue;
             if (faction != Owners.Any && designations.OwnerOf(job.Target) != faction) continue; // another colony's order

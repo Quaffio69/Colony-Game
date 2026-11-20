@@ -7,6 +7,11 @@ namespace Colony.Core.Net;
 /// <summary>Binary helpers for snapshots.</summary>
 internal static class SnapIO
 {
+    /// <summary>Version of the snapshot being read (on this thread): sections added later are skipped in older ones.</summary>
+    [ThreadStatic] public static int ReadVersion;
+    /// <summary>Reading a snapshot older than <paramref name="version"/> (0, not set: the current one).</summary>
+    public static bool Before(int version) => ReadVersion != 0 && ReadVersion < version;
+
     public static void Write(this BinaryWriter w, TilePos p) { w.Write(p.X); w.Write(p.Y); w.Write(p.Z); }
     public static TilePos ReadPos(this BinaryReader r) => new(r.ReadInt32(), r.ReadInt32(), r.ReadInt32());
 
@@ -100,7 +105,8 @@ internal static class SnapIO
 public static class Snapshot
 {
     private const string Magic = "COLONYSNAP";
-    private const int Version = 2;
+    /// <summary>3: storage racks and grass regrowth. Version 2 snapshots still load (without them).</summary>
+    private const int Version = 3;
 
     /// <summary>Where the last load or take spent its time (ms), for the bench.</summary>
     public static string LastTimings { get; internal set; } = "";
@@ -135,7 +141,8 @@ public static class Snapshot
     {
         if (r.ReadString() != Magic) throw new InvalidDataException("not a Colony snapshot");
         int version = r.ReadInt32();
-        if (version != Version) throw new InvalidDataException($"snapshot version {version} (this game reads {Version})");
+        if (version is < 2 or > Version) throw new InvalidDataException($"snapshot version {version} (this game reads 2..{Version})");
+        SnapIO.ReadVersion = version;
         return GameSettings.Read(r);
     }
 

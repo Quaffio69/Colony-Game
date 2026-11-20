@@ -94,6 +94,10 @@ public partial class Main : Node3D
         AddChild(_items);
         _items.Initialize(_sim, _world);
 
+        var racks = new RackView { Name = "RackView" };
+        AddChild(racks);
+        racks.Initialize(_sim, _world);
+
         var homes = new HomeView { Name = "HomeView" };
         AddChild(homes);
         homes.Initialize(_sim, _world);
@@ -250,8 +254,8 @@ public partial class Main : Node3D
 
         switch (key.Keycode)
         {
-            case Key.Pageup or Key.X: _world.ViewLevel++; break;
-            case Key.Pagedown or Key.Z: _world.ViewLevel--; break;
+            case Key.Pageup or Key.X when !key.ShiftPressed: _world.ViewLevel++; break; // Shift+X: the cancel order
+            case Key.Pagedown or Key.Z when !key.ShiftPressed: _world.ViewLevel--; break;
             case Key.Space when !key.Echo && s_client == null: _paused = !_paused; break;
             case Key.Key1 when s_client == null: _speedIndex = 0; _paused = false; break;
             case Key.Key2 when s_client == null: _speedIndex = 1; _paused = false; break;
@@ -395,6 +399,7 @@ public partial class Main : Node3D
             if (Arg("--work-menu") != null) _ui.OpenWindow("work");
             if (Arg("--open") is { Length: > 0 } open) foreach (var id in open.Split(',')) _ui.OpenWindow(id);
             if (Arg("--main-menu") is { } menuPage) _ui.ShowMenu(true, menuPage);
+            if (Arg("--orders") != null) _ui.Ribbon.Pinned = true; // the orders ribbon open
             if (int.TryParse(Arg("--play-as"), out int playAs)) PlayAs(playAs);
             if (Arg("--ui-selftest") != null) AddChild(new UiSelfTest(_ui));
             // World-editing flags apply once, to the first world (not again when the test menu reloads the scene).
@@ -402,7 +407,7 @@ public partial class Main : Node3D
             {
                 s_devArgsDone = true;
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--ticks" }.Any(a => Arg(a) != null))
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
                 if (Arg("--dig-demo") != null) DigDemo();
                 if (Arg("--stairs-demo") != null) StairsDemo();
@@ -413,6 +418,7 @@ public partial class Main : Node3D
                 if (Arg("--build-menu") is { } menu) _ui.OpenBuild(menu);
                 if (Arg("--water-demo") != null) WaterDemo();
                 if (Arg("--homes-demo") != null) HomesDemo();
+                if (Arg("--storage-demo") is { } storageDemo) StorageDemo(storageDemo);
                 if (Arg("--ants-demo") is { } antsDemo) AntsDemo(antsDemo);
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
@@ -862,6 +868,60 @@ public partial class Main : Node3D
         int cells = _sim.Stockpiles.AddFloorBox(new TilePos(c.X - 7, c.Y - 3, c.Z - 6), new TilePos(c.X - 2, c.Y + 3, c.Z));
         _stairsDemoAt = c;
         GD.Print($"Haul demo: {chopped} trees to chop, {cells} stockpile cells");
+    }
+
+    /// <summary>
+    /// --storage-demo: a stockpile with storage racks planned on it (planks and loose stone to fill it), and beside it a
+    /// stone ceiling two levels over flat ground with one tile to dig and a scaffold to reach it. Plays until the racks
+    /// are up and someone stands on the scaffold (or 20k ticks).
+    /// </summary>
+    private void StorageDemo(string mode)
+    {
+        var c = _sim.Colonists.First(k => k.Faction == Player).Position;
+        int g = _sim.World.SurfaceLevel(c.X, c.Y);
+        // Level the ground: soil up to g, grass on top, air above (plants on it go).
+        void Flatten(int x0, int y0, int x1, int y1)
+        {
+            for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++)
+            {
+                for (int z = g - 3; z < g; z++) _sim.World.Set(new TilePos(x, y, z), TileType.Soil);
+                _sim.World.Set(new TilePos(x, y, g), TileType.Grass);
+                for (int z = g + 1; z <= g + 6; z++)
+                {
+                    _sim.World.Set(new TilePos(x, y, z), TileType.Air);
+                    _sim.Flora.Validate(new TilePos(x, y, z));
+                }
+                _sim.Flora.Remove(new TilePos(x, y, g + 1), out _);
+            }
+        }
+        int rx = c.X + 3, ry = c.Y + 3;
+        Flatten(rx - 1, ry - 1, rx + 8, ry + 6);
+        var a = new TilePos(rx, ry, g);
+        _sim.Commands.Execute(new Colony.Core.Commands.AddStockpile(a, a.Offset(5, 3, 0)) { Player = Player });
+        _sim.Commands.Execute(new Colony.Core.Commands.PlaceRacks(a.Offset(0, 1, 0), a.Offset(5, 1, 0), 3) { Player = Player });
+        _sim.Commands.Execute(new Colony.Core.Commands.PlaceRacks(a.Offset(0, 2, 0), a.Offset(5, 2, 0), 1) { Player = Player });
+        _sim.Items.Drop(new TilePos(rx + 2, ry + 5, g + 1), Colony.Core.Items.ItemType.Plank, 120);
+        _sim.Items.Drop(new TilePos(rx + 6, ry + 5, g + 1), Colony.Core.Items.ItemType.Stone, 150);
+        _sim.Items.Drop(new TilePos(rx + 7, ry + 1, g + 1), Colony.Core.Items.ItemType.Log, 60);
+
+        // The ceiling: a 3x3 slab at g+3 held up by a pillar, its middle tile designated.
+        int cx = c.X - 6, cy = c.Y + 4;
+        Flatten(cx - 3, cy - 3, cx + 3, cy + 3);
+        for (int y = cy - 1; y <= cy + 1; y++)
+        for (int x = cx - 1; x <= cx + 1; x++) _sim.World.Set(new TilePos(x, y, g + 3), TileType.Stone);
+        for (int z = g + 1; z <= g + 3; z++) _sim.World.Set(new TilePos(cx + 2, cy, z), TileType.Stone);
+        var target = new TilePos(cx, cy, g + 3);
+        _sim.Items.Drop(new TilePos(cx - 2, cy - 2, g + 1), Colony.Core.Agents.Colonist.ScaffoldItem, 1);
+
+        // Racks first; then the ceiling job, played until someone stands on the scaffold.
+        int t = 0;
+        for (; t < 20_000 && _sim.Stockpiles.Racks.Count < 12; t++) _sim.Step();
+        _sim.Commands.Execute(new Colony.Core.Commands.DesignateBox(target, target, Colony.Core.Orders.DesignationKind.Dig) { Player = Player });
+        for (; t < 30_000 && !_sim.Colonists.Any(k => k.OnScaffold && k.WorkDone * 2 > k.WorkRequired); t++) _sim.Step();
+        _stairsDemoAt = mode == "racks" ? new TilePos(rx + 3, ry + 5, g + 1) : new TilePos((rx + cx) / 2, cy, g + 1);
+        if (mode == "racks") for (int k = 0; k < 6000; k++) _sim.Step(); // let the haulers fill the shelves
+        GD.Print($"Storage demo: {_sim.Stockpiles.Racks.Count} racks up, scaffold in use: {_sim.Colonists.Any(k => k.OnScaffold)}, after {t} ticks");
     }
 
     /// <summary>Designates a 1x1 stair shaft 6 levels down next to the colonists, with a small room at the bottom.</summary>

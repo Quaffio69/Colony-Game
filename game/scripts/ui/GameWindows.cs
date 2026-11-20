@@ -461,9 +461,13 @@ public partial class HelpWindow : GlyphWindow
 
     private static readonly (string Key, string What)[] Keys =
     [
-        ("WASD / Q E", "pan / rotate the camera"), ("Wheel, middle-drag", "zoom, orbit"), ("Z X  (PgDn PgUp)", "view level down / up"),
-        ("Home", "look at the colony"), ("Space, 1 2 3", "pause, speed"), ("Tab / Shift+Tab", "orders: dig, stairs, chop, gather, zones"),
-        ("LMB, RMB", "start/confirm a box or place; remove box"), ("Z X while boxing", "stretch the box over levels"),
+        ("WASD / Q E", "pan / rotate the camera"), ("RMB drag", "pan the camera"), ("Wheel, middle-drag", "zoom, orbit"),
+        ("Shift / Ctrl (tap)", "view level up / down"), ("Z X  (PgDn PgUp)", "view level down / up"), ("LMB drag, no tool", "move the view up / down levels"),
+        ("Home", "look at the colony"), ("Space, 1 2 3", "pause, speed"),
+        ("n y u k o", "dig, stairs, up, down, up/down stair"), ("t p", "chop trees, gather plants"),
+        ("Shift+P F B X", "stockpile, farm plot (again: next crop), dam wall, cancel box (also Del)"), ("Tab / Shift+Tab", "cycle the orders"),
+        ("LMB, Shift+LMB", "start/confirm a box or place; removal box"), ("RMB click", "abort the box, then put the tool down"),
+        ("Shift/Ctrl, Z X while boxing", "stretch the box over levels"),
         ("R, [ ]", "rotate, size of the part being placed"), ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor"),
         ("Esc", "cancel placing, close the window, main menu"), ("Ctrl+Tab", "next window"), ("Enter", "debug: finish all orders"),
         ("F5 / F9", "quicksave / load the newest save"), ("F10", "tune the pixel-art look (Save keeps it)"), ("F4", "play the next colony (hot-seat, several colonies)"),

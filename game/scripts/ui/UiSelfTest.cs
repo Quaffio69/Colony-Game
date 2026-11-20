@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Godot;
 
@@ -174,7 +175,7 @@ public partial class UiSelfTest : Node
         await Frames();
         Key(Godot.Key.Escape);
         await Frames();
-        Check("Esc first drops the build tool", _ui.Tool.Mode == DesignationTool.ToolMode.Dig && build.IsShown);
+        Check("Esc first drops the build tool", _ui.Tool.Mode == DesignationTool.ToolMode.None && build.IsShown);
         var active = m.Active;
         Key(Godot.Key.Escape);
         await Frames();
@@ -220,6 +221,42 @@ public partial class UiSelfTest : Node
         GlyphTheme.Set(o => o.Theme = theme);
         await Frames(3);
         Check("windows survive the rebuild", _ui.Window("work")!.Content.GetChildCount() > 0);
+
+        // Orders: no tool to begin with; an order's hotkey picks it and brings up the ribbon; a right click puts it down.
+        foreach (var w in m.Windows.Where(w => w.IsShown).ToList()) w.Close();
+        while (_ui.Tool.CancelPlacement()) { }
+        await Frames();
+        var tool = _ui.Tool;
+        Check("no tool once everything is put down, and no ribbon", tool.Mode == DesignationTool.ToolMode.None && !_ui.Ribbon.Open);
+        Key(Godot.Key.N);
+        await Frames();
+        Check("n picks Dig and brings up the orders ribbon", tool.Mode == DesignationTool.ToolMode.Dig && _ui.Ribbon.Open);
+        var mid = GetViewport().GetVisibleRect().Size / 2;
+        Move(mid - Vector2.One, mid, false);
+        await Frames(1);
+        Mouse(mid, true, MouseButton.Right);
+        Mouse(mid, false, MouseButton.Right);
+        await Frames();
+        Check("a right click puts the order down (the ribbon goes)", tool.Mode == DesignationTool.ToolMode.None && !_ui.Ribbon.Open);
+        Input.ParseInputEvent(new InputEventKey { Keycode = Godot.Key.Shift, PhysicalKeycode = Godot.Key.Shift, Pressed = true, ShiftPressed = true });
+        Input.ParseInputEvent(new InputEventKey { Keycode = Godot.Key.P, PhysicalKeycode = Godot.Key.P, Pressed = true, ShiftPressed = true });
+        Input.ParseInputEvent(new InputEventKey { Keycode = Godot.Key.P, PhysicalKeycode = Godot.Key.P, Pressed = false, ShiftPressed = true });
+        int level = _ui.Main.View.ViewLevel;
+        Input.ParseInputEvent(new InputEventKey { Keycode = Godot.Key.Shift, PhysicalKeycode = Godot.Key.Shift, Pressed = false });
+        await Frames();
+        Check("Shift+P picks Stockpile (and isn't a level tap)", tool.Mode == DesignationTool.ToolMode.Stockpile && _ui.Main.View.ViewLevel == level);
+        Key(Godot.Key.Escape);
+        await Frames();
+        Key(Godot.Key.Ctrl);
+        await Frames();
+        Check($"tapping Ctrl goes a level down ({level} -> {_ui.Main.View.ViewLevel})", _ui.Main.View.ViewLevel == level - 1);
+        Key(Godot.Key.Shift);
+        await Frames();
+        Check("tapping Shift goes a level up", _ui.Main.View.ViewLevel == level);
+        _ui.Ribbon.Pinned = true;
+        await Frames();
+        Check("the Orders pill pins the ribbon open with no tool", _ui.Ribbon.Open && tool.Mode == DesignationTool.ToolMode.None);
+        _ui.Ribbon.Pinned = false;
     }
 
     private static T? FindFirst<T>(Node root) where T : class

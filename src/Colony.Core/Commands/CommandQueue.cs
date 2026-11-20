@@ -80,7 +80,7 @@ public static class CommandCodec
         DesignateBox = 1, DesignateStairs, DesignatePlants, CancelPlants, CancelOrders, AddStockpile, AddFarm, PlaceWalls,
         CancelWalls, DebugCompleteAll, PaintRoom, EraseRoom, PlacePart, RemoveParts, CycleRecipe, PlaceStructure,
         RemoveStructures, PlaceEdge, RemoveEdge, EdgeLine, PlaceOutline, ClearWalls, Covers, SetWorkPriority, SetHomePolicy,
-        SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy, SettleGame, SetDrafted, SquadMove, SquadAttack, DebugSpawnNest,
+        SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy, SettleGame, SetDrafted, SquadMove, SquadAttack, DebugSpawnNest, PlaceRacks,
     }
 
     public static byte[] EncodeLog(IEnumerable<LoggedCommand> log)
@@ -164,6 +164,7 @@ public static class CommandCodec
             case SquadMove x: Head(Tag.SquadMove); P(w, x.Target); break;
             case SquadAttack x: Head(Tag.SquadAttack); w.Write(x.NestId); break;
             case DebugSpawnNest x: Head(Tag.DebugSpawnNest); P(w, x.At); w.Write(x.Population); w.Write(x.Angry); break;
+            case PlaceRacks x: Head(Tag.PlaceRacks); P(w, x.A); P(w, x.B); w.Write(x.Facing); break;
             default: throw new NotSupportedException($"No codec for {c.GetType().Name}");
         }
     }
@@ -208,6 +209,7 @@ public static class CommandCodec
             Tag.SquadMove => new SquadMove(P(r)),
             Tag.SquadAttack => new SquadAttack(r.ReadInt32()),
             Tag.DebugSpawnNest => new DebugSpawnNest(P(r), r.ReadInt32(), r.ReadBoolean()),
+            Tag.PlaceRacks => new PlaceRacks(P(r), P(r), r.ReadInt32()),
             _ => throw new InvalidDataException($"Unknown command tag {tag}"),
         };
         return c with { Player = player };
