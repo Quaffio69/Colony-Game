@@ -306,8 +306,11 @@ public sealed class Constructions
         if (kind == StructureKind.WaterWheel)
         {
             // A wheel can hang on a wall beside a fall (where it makes the most power), or stand on the ground.
-            bool mounted = onFloor || TileInfo.IsSolid(_world.Get(cell.Offset(1, 0, 0))) || TileInfo.IsSolid(_world.Get(cell.Offset(-1, 0, 0))) ||
-                           TileInfo.IsSolid(_world.Get(cell.Offset(0, 1, 0))) || TileInfo.IsSolid(_world.Get(cell.Offset(0, -1, 0)));
+            // ...or a thin wall on one of its edges (a dam of edge walls, a house wall), or a solid wall still being built.
+            bool Solid(TilePos p) => TileInfo.IsSolid(_world.Get(p)) || _byCell.TryGetValue(p, out var w) && w.Kind == StructureKind.Wall;
+            bool edgeWall = EdgeInfo.Kind(_world.Edge(cell, EdgeInfo.East)) != EdgeKind.None || EdgeInfo.Kind(_world.Edge(cell, EdgeInfo.North)) != EdgeKind.None ||
+                            EdgeInfo.Kind(_world.Edge(cell.Offset(-1, 0, 0), EdgeInfo.East)) != EdgeKind.None || EdgeInfo.Kind(_world.Edge(cell.Offset(0, -1, 0), EdgeInfo.North)) != EdgeKind.None;
+            bool mounted = onFloor || edgeWall || Solid(cell.Offset(1, 0, 0)) || Solid(cell.Offset(-1, 0, 0)) || Solid(cell.Offset(0, 1, 0)) || Solid(cell.Offset(0, -1, 0));
             return mounted ? null : "needs ground below or a wall beside it";
         }
         return onFloor ? null : "needs ground below";

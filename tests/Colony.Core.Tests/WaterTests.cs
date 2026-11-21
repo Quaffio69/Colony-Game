@@ -501,4 +501,17 @@ public class WaterTests
         Assert.Equal(a.Water.Total(), b.Water.Total());
         Assert.Equal(a.Water.Drained, b.Water.Drained);
     }
+
+    [Fact]
+    public void WaterPouringOffALedge_IsReportedAsAFall()
+    {
+        var sim = Flat();
+        Fill(sim, 0, 0, 3, 11, 31, 7); // a shelf: its top at z=7, water on it at z=8; the floor below at z=3
+        sim.Water.AddSpring(new TilePos(4, 16, 8), 200, head: 1);
+        Steps(sim, 300);
+        var falls = new List<Fall>();
+        sim.Water.Falls(0, 0, 31, 31, falls);
+        Assert.Contains(falls, f => f.X == 11 && f.Side == 0 && f.Top >= 8 && f.Bottom <= 4 && f.Rate > 0);
+        Assert.DoesNotContain(falls, f => f.X < 11); // the shelf itself is level: no falls on it
+    }
 }

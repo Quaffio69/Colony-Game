@@ -136,6 +136,10 @@ public partial class Main : Node3D
         AddChild(Selection);
         Selection.Initialize(_sim, _world, _rig, _tool);
 
+        var falls = new FallView { Name = "FallView" };
+        AddChild(falls);
+        falls.Initialize(_sim, _world, _rig);
+
         _ui = new GameUi(this) { Name = "GameUi" };
         AddChild(_ui);
         ReadyNet();
@@ -413,7 +417,7 @@ public partial class Main : Node3D
             {
                 s_devArgsDone = true;
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--ticks" }.Any(a => Arg(a) != null))
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--falls-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
                 if (Arg("--dig-demo") != null) DigDemo();
                 if (Arg("--stairs-demo") != null) StairsDemo();
@@ -425,6 +429,7 @@ public partial class Main : Node3D
                 if (Arg("--water-demo") != null) WaterDemo();
                 if (Arg("--homes-demo") != null) HomesDemo();
                 if (Arg("--storage-demo") is { } storageDemo) StorageDemo(storageDemo);
+                if (Arg("--falls-demo") != null) FallsDemo();
                 if (Arg("--ants-demo") is { } antsDemo) AntsDemo(antsDemo);
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
@@ -874,6 +879,30 @@ public partial class Main : Node3D
         int cells = _sim.Stockpiles.AddFloorBox(new TilePos(c.X - 7, c.Y - 3, c.Z - 6), new TilePos(c.X - 2, c.Y + 3, c.Z));
         _stairsDemoAt = c;
         GD.Print($"Haul demo: {chopped} trees to chop, {cells} stockpile cells");
+    }
+
+    /// <summary>--falls-demo: a block of rock beside the colony with a spring on top: water pours off its open edges.</summary>
+    private void FallsDemo()
+    {
+        var c = _sim.Colonists.First(k => k.Faction == Player).Position;
+        int g = _sim.World.SurfaceLevel(c.X, c.Y);
+        int x0 = c.X + 6, y0 = c.Y - 3;
+        for (int y = y0 - 4; y <= y0 + 10; y++)
+        for (int x = x0 - 4; x <= x0 + 12; x++)
+        {
+            for (int z = g - 2; z <= g; z++) _sim.World.Set(new TilePos(x, y, z), TileType.Soil);
+            for (int z = g + 1; z <= g + 10; z++) _sim.World.Set(new TilePos(x, y, z), TileType.Air);
+            _sim.Flora.Remove(new TilePos(x, y, g + 1), out _);
+        }
+        for (int y = y0; y <= y0 + 6; y++)
+        for (int x = x0; x <= x0 + 6; x++)
+        for (int z = g + 1; z <= g + 6; z++) _sim.World.Set(new TilePos(x, y, z), TileType.Stone);
+        _sim.Water.AddSpring(new TilePos(x0 + 3, y0 + 3, g + 7), 300, head: 1);
+        for (int t = 0; t < 1500; t++) _sim.Step();
+        var falls = new List<Colony.Core.Fluids.Fall>();
+        _sim.Water.Falls(x0 - 2, y0 - 2, x0 + 8, y0 + 8, falls);
+        GD.Print($"Falls demo: {falls.Count} falls off the block at ({x0},{y0})");
+        _stairsDemoAt = new TilePos(x0 + 8, y0 + 3, g + 1);
     }
 
     /// <summary>

@@ -192,6 +192,47 @@ public sealed class Water
     }
 
     /// <summary>
+    /// Water pouring over a drop, for drawing: every pipe in the box (columns x0..x1, y0..y1) sending water last step to a
+    /// neighbouring span whose surface (or floor, if dry) lies at least <paramref name="minDrop"/> levels below the
+    /// sender's surface. The simulation moves that water between the two columns directly, so without this nothing shows
+    /// in the air between the lip and where it lands. Read-only; may be read while an async step runs (a frame's tear).
+    /// </summary>
+    public void Falls(int x0, int y0, int x1, int y1, List<Fall> into, float minDrop = 0.75f, int max = 2000)
+    {
+        x0 = Math.Max(0, x0); y0 = Math.Max(0, y0);
+        x1 = Math.Min(_world.Width - 1, x1); y1 = Math.Min(_world.Depth - 1, y1);
+        int minFlow = SleepFlow; // less trickles (and a sleeping block's last flows) show nothing
+        for (int by = y0 >> Chunk.Shift; by <= y1 >> Chunk.Shift; by++)
+        for (int bx = x0 >> Chunk.Shift; bx <= x1 >> Chunk.Shift; bx++)
+        {
+            var b = _blocks[by * _bw + bx];
+            if (b is null || !b.Awake || b.NeedsSpans || !b.LinksValid || b.Out is not { } o || b.Wet == 0) continue;
+            for (int c = 0; c < Chunk.Size * Chunk.Size; c++)
+            {
+                int x = b.X0 + (c & Chunk.Mask), y = b.Y0 + (c >> Chunk.Shift);
+                if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+                for (int s = b.Start[c]; s < b.Start[c + 1]; s++)
+                {
+                    if (b.Vol[s] < Dry) continue;
+                    float top = b.Floor[s] + Math.Min(b.Vol[s], (b.Ceil[s] - b.Floor[s]) * U) / (float)U;
+                    for (int slot = 0; slot < Slots; slot++)
+                    {
+                        int f = o[s * Slots + slot], l = b.Link[s * Slots + slot];
+                        if (f < minFlow || l < 0) continue;
+                        var nb = _blocks[l >> SpanBits]!;
+                        int t = l & SpanMask;
+                        if (t >= nb.Floor.Length) continue;
+                        float bottom = nb.Vol[t] < Dry ? nb.Floor[t] : nb.Floor[t] + Math.Min(nb.Vol[t], (nb.Ceil[t] - nb.Floor[t]) * U) / (float)U;
+                        if (top - bottom < minDrop) continue;
+                        into.Add(new Fall(x, y, slot / Links, top, bottom, f / (float)U));
+                        if (into.Count >= max) return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Which way and how fast the water in a cell's span moves, for drawing (scaled to about 0..1.5). (0, 0) for still
     /// or no water. Wheels use <see cref="ThroughFlow"/>.
     /// </summary>
@@ -1111,3 +1152,9 @@ public sealed class Water
         Version = r.ReadInt32(); Steps = r.ReadInt64(); LastStepCells = r.ReadInt32();
     }
 }
+
+/// <summary>
+/// Water pouring from column (X, Y) over its <see cref="Side"/> edge (0..3: +x, -x, +y, -y) from the surface at
+/// <see cref="Top"/> down to <see cref="Bottom"/> (levels), <see cref="Rate"/> levels of water a step.
+/// </summary>
+public readonly record struct Fall(int X, int Y, int Side, float Top, float Bottom, float Rate);

@@ -510,6 +510,7 @@ public partial class DesignationTool : Node3D
 
         var hit = OverMenu ? null : VoxelRaycast.Cast(_sim.World, origin, dir, 5000f, _view.ViewLevel);
         Hovered = hit?.Tile;
+        _hoverNormal = hit?.Normal ?? new TilePos(0, 0, 1);
         bool placing = (PartFor(Mode) is not null || Mode == ToolMode.Structure) && _selection == Selection.None;
         _cursor.Visible = Hovered.HasValue && _selection == Selection.None && !placing;
         if (Hovered is { } h)
@@ -686,7 +687,7 @@ public partial class DesignationTool : Node3D
 
             // Waterworks go down with a single click too (Shift: a removal box).
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left, ShiftPressed: false } when Mode == ToolMode.Structure:
-                if (Hovered is { } st) PlaceStructure(st.Offset(0, 0, 1));
+                if (StructureCell() is { } st) PlaceStructure(st);
                 Handled();
                 break;
 
@@ -783,7 +784,18 @@ public partial class DesignationTool : Node3D
 
     private (TilePos A, TilePos B) Corners() => (_anchor, new TilePos(_cornerX, _cornerY, _cornerZ));
 
-    private void PlaceStructure(TilePos cell) => Issue(new Colony.Core.Commands.PlaceStructure(Structure, cell, _facing));
+    private TilePos _hoverNormal = new(0, 0, 1);
+
+    /// <summary>
+    /// Where a wheel or pump goes: on top of the hovered tile, or, pointing at the side of a wall or cliff, in the cell
+    /// against that face (so a wheel hangs on the wall, in the fall).
+    /// </summary>
+    private TilePos? StructureCell() => Hovered is not { } h ? null
+        : _hoverNormal.Z == 0 && (_hoverNormal.X != 0 || _hoverNormal.Y != 0) ? h.Offset(_hoverNormal.X, _hoverNormal.Y, 0) : h.Offset(0, 0, 1);
+
+    // A wheel hung on a wall turns its axle along the wall (its paddles stand out from it, in the fall).
+    private void PlaceStructure(TilePos cell) => Issue(new Colony.Core.Commands.PlaceStructure(Structure, cell,
+        Structure == StructureKind.WaterWheel && _hoverNormal.Z == 0 && (_hoverNormal.X != 0 || _hoverNormal.Y != 0) ? (_hoverNormal.X != 0 ? 0 : 1) : _facing));
 
     public void SelectStructure(StructureKind kind)
     {
@@ -867,7 +879,7 @@ public partial class DesignationTool : Node3D
         PlacementProblem = null;
         if (placing && Mode == ToolMode.Structure && Hovered is { } sh)
         {
-            var cell = sh.Offset(0, 0, 1);
+            var cell = StructureCell() ?? sh.Offset(0, 0, 1);
             PlacementProblem = _sim.Constructions.CanPlace(Structure, cell);
             _ghost.Position = new Vector3(cell.X + 0.5f, cell.Z + 0.5f, cell.Y + 0.5f);
             _ghost.Scale = new Vector3(1, 1, 1);

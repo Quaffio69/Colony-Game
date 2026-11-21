@@ -453,6 +453,11 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   are not the game.) The slice hides water above the cut, so a **water cap** (`water_cap.gdshader`, like the
   terrain cap) draws the cross-section at the cut from a map-sized R8 texture (water above the cut per column, 1/16
   levels): rebuilt over wet blocks on a level change, patched per changed block, uploaded at most 5x a second.
+  **Waterfalls** (`FallView`, `waterfall(_dr).gdshader`): the sim moves water over a drop straight between columns, so the
+  air between lip and landing held nothing to draw. `Water.Falls(box)` (read-only) lists pipes on awake blocks sending at
+  least `SleepFlow` to a span whose surface (or floor) is 0.75+ levels lower; FallView reads it round the camera 4x a
+  second (range 1.6x rig distance, 40-180 tiles, max 1500) and draws a full-cell curtain from the lip down (streaks
+  running down, lacy for trickles), a splash puff and spray droplets, all animated in the shader. `--falls-demo`.
 - **Thin walls (`World.EdgeInfo`, `WallMaterials`):** walls, doors and windows stand on cell edges, one level tall,
   so rooms keep their floor. Each cell owns its east (+x) and north (+y) edge: a `ushort` per cell in `Chunk.Edges`
   (allocated on first use; low byte east, high byte north), each byte kind (2 bits: wall, door, window) + material

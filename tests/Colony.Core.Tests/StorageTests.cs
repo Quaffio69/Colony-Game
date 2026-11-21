@@ -249,3 +249,22 @@ public class DemolishTests
         Assert.All(room.Parts, p => Assert.True(p.Built, p.Name));
     }
 }
+
+public class WheelMountTests
+{
+    [Fact]
+    public void AWaterWheel_HangsOnAWallFace_OrAThinWall_ButNotInOpenAir()
+    {
+        var w = new VoxelWorld(16, 16, 12);
+        for (int y = 0; y < 16; y++)
+        for (int x = 0; x < 16; x++)
+        for (int z = 0; z <= 2; z++) w.Set(x, y, z, TileType.Stone);
+        for (int z = 3; z <= 8; z++) w.Set(5, 5, z, TileType.Stone); // a pillar
+        var sim = new ColonySim(w);
+        Assert.Null(sim.Constructions.CanPlace(StructureKind.WaterWheel, new TilePos(6, 5, 7)));      // against the pillar's face, mid-air
+        Assert.NotNull(sim.Constructions.CanPlace(StructureKind.WaterWheel, new TilePos(10, 10, 7))); // in open air
+        w.SetEdge(new TilePos(10, 10, 7), EdgeInfo.East, EdgeInfo.Make(EdgeKind.Wall, 2));
+        Assert.Null(sim.Constructions.CanPlace(StructureKind.WaterWheel, new TilePos(10, 10, 7)));    // on a thin wall
+        Assert.Null(sim.Constructions.CanPlace(StructureKind.WaterWheel, new TilePos(11, 10, 7)));    // the wall's other side
+    }
+}
