@@ -457,7 +457,9 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   air between lip and landing held nothing to draw. `Water.Falls(box)` (read-only) lists pipes on awake blocks sending at
   least `SleepFlow` to a span whose surface (or floor) is 0.75+ levels lower; FallView reads it round the camera 4x a
   second (range 1.6x rig distance, 40-180 tiles, max 1500) and draws a full-cell curtain from the lip down (streaks
-  running down, lacy for trickles), a splash puff and spray droplets, all animated in the shader. `--falls-demo`.
+  running down, lacy for trickles), a splash puff and spray droplets, all animated in the shader; falls of 1.5+ levels
+  also give off mist (`mist(_dr).gdshader`: 4 camera-facing puffs a fall on staggered loops, rising, swelling and
+  drifting out and downwind, their density Bayer-dithered so it stays opaque pixel-art haze). `--falls-demo`.
 - **Thin walls (`World.EdgeInfo`, `WallMaterials`):** walls, doors and windows stand on cell edges, one level tall,
   so rooms keep their floor. Each cell owns its east (+x) and north (+y) edge: a `ushort` per cell in `Chunk.Edges`
   (allocated on first use; low byte east, high byte north), each byte kind (2 bits: wall, door, window) + material
