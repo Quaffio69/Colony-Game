@@ -11,7 +11,7 @@ hot-seat, or online with friends, each of you a colony in one shared world: trad
 
 ## Play
 
-1. Download **[ColonyLauncher.exe](https://github.com/OWNER/REPO/releases/latest/download/ColonyLauncher.exe)**
+1. Download **[ColonyLauncher.exe](https://github.com/Quaffio69/Colony-Game/releases/latest/download/ColonyLauncher.exe)**
    (Windows 10 or 11, 64-bit).
 2. Run it and press **Install**. It installs the game for you (no administrator rights), adds a Start menu entry, and
    from then on checks for updates each time you open it: **Update**, then **Play**.
@@ -22,7 +22,7 @@ Windows may warn that the launcher is from an unknown publisher (it isn't code-s
 Your saves and settings live in `%APPDATA%\Godot\app_userdata\Colony Game` and are kept through updates and uninstalls.
 Uninstall from the launcher, or from Windows' **Apps & features**.
 
-Prefer no launcher? Each [release](https://github.com/OWNER/REPO/releases) also has the game as a zip: unpack it anywhere
+Prefer no launcher? Each [release](https://github.com/Quaffio69/Colony-Game/releases) also has the game as a zip: unpack it anywhere
 and run `ColonyGame.exe`.
 
 **Requirements:** a graphics card with Vulkan support (most from 2016 on); 4 GB of RAM; about 200 MB of disk.
