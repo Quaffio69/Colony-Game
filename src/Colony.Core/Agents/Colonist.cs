@@ -393,6 +393,8 @@ public sealed partial class Colonist
     private bool TryFurnish(ColonySim sim, int component)
     {
         if (MyHousing(sim).All.Count == 0) return false;
+        var demands = MyHousing(sim).Demands().ToList();
+        if (demands.Count == 0) return false; // every home has what its policy wants (checked before scanning the piles)
         var sources = new List<(TilePos Cell, ItemPile Pile)>();
         foreach (var (p, pile) in sim.Items.All)
             if (pile.Type.Def.Fixture != null && pile.Available > 0 && Needs.Usable(sim, p, Faction) && sim.Rooms.RoomAt(p) is not { Type.IsHome: true }
@@ -400,7 +402,7 @@ public sealed partial class Colonist
                 sources.Add((p, pile));
         if (sources.Count == 0) return false;
         int Dist(TilePos a, TilePos b) => Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y) + 2 * Math.Abs(a.Z - b.Z);
-        foreach (var (home, slot, tier, missing) in MyHousing(sim).Demands().OrderBy(d => Dist(d.Home.Room.Cells.First(), Position)).ThenBy(d => d.Home.Room.Id).ToList())
+        foreach (var (home, slot, tier, missing) in demands.OrderBy(d => Dist(d.Home.Room.Cells.First(), Position)).ThenBy(d => d.Home.Room.Id).ToList())
         {
             if (sim.PathBudgetExhausted)
             {
@@ -694,8 +696,10 @@ public sealed partial class Colonist
                     break;
                 case Labor.Hauling:
                     if (_priority[(int)Work.Trading] == priority) found = TryTrade(sim, component);
+                    // Homes first: a few trips that house people, which general hauling (never short of work in a
+                    // busy colony) would otherwise starve forever.
                     if (!found && !_deferred && _priority[(int)Work.Hauling] == priority)
-                        found = TryHaul(sim, component) || (!_deferred && TryFurnish(sim, component));
+                        found = TryFurnish(sim, component) || (!_deferred && TryHaul(sim, component));
                     break;
                 default:
                     if (_priority[(int)Work.Industry] == priority) found = TryCraft(sim, component);

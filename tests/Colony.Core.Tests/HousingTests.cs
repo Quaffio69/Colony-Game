@@ -85,6 +85,26 @@ public class HousingTests
     }
 
     [Fact]
+    public void HomesAreFurnished_EvenWhileHaulingNeverRunsOut()
+    {
+        // The first agent playtest: a busy colony always had goods to haul, and furnishing only came after hauling,
+        // so homes stayed empty for 20 days with beds in stock and everyone left. Furnishing now comes first.
+        var sim = FlatSim(48);
+        var home = PaintHome(sim, 4, 4, 7, 6);
+        StockCottage(sim, new TilePos(4, 20, 4), 6);
+        sim.Stockpiles.AddFloorBox(new TilePos(30, 30, 3), new TilePos(45, 45, 3));
+        for (int i = 0; i < 40; i++) sim.Items.Drop(new TilePos(10 + i % 30, 40 + i / 30, 4), ItemType.Stone, 6); // a backlog of loose stone
+        for (int i = 0; i < 3; i++)
+        {
+            var c = sim.AddColonist($"C{i}", new TilePos(10 + i, 10, 4));
+            foreach (var w in Enum.GetValues<Work>()) c.SetPriority(w, w == Work.Hauling ? 1 : 0); // haulers only
+        }
+        Run(sim, 1500);
+        Assert.Equal(3, home.Beds);
+        Assert.Contains(sim.Items.All, e => e.Value.Type == ItemType.Stone && !sim.Stockpiles.Contains(e.Key)); // the backlog is still there
+    }
+
+    [Fact]
     public void RaisingAPolicysTier_UpgradesEveryHomeOnIt_AndBreaksTheOldPiecesDown()
     {
         var sim = FlatSim();
