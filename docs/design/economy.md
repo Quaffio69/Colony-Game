@@ -74,7 +74,7 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   room, not raw count, and lesser extras never hurt), Input crate (one input each: `Hauling.InputDemands` fills crates
   towards two batches of every input the machines need, keeping an empty crate per input that has none, so
   a recipe needs at least one crate per input; inputs no machine needs are hauled out; sources are loose piles, stockpiles or other factories' output crates; this is the factory
-  link point, conveyors plug in here later), Output crate (haulers empty it). Workers loop: reserve batch at
+  link point, conveyors plug in here later), Output crate (haulers empty it; one per product a room makes, since a crate holds one kind of item: `Rooms.Status` says when one is missing). Workers loop: reserve batch at
   every input (one pickup per crate) + space at output crate + claim machine (biggest free machine first),
   fetch each, work
   `WorkTicks / Efficiency`, store; a partial batch is allowed when the crate isn't being refilled, so

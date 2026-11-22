@@ -20,8 +20,9 @@ public static class Needs
     public const int MealTicks = Day / 3;
     /// <summary>Below this a colonist eats when it next looks for work...</summary>
     public const int Hungry = Day / 3;
-    /// <summary>...and below this it drops what it is doing to eat.</summary>
-    public const int Famished = Day / 10;
+    /// <summary>...and below this it drops what it is doing to eat: early enough to walk home from far work (a tenth
+    /// of a day was less than the walk back from 90 tiles out, so a playtest saw colonists starve with full stores).</summary>
+    public const int Famished = Day / 6;
     public const int EatTicks = 40;
     /// <summary>A day awake on a full night's rest; sleep restores it (<see cref="Housing.RestRate"/> per tick: about a
     /// quarter of a day in a comfortable bed, twice that on the floor).</summary>

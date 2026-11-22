@@ -64,7 +64,15 @@ try
             }
             meta.LastTick = sim.Tick;
             int ticks = (int)(hours / 24 * Needs.Day);
-            for (int t = 0; t < ticks; t++) sim.Step();
+            var time = new Dictionary<string, int>();
+            for (int t = 0; t < ticks; t++)
+            {
+                sim.Step();
+                if (t % 50 != 0) continue; // what everyone is doing, sampled
+                foreach (var c in sim.Colonists)
+                    if (!c.IsChild) time[Activity(c)] = time.GetValueOrDefault(Activity(c)) + 1;
+            }
+            Report.TimeSpent = time;
             meta.Turn++;
             File.AppendAllText(Path.Combine(dir, "log.md"),
                 $"## Turn {meta.Turn} (day {sim.Tick / Needs.Day + 1}, played {hours:0.#} h)\n\n```\n{(answers.Length == 0 ? "(no orders)\n" : answers.ToString())}```\n\n");
@@ -108,6 +116,20 @@ catch (Exception e)
     return 1;
 }
 return 0;
+
+static string Activity(Colonist c) => c.Downed ? "struck down" : c.Task switch
+{
+    ColonistTask.Sleep => "sleeping",
+    ColonistTask.Eat => "eating",
+    ColonistTask.Designation or ColonistTask.ScaffoldFetch => c.CurrentWork is { } w ? Colonist.WorkNames[(int)w].ToLowerInvariant() : "digging/felling/farming",
+    ColonistTask.Build => "building",
+    ColonistTask.CraftFetch or ColonistTask.CraftWork or ColonistTask.CraftStore => "factory work",
+    ColonistTask.HaulPickup or ColonistTask.HaulDeliver => "hauling",
+    ColonistTask.FurnishPickup or ColonistTask.FurnishDeliver => "furnishing homes",
+    ColonistTask.TradePickup or ColonistTask.TradeDeliver => "trading",
+    ColonistTask.Equip or ColonistTask.Fight or ColonistTask.Flee or ColonistTask.Rally => "fighting",
+    _ => "idle",
+};
 
 (ColonySim, GameSettings, Meta) Load()
 {
@@ -236,6 +258,21 @@ static class Orders
                 var (p, q) = Ground(sim, a, opts);
                 return Run(new Covers(a[0] == "floor" ? StructureKind.Floor : StructureKind.Roof, p, q, mat, false));
             }
+            case "door" or "window": // door X Y east|west|north|south [z=LEVEL]: on that edge of the cell
+            {
+                int x = I(1), y = I(2), z = Opt("z") ?? Level(sim, I(1), I(2));
+                var (cell, side) = a[3].ToLowerInvariant() switch
+                {
+                    "east" or "e" => (new TilePos(x, y, z), EdgeInfo.East),
+                    "north" or "n" => (new TilePos(x, y, z), EdgeInfo.North),
+                    "west" or "w" => (new TilePos(x - 1, y, z), EdgeInfo.East),
+                    "south" or "s" => (new TilePos(x, y - 1, z), EdgeInfo.North),
+                    _ => throw new ArgumentException("side is east, west, north or south"),
+                };
+                int mat = Material(opts.GetValueOrDefault("material", ""), WallMaterials.All.Select(m => m.Name));
+                return Run(new PlaceEdge(a[0] == "door" ? StructureKind.Door : StructureKind.Window, cell, side, mat));
+            }
+            case "erase": { var (p, q) = Ground(sim, a, opts); return Run(new EraseRoom(p, q)); }
             case "cancel": { var (p, q) = Ground(sim, a, opts, spread: 3); return Run(new CancelOrders(p, q)); }
             case "demolish": { var (p, q) = Ground(sim, a, opts); return Run(new Demolish(p, q)); }
             case "priority": // priority NAME|all WORK N
@@ -296,6 +333,8 @@ static class Orders
 static class Report
 {
     private const int MapW = 64, MapH = 30;
+    /// <summary>What the grown colonists did during the turn (samples per activity), set by the turn.</summary>
+    public static Dictionary<string, int>? TimeSpent;
 
     public static string Text(ColonySim sim, Meta meta, string answers)
     {
@@ -326,6 +365,12 @@ static class Report
         int loose = sim.Items.All.Where(e => !sim.Stockpiles.Contains(e.Key) && sim.Rooms.PartAt(e.Key) == null).Sum(e => e.Value.Count);
         s.AppendLine($"- Stockpile cells {sim.Stockpiles.Count}; lying loose (not in a stockpile or crate) {loose}");
 
+        if (TimeSpent is { Count: > 0 } time)
+        {
+            int all = time.Values.Sum();
+            s.AppendLine($"- Time spent this turn (grown colonists): {string.Join(", ", time.OrderByDescending(e => e.Value).Select(e => $"{e.Key} {100.0 * e.Value / all:0}%"))}");
+        }
+
         s.AppendLine();
         s.AppendLine("## People");
         foreach (var c in people)
@@ -353,14 +398,24 @@ static class Report
             if (home != null)
             {
                 s.AppendLine($"- {home.Name} ({home.Policy.Name}) at {where}: {room.Cells.Count} cells, beds {home.Beds}, residents {home.Residents.Count}, fixtures {home.Fixtures.Count}");
+                // What it still wants, and whether the stores have it (the policy's tier exactly).
+                var wants = sim.Housing.Demands().Where(d => d.Home == home).Select(d =>
+                {
+                    var fits = Catalog.Fixtures[Housing.Slots[d.Slot]].Where(i => i.Def.FixtureTier == d.Tier).ToList();
+                    int inStore = fits.Sum(i => totals[i.Index]);
+                    return $"{d.Missing} {Housing.Slots[d.Slot]} of tier {d.Tier} ({string.Join("/", fits.Select(i => i.Id))}: {inStore} in stock)";
+                }).ToList();
+                if (wants.Count > 0) s.AppendLine($"  - wants: {string.Join("; ", wants)}");
                 continue;
             }
-            s.AppendLine($"- {room.Name} at {where}: {room.Cells.Count} cells, efficiency {room.Efficiency:P0}");
+            s.AppendLine($"- {room.Name} at {where}: {room.Cells.Count} cells, efficiency {room.Efficiency:P0}; status: {Rooms.Status(room, sim)}");
             foreach (var p in room.Parts)
             {
                 string state = p.Built ? "built" : $"BLUEPRINT (needs {p.Cost.Count} {p.Cost.Material.Id} and a builder)";
-                string recipe = p.Role == PartRole.Machine && p.Recipe is { } r ? $", makes {r.Output.Id}: {r.Describe()}" : "";
-                s.AppendLine($"  - {p.Name} [{p.Type.Id}] at {p.Origin.X},{p.Origin.Y}: {state}{recipe}");
+                string recipe = p.Role == PartRole.Machine && p.Recipe is { } r ? $", makes {r.Output.Id}: {r.Describe()}{(p.ClaimedBy >= 0 ? " (being worked)" : "")}" : "";
+                string holds = p.Built && p.Role is PartRole.Input or PartRole.Output
+                    ? sim.Items.TryGet(p.Cells[0], out var pile) ? $", holds {pile.Count} {pile.Type.Id}" : ", empty" : "";
+                s.AppendLine($"  - {p.Name} [{p.Type.Id}] at {p.Origin.X},{p.Origin.Y}: {state}{recipe}{holds}");
             }
         }
         var structures = sim.Constructions.All.GroupBy(b => b.Kind).Select(g => $"{g.Key} {g.Count()}").ToList();
@@ -560,7 +615,9 @@ static class Reference
             | `floor X1 Y1 X2 Y2 [material=plank|flagstone|tile]`, `roof ... [material=thatch|shingle|slate|clay]` | lay floors / roofs |
             | `policy X Y INDEX` | a home's furnishing policy (0 dormitory, 1 cottage, 2 house, 3 manor) |
             | `priority NAME|all WORK N` | work priority 0 (never) or 1 (first) .. 4 (last); WORK: mining, woodcutting, farming, construction, hauling, industry, trading |
-            | `cancel X1 Y1 X2 Y2 [z=LEVEL]` | cancel orders and plans, remove zone cells in the box |
+            | `door X Y east|west|north|south [z=LEVEL]`, `window ...` | a door or window on that edge of the cell (cut into a wall, or on its own) |
+            | `erase X1 Y1 X2 Y2 [z=LEVEL]` | remove room or home cells in the box (its parts go) |
+            | `cancel X1 Y1 X2 Y2 [z=LEVEL]` | cancel designations and unbuilt plans, and remove stockpile and farm cells in the box (not rooms: use `erase`) |
             | `demolish X1 Y1 X2 Y2 [z=LEVEL]` | take down what is built there (materials are left) |
             | `draft` / `draft off` | draft every grown colonist to fight / stand them down |
             | `attack NESTID`, `march X Y` | send the drafted against a nest / to a spot |
@@ -582,12 +639,16 @@ static class Reference
             - A day is 24 game hours. Colonists eat about 3 meals a day (berries 1 meal, bread 4), sleep about a fifth of the
               day (in a bed if they have a home), and do work by their priorities: designations (dig, chop, gather, sow),
               building blueprints, hauling (stockpiles, crates, construction materials, home furnishing), factory work.
+            - Work: each colonist does work types by priority (1 first .. 4 last); among work of equal priority the nearest
+              job wins, so a big chop or gather order can keep everyone busy outside while a dig waits: raise what is urgent
+              to priority 1 (`priority all mining 1`). New colonists prefer one kind of work (2) over the rest (3).
             - Settlers arrive in waves (day 3, then every 3 days) while there are 3+ days of food and nobody starves; free
               beds draw more. Unhappy colonists (no home, no goods) leave after 5 days.
             - Food: gather wild berries early; farm wheat (4 days), mill it to flour and bake bread (kitchen: millstone,
               oven; ovens need charcoal) or farm glowcaps under a roof (3 days, eaten raw).
             - Industry: a workshop room holds stations (machines) set to recipes, input crates (one input item each) and an
-              output crate. Haulers fill input crates; workers run the machines. Bigger station sizes do more per worker.
+              output crate per product (a crate holds one kind of item). Haulers fill input crates; workers run the
+              machines. Each room reports a status saying what it is missing. Bigger station sizes do more per worker.
               Size-1 stations are built from logs (or stone); bigger ones need planks etc. Tools/lanterns add efficiency.
             - Homes: a home room gets beds (and furniture) installed by haulers from stock: make straw pallets (fiber) or
               wooden beds (planks, cloth). Homeless colonists sleep on the floor and get unhappy.

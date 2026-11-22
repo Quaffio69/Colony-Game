@@ -418,6 +418,12 @@ public sealed class Rooms
             return Pending(room, PartRole.Output) ? "output crate under construction" : "needs an output crate";
         int distinct = room.InputNeeds().Count;
         if (crates < distinct) return $"needs {distinct} input crates (one per input), has {crates}";
+        // A crate holds one kind of item: machines making different products each need an output crate, or the
+        // busiest one keeps the only crate full of its product and the others never start (found by a playtest).
+        var products = machines.Where(m => m.Recipe!.Kind == Items.ItemKind.Good).Select(m => m.Recipe!.Output).Distinct().ToList();
+        int outCrates = room.Count(PartRole.Output);
+        if (outCrates < products.Count)
+            return $"needs {products.Count} output crates (one per product: {string.Join(", ", products.Select(p => p.Name.ToLowerInvariant()))}), has {outCrates}";
         int manned = machines.Count(m => m.ClaimedBy >= 0);
         if (manned > 0) return $"working ({manned}/{machines.Count} machines manned)";
 

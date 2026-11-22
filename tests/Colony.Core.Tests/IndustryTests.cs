@@ -243,6 +243,24 @@ public class IndustryTests
     }
 
     [Fact]
+    public void ARoomMakingTwoProducts_SaysItNeedsAnOutputCrateForEach()
+    {
+        // The first agent playtest: a kitchen with a millstone and an oven but one output crate kept it full of flour,
+        // and the oven never baked for 8 days with nothing saying why.
+        var sim = Meadow();
+        var kitchen = Catalog.Workshop("kitchen");
+        sim.Rooms.Paint(kitchen, G(10, 10), G(17, 15));
+        sim.Rooms.Place(Catalog.Part("kitchen.millstone"), new TilePos(10, 10, 4), false);
+        sim.Rooms.Place(Catalog.Part("kitchen.oven"), new TilePos(10, 13, 4), false);
+        for (int i = 0; i < 3; i++) sim.Rooms.Place(PartType.InputCrate, new TilePos(15 + i % 2, 10 + i, 4), false);
+        sim.Rooms.Place(PartType.OutputCrate, new TilePos(17, 15, 4), false);
+        var room = sim.Rooms.All[0];
+        Assert.Contains("needs 2 output crates", Rooms.Status(room, sim));
+        sim.Rooms.Place(PartType.OutputCrate, new TilePos(16, 15, 4), false);
+        Assert.DoesNotContain("output crate", Rooms.Status(room, sim));
+    }
+
+    [Fact]
     public void Construction_BootstrapsFromLogs_ThenPlanksBuildTheBiggerMachines()
     {
         var sim = Meadow();
