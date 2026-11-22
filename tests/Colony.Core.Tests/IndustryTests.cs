@@ -1,4 +1,5 @@
 ﻿using Colony.Core.Agents;
+using Colony.Core.Commands;
 using Colony.Core.Industry;
 using Colony.Core.Items;
 using Colony.Core.Orders;
@@ -225,6 +226,26 @@ public class IndustryTests
         sim.AddColonist("Hauler", new TilePos(15, 15, 4));
         for (int i = 0; i < 6000; i++) sim.Step();
         Assert.Equal(8, sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Plank.Index]);
+    }
+
+    [Fact]
+    public void AMachineWithAStockLimit_StopsThere_AndResumesWhenStockIsUsed()
+    {
+        var sim = SawmillScene(logs: 20, colonists: 3);
+        var saws = sim.Rooms.All[0].PartsWithRole(PartRole.Machine).ToList(); // two saw benches
+        var saw = saws[0];
+        Assert.Equal("No machine there", sim.Commands.Execute(new SetMachineLimit(new TilePos(0, 0, 4), 8)));
+        foreach (var s in saws) sim.Commands.Execute(new SetMachineLimit(s.Cells[0], 8));
+        Assert.Equal(8, saw.Limit);
+        for (int i = 0; i < 12_000; i++) sim.Step();
+        int planks = sim.Items.UnitsOf(ItemType.Plank);
+        Assert.InRange(planks, 8, 8 + saws.Sum(s => s.Batch.OutCount)); // stops at the limit (batches in hand finish)
+        Assert.True(sim.Items.UnitsOf(ItemType.Log) > 0, "logs left over");
+        Assert.Contains("stocked up", Rooms.Status(sim.Rooms.All[0], sim));
+        // Use some planks: it starts again.
+        foreach (var (p, pile) in sim.Items.All.Where(e => e.Value.Type == ItemType.Plank).ToList()) sim.Items.Consume(p, pile.Available);
+        for (int i = 0; i < 6000; i++) sim.Step();
+        Assert.True(sim.Items.UnitsOf(ItemType.Plank) >= 8, "made more once stock fell");
     }
 
     [Fact]

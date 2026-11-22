@@ -569,6 +569,9 @@ public partial class InspectorWindow : GlyphWindow
         }
     }
 
+    /// <summary>Stock limits a machine can be set to (0: none).</summary>
+    private static readonly int[] LimitSteps = [0, 10, 20, 50, 100, 200, 500];
+
     private void RoomPanel(Room room)
     {
         var sim = _ui.Sim;
@@ -589,6 +592,28 @@ public partial class InspectorWindow : GlyphWindow
                 double perMinute = g.Count() * b.OutCount * 60.0 * ColonySim.TicksPerSecond * room.Efficiency / b.WorkTicks;
                 Content.AddChild(new GlyphKV("÷", GlyphTheme.Tok("warn"), $"{g.Count()} {name.ToLowerInvariant()}: {recipe!.Name.ToLowerInvariant()}", $"{perMinute:0.#}/min"));
                 Content.AddChild(G.Para($"   {recipe.Describe()} ({Catalog.EducationName(recipe.Education)}) · F over it to change", "Faint"));
+                if (recipe.Kind == Colony.Core.Items.ItemKind.Good)
+                {
+                    // Stock limit: the machines stop starting batches once the colony holds this many.
+                    var group = g.ToList();
+                    int limit = group[0].Limit, stock = Rooms.StockOf(sim, recipe.Output, room.Faction);
+                    var row = new HBoxContainer();
+                    row.AddChild(G.Text("   Keep in store", "Dim", expand: true));
+                    void Set(int value)
+                    {
+                        foreach (var m in group) _ui.Tool.Issue(new Colony.Core.Commands.SetMachineLimit(m.Cells[0], value));
+                    }
+                    int Step(int dir)
+                    {
+                        int at = Array.FindIndex(LimitSteps, v => v == limit);
+                        if (at < 0) at = Array.FindIndex(LimitSteps, v => v > limit) - (dir > 0 ? 1 : 0);
+                        return LimitSteps[Math.Clamp(at + dir, 0, LimitSteps.Length - 1)];
+                    }
+                    row.AddChild(G.Button(" ‹ ", () => Set(Step(-1)), "Lower the stock limit", "Ghost"));
+                    row.AddChild(G.Text(limit == 0 ? "no limit" : $"{stock}/{limit}", limit > 0 && stock >= limit ? "Good" : "Hi", cols: 10, align: HorizontalAlignment.Center));
+                    row.AddChild(G.Button(" › ", () => Set(Step(1)), "Raise the stock limit (the machines stop once the colony holds this many)", "Ghost"));
+                    Content.AddChild(row);
+                }
             }
         }
         var aux = room.Parts.Where(p => p.Built && p.Role == PartRole.Auxiliary).GroupBy(p => p.Name).ToList();

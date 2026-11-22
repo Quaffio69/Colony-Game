@@ -555,3 +555,18 @@ public sealed record RejectTrade(int Deal) : Command
 {
     public override string Apply(ColonySim sim) => sim.Trades.Reject(sim, Deal, Player);
 }
+
+// ---- Factories (continued) -----------------------------------------------------------------------------------
+
+/// <summary>Sets the machine covering a cell to stop starting batches once the colony holds <see cref="Limit"/> of its product (0: no limit).</summary>
+public sealed record SetMachineLimit(TilePos Cell, int Limit) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        if (sim.Rooms.PartAt(Cell) is not { Role: PartRole.Machine } machine) return "No machine there";
+        if (machine.Room.Faction != Player) return "That machine belongs to another colony";
+        sim.Rooms.SetLimit(machine, Limit);
+        string what = machine.Recipe?.Name.ToLowerInvariant() ?? "its product";
+        return machine.Limit == 0 ? $"{machine.Name} makes {what} without limit" : $"{machine.Name} keeps {machine.Limit} {what} in store";
+    }
+}

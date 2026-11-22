@@ -903,6 +903,7 @@ public sealed partial class Colonist
         {
             var recipe = machine.Recipe!;
             if (recipe.Education > Education || IsAutomaton && recipe.Kind == ItemKind.Education) continue;
+            if (Rooms.AtLimit(sim, machine)) continue; // stocked up to its limit
             if (MachineSpots(sim, machine, component).Count == 0) continue;
             var full = machine.Batch;
             int maxUnits = full.Units;

@@ -245,6 +245,8 @@ static class Orders
                 return m.Recipe?.Output.Id == want ? $"{m.Name} now makes {m.Recipe.Name.ToLowerInvariant()}: {m.Recipe.Describe()}"
                     : $"{m.Name} can't make {want}: it makes {string.Join(", ", m.Type.Recipes.Select(r => r.Output.Id))}";
             }
+            case "limit": // limit X Y N [z=]: the machine there stops once the colony holds N of its product (0: no limit)
+                return Run(new SetMachineLimit(new TilePos(I(1), I(2), Opt("z") ?? Level(sim, I(1), I(2))), I(3)));
             case "walls":
             {
                 int mat = Material(opts.GetValueOrDefault("material", "log"), WallMaterials.All.Select(m => m.Name));
@@ -437,7 +439,7 @@ static class Report
             foreach (var p in room.Parts)
             {
                 string state = p.Built ? "built" : $"BLUEPRINT (needs {p.Cost.Count} {p.Cost.Material.Id} and a builder)";
-                string recipe = p.Role == PartRole.Machine && p.Recipe is { } r ? $", makes {r.Output.Id}: {r.Describe()}{(p.ClaimedBy >= 0 ? " (being worked)" : "")}" : "";
+                string recipe = p.Role == PartRole.Machine && p.Recipe is { } r ? $", makes {r.Output.Id}: {r.Describe()}{(p.Limit > 0 ? $", limit {p.Limit} (stock {Rooms.StockOf(sim, r.Output, 0)})" : "")}{(p.ClaimedBy >= 0 ? " (being worked)" : "")}" : "";
                 string holds = p.Built && p.Role is PartRole.Input or PartRole.Output
                     ? sim.Items.TryGet(p.Cells[0], out var pile) ? $", holds {pile.Count} {pile.Type.Id}" : ", empty" : "";
                 s.AppendLine($"  - {p.Name} [{p.Type.Id}] at {p.Origin.X},{p.Origin.Y}: {state}{recipe}{holds}");
@@ -637,6 +639,7 @@ static class Reference
             | `home X1 Y1 X2 Y2 [z=LEVEL]` | paint a home (4+ cells; beds and furniture are brought by haulers per its policy) |
             | `part PARTID X Y [size=1..5] [rot] [z=LEVEL]` | place a station/crate/tool in a room (a blueprint: builders build it from delivered materials) |
             | `recipe X Y OUTPUTID [z=LEVEL]` | set the machine covering X Y to a recipe |
+            | `limit X Y N [z=LEVEL]` | the machine stops starting batches once the colony holds N of its product (0: no limit) |
             | `walls X1 Y1 X2 Y2 [material=log|rubble|plank|stone|brick]` | thin walls all round a box (homes like walls, floor and roof) |
             | `floor X1 Y1 X2 Y2 [material=plank|flagstone|tile]`, `roof ... [material=thatch|shingle|slate|clay]` | lay floors / roofs |
             | `policy X Y INDEX` | a home's furnishing policy (0 dormitory, 1 cottage, 2 house, 3 manor) |

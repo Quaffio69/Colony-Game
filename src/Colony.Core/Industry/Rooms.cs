@@ -18,6 +18,10 @@ public sealed class Part
     public string Name => PartInfo.Name(Type, Size);
     /// <summary>What this machine makes (one of its station's recipes; null for other parts).</summary>
     public Recipe? Recipe { get; internal set; }
+    /// <summary>Stock limit: the machine starts no batch while the colony holds this many of its product (0: no limit).
+    /// Without one, stations ran forever (a playtest ended with 42 tableware nobody needed, and a writing desk ate the
+    /// paper the lectern wanted).</summary>
+    public int Limit { get; internal set; }
     /// <summary>One full batch at this machine: its recipe scaled by the machine's size.</summary>
     public Batch Batch => PartInfo.MachineBatchOf(Type, Size, Recipe ?? throw new InvalidOperationException($"{Name} is not a machine"));
 
@@ -426,6 +430,8 @@ public sealed class Rooms
             return $"needs {products.Count} output crates (one per product: {string.Join(", ", products.Select(p => p.Name.ToLowerInvariant()))}), has {outCrates}";
         int manned = machines.Count(m => m.ClaimedBy >= 0);
         if (manned > 0) return $"working ({manned}/{machines.Count} machines manned)";
+        if (machines.All(m => AtLimit(sim, m)))
+            return $"stocked up: {string.Join(", ", machines.Select(m => $"{m.Recipe!.Name.ToLowerInvariant()} {StockOf(sim, m.Recipe.Output, room.Faction)}/{m.Limit}"))}";
 
         // Why nobody is working: the first idle machine's first problem.
         foreach (var m in machines)
@@ -451,6 +457,27 @@ public sealed class Rooms
     }
 
     private static bool Pending(Room room, PartRole role) => room.Blueprints.Any(p => p.Role == role);
+
+    /// <summary>Units of an item a colony holds anywhere it may use them (all of them when there is one colony).</summary>
+    public static int StockOf(ColonySim sim, Items.ItemType type, int faction)
+    {
+        if (sim.Factions.Count == 1) return sim.Items.UnitsOf(type);
+        int n = 0;
+        foreach (var (p, pile) in sim.Items.All)
+            if (pile.Type == type && Agents.Needs.Usable(sim, p, faction)) n += pile.Count;
+        return n;
+    }
+
+    /// <summary>Whether a machine has met its stock limit (it starts no new batch until stock drops below it).</summary>
+    public static bool AtLimit(ColonySim sim, Part machine) =>
+        machine.Limit > 0 && machine.Recipe is { Kind: Items.ItemKind.Good } r && StockOf(sim, r.Output, machine.Room.Faction) >= machine.Limit;
+
+    /// <summary>Sets a machine's stock limit (0: none).</summary>
+    public void SetLimit(Part machine, int limit)
+    {
+        machine.Limit = Math.Max(0, limit);
+        Version++;
+    }
 
     /// <summary>
     /// The output crate a batch of <paramref name="product"/> goes to: one already holding it with room, else an empty
@@ -556,6 +583,7 @@ public sealed class Rooms
                 foreach (var c in p.Cells) Net.SnapIO.Write(w, c);
                 w.Write(p.Recipe is { } recipe ? p.Type.Recipes.IndexOf(recipe) : -1);
                 w.Write(p.ClaimedBy); w.Write(p.Working); w.Write(p.Removed); w.Write(p.Built); w.Write(p.BuilderId);
+                w.Write(p.Limit);
             }
         }
         w.Write(_nextRoomId); w.Write(_nextPartId); w.Write(Version); w.Write(InstantBuild);
@@ -586,6 +614,7 @@ public sealed class Rooms
                 part.Recipe = recipe >= 0 ? type.Recipes[recipe] : null;
                 part.ClaimedBy = r.ReadInt32(); part.Working = r.ReadBoolean(); part.Removed = r.ReadBoolean();
                 part.Built = r.ReadBoolean(); part.BuilderId = r.ReadInt32();
+                if (!Net.SnapIO.Before(5)) part.Limit = r.ReadInt32();
                 room.PartList.Add(part);
             }
             _rooms.Add(room);

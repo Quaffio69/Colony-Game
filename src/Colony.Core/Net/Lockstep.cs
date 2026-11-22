@@ -125,7 +125,7 @@ public sealed record NetPlayer(int Faction, string Name);
 /// </summary>
 public sealed class LockstepHost : IDisposable
 {
-    public const int Protocol = 3;
+    public const int Protocol = 4;
     /// <summary>Ticks between desync checks (5 s at 1x).</summary>
     public const int HashInterval = 100;
 

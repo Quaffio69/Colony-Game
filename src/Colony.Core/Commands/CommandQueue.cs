@@ -81,7 +81,7 @@ public static class CommandCodec
         CancelWalls, DebugCompleteAll, PaintRoom, EraseRoom, PlacePart, RemoveParts, CycleRecipe, PlaceStructure,
         RemoveStructures, PlaceEdge, RemoveEdge, EdgeLine, PlaceOutline, ClearWalls, Covers, SetWorkPriority, SetHomePolicy,
         SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy, SettleGame, SetDrafted, SquadMove, SquadAttack, DebugSpawnNest, PlaceRacks, Demolish,
-        AddTradeDepot, ProposeTrade, CounterTrade, AcceptTrade, RejectTrade,
+        AddTradeDepot, ProposeTrade, CounterTrade, AcceptTrade, RejectTrade, SetMachineLimit,
     }
 
     private static void Terms(BinaryWriter w, Trade.TradeTerms t)
@@ -186,6 +186,7 @@ public static class CommandCodec
             case CounterTrade x: Head(Tag.CounterTrade); w.Write(x.Deal); Terms(w, x.Terms); break;
             case AcceptTrade x: Head(Tag.AcceptTrade); w.Write(x.Deal); break;
             case RejectTrade x: Head(Tag.RejectTrade); w.Write(x.Deal); break;
+            case SetMachineLimit x: Head(Tag.SetMachineLimit); P(w, x.Cell); w.Write(x.Limit); break;
             default: throw new NotSupportedException($"No codec for {c.GetType().Name}");
         }
     }
@@ -237,6 +238,7 @@ public static class CommandCodec
             Tag.CounterTrade => new CounterTrade(r.ReadInt32(), Terms(r)),
             Tag.AcceptTrade => new AcceptTrade(r.ReadInt32()),
             Tag.RejectTrade => new RejectTrade(r.ReadInt32()),
+            Tag.SetMachineLimit => new SetMachineLimit(P(r), r.ReadInt32()),
             _ => throw new InvalidDataException($"Unknown command tag {tag}"),
         };
         return c with { Player = player };
