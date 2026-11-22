@@ -358,6 +358,17 @@ static class Report
                      $"homeless {people.Count(c => c.Home == null && !c.IsAutomaton)}, hungry {people.Count(c => c.Hungry)}, starving {people.Count(c => c.Starving)}, tired {people.Count(c => c.Tired)}");
         s.AppendLine($"- Food: {Society.FoodInStore(sim)} meals = {Society.FoodDays(sim):0.0} days for everyone (a colonist eats 3 meals a day)");
         s.AppendLine($"- Arrived {society.SettlersArrived} settlers, {society.Births} births, {society.Departed} left, {sim.Deaths} died; living standard {society.Standard:P0}");
+        // Why the living standard is what it is: each need's share met yesterday, and what meets it.
+        var needs = Needs.Goods.Select((g, k) =>
+        {
+            var goods = Catalog.Items.Where(i => i.Need == g.Need).Select(i => i.Id).ToList();
+            return $"{g.Need} {society.Met[k]:P0} met ({g.PerDay:0.##} a head a day of {(goods.Count == 0 ? "nothing yet" : string.Join("/", goods))})";
+        });
+        s.AppendLine($"- Living standard needs (used up daily from stores): {string.Join("; ", needs)}");
+        int waveDay = Balance.FirstSettlerDay;
+        while (waveDay <= sim.Society.Days) waveDay += Balance.SettlerWaveDays;
+        s.AppendLine($"- Settlers: next wave on day {waveDay + 1}, if there are 3+ days of food and under a tenth starving; " +
+                     $"free beds for settlers {sim.Housing.FreeBeds} (family homes keep their spare beds for children)");
         s.AppendLine($"- Landing at {land.Item1},{land.Item2}, level {landLevel}");
         var totals = sim.Items.Totals();
         var stocks = Enumerable.Range(0, totals.Length).Where(i => totals[i] > 0).Select(i => (Type: new ItemType((ushort)i), N: totals[i])).OrderByDescending(e => e.N).ToList();
@@ -390,6 +401,19 @@ static class Report
         s.AppendLine("## Orders, rooms and buildings");
         var orderCounts = sim.Designations.All.GroupBy(e => e.Value).Select(g => $"{g.Key} {g.Count()}").ToList();
         s.AppendLine($"- Open orders: {(orderCounts.Count == 0 ? "none" : string.Join(", ", orderCounts))}");
+        // Orders nobody can get to: no standable cell beside them in any colonist's connected area.
+        var reach = sim.Colonists.Select(c => sim.Connectivity.ComponentOf(c.Position)).Where(k => k >= 0).ToHashSet();
+        var stuck = sim.Designations.All.Keys.Where(p =>
+        {
+            for (int dz = -1; dz <= 1; dz++)
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+                if ((dx | dy | dz) != 0 && reach.Contains(sim.Connectivity.ComponentOf(p.Offset(dx, dy, dz)))) return false;
+            return true;
+        }).ToList();
+        if (stuck.Count > 0)
+            s.AppendLine($"- UNREACHABLE: {stuck.Count} orders have no reachable cell beside them (e.g. at {string.Join("; ", stuck.Take(3).Select(p => $"{p.X},{p.Y},{p.Z}"))}): " +
+                         "colonists can't get there (stairs connect only straight up/down and orthogonally, not diagonally)");
         foreach (var room in sim.Rooms.All)
         {
             var home = sim.Housing.HomeOf(room);
@@ -397,7 +421,8 @@ static class Report
             string where = $"{box.x1},{box.y1}..{box.x2},{box.y2} level {box.z}";
             if (home != null)
             {
-                s.AppendLine($"- {home.Name} ({home.Policy.Name}) at {where}: {room.Cells.Count} cells, beds {home.Beds}, residents {home.Residents.Count}, fixtures {home.Fixtures.Count}");
+                string family = home.Family != 0 ? $", family home of {string.Join(" & ", home.Residents.Where(r => r.Household == home.Family && !r.IsChild).Select(r => r.Name))} (spare beds kept for children)" : "";
+                s.AppendLine($"- {home.Name} ({home.Policy.Name}) at {where}: {room.Cells.Count} cells, beds {home.Beds}, residents {home.Residents.Count}, fixtures {home.Fixtures.Count}{family}");
                 // What it still wants, and whether the stores have it (the policy's tier exactly).
                 var wants = sim.Housing.Demands().Where(d => d.Home == home).Select(d =>
                 {
@@ -503,6 +528,7 @@ static class Report
             if (sim.Flora.TryGet(at, out var plant))
                 return PlantInfo.IsTree(plant.Kind) ? 'T' : PlantInfo.IsGatherable(plant) ? '"' : ',';
             var ground = w.Get(x, y, level - 1);
+            if (!surface && TileInfo.IsSolid(ground) && ground is not (TileType.Grass or TileType.Soil)) return '+'; // floor (dug or natural rock), not a wall
             return ground switch
             {
                 TileType.Grass => '.',
@@ -554,7 +580,7 @@ static class Report
             : $"## Map (level {meta.ViewZ}, x {x0}..{x0 + MapW - 1}, y {y0}..{y0 + MapH - 1}; north up)");
         s.AppendLine("Legend: @ colonist  a ant  N nest  x dig order  c chop  g gather  > stair  b blueprint  M machine  i/o input/output crate  k other part  " +
                      "* goods  w workshop  h home  s stockpile  f farm  ~ water  T tree  \" ripe plant  , plant  . grass  : soil  _ sand  C clay  o ore  # rock" +
-                     (surface ? "" : "  (blank: open air, no floor)"));
+                     (surface ? "" : "  + rock floor (walkable)  (blank: open air, no floor)"));
         Grid(Cell);
         if (surface)
         {
@@ -661,7 +687,7 @@ static class Reference
             or structure) · M machine · i input crate · o output crate · k other part · * goods lying · w workshop floor ·
             h home floor · s stockpile · f farm plot · ~ water · T tree · " ripe plant · , unripe plant · . grass · : soil ·
             _ sand · C clay · o ore · # rock. In a level view (`view X Y LEVEL`), # o C _ are solid tiles at that level and a
-            blank is open air with no floor.
+            blank is open air with no floor, and + is walkable rock floor (dug out).
             """);
 
         s.AppendLine();

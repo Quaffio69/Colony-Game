@@ -64,6 +64,27 @@ public class FamilyTests
     }
 
     [Fact]
+    public void ACoupleWontClaimABigHome_ItsBedsStayForSettlers()
+    {
+        // The second agent playtest: couples claimed 6- and 7-bed homes, kept the spare beds for children not yet born,
+        // and settlers stopped coming. Family homes are now 4 beds at most.
+        var sim = FlatSim();
+        sim.Rooms.Paint(Catalog.Home, new TilePos(4, 4, 3), new TilePos(11, 9, 3)); // 48 cells
+        sim.Step();
+        var big = sim.Housing.HomeOf(sim.Rooms.RoomAt(new TilePos(4, 4, 4))!)!;
+        sim.Housing.Install(sim, big, Catalog.Item("straw_pallet"), 7);
+        Assert.True(big.Beds > Balance.FamilyHomeMaxBeds, $"beds {big.Beds}");
+        var a = sim.AddColonist("Ann", new TilePos(20, 20, 4));
+        sim.AddColonist("Bo", new TilePos(21, 20, 4));
+        Days(sim, 20);
+        Assert.Null(a.Spouse);
+        Assert.Equal(0, big.Family);
+        Cottage(sim, 20, 4, beds: 3); // a family-sized home: now they marry into it
+        Assert.True(RunUntil(sim, () => a.Spouse != null, 45) > 0);
+        Assert.Equal(0, big.Family);
+    }
+
+    [Fact]
     public void NoWedding_WhileSettlersFillEveryHome()
     {
         var sim = FlatSim();

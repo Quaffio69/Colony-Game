@@ -219,7 +219,8 @@ public sealed class Society
     {
         if (Days < Balance.FirstSettlerDay || (Days - Balance.FirstSettlerDay) % Balance.SettlerWaveDays != 0) return;
         int eaters = Eaters(sim, Faction);
-        if (!SettlersCome || eaters == 0 || Members(sim).Any(c => c.Starving) || FoodDays(sim, Faction) < Needs.SettlerFoodDays) return;
+        // A tenth starving (not one: in a big colony someone far out is often briefly empty) keeps settlers away.
+        if (!SettlersCome || eaters == 0 || Members(sim).Count(c => c.Starving) * 10 > eaters || FoodDays(sim, Faction) < Needs.SettlerFoodDays) return;
         float perDay = Balance.SettlerGrowth + Balance.SettlerGrowthMood * Happiness;
         int count = Math.Clamp((int)MathF.Round(eaters * perDay * Balance.SettlerWaveDays), 1, Balance.SettlerWaveMax);
         count = Math.Max(1, Math.Min(count, Homes(sim).FreeBeds));

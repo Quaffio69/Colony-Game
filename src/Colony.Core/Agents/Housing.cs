@@ -480,7 +480,10 @@ public sealed class Housing
 
     /// <summary>Homes a couple could make theirs: claimed by no family, not shared, two beds or more, two lodgers at most.</summary>
     public IEnumerable<Home> CoupleHomes() =>
-        _homes.Where(h => h.Family == 0 && !h.Policy.Shared && h.Residents.Count <= 2 && h.Beds >= 2).OrderByDescending(h => h.Quality).ThenBy(h => h.Room.Id);
+        // A family home: 2 to FamilyHomeMaxBeds beds. Bigger homes stay open to settlers and singles: a couple that
+        // claimed a 7-bed home kept 5 beds empty for children not yet born, and settlers stopped coming (a playtest).
+        _homes.Where(h => h.Family == 0 && !h.Policy.Shared && h.Residents.Count <= 2 && h.Beds >= 2 && h.Beds <= Balance.FamilyHomeMaxBeds)
+            .OrderByDescending(h => h.Quality).ThenBy(h => h.Beds).ThenBy(h => h.Room.Id);
 
     /// <summary>Gives a family a home (newlyweds); its members move in at the next assignment.</summary>
     internal void Claim(Home home, int family)

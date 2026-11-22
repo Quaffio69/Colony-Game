@@ -44,6 +44,8 @@ public static class Balance
     public const float MarriageChance = 0.15f;
     /// <summary>Daily chance a couple with a free bed at home has a child.</summary>
     public const float BirthChance = 0.08f;
+    /// <summary>Most beds a home may have for a couple to claim it as a family home (the couple and two children).</summary>
+    public const int FamilyHomeMaxBeds = 4;
 
     // ---- Farming -----------------------------------------------------------------------------------------------
 
