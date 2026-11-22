@@ -91,8 +91,8 @@ jobs:
       - name: Export the game
         shell: pwsh
         run: |
-          # A fresh checkout has no import cache: import first (the editor quits when done), then export.
-          & $env:GODOT --headless --path game --import 2>&1 | Out-Host
+          # The export imports a fresh checkout's assets itself (a separate --import run crashed on 4.7.2 while
+          # importing fonts; export alone from a clean clone was tested and works).
           New-Item -ItemType Directory -Force build/windows | Out-Null
           & $env:GODOT --headless --path game --export-release "Windows Desktop" ../build/windows/ColonyGame.exe 2>&1 | Out-Host
           if (-not (Test-Path build/windows/ColonyGame.exe)) { throw "The export produced no ColonyGame.exe" }
