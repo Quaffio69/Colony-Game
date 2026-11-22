@@ -105,8 +105,9 @@ internal static class SnapIO
 public static class Snapshot
 {
     private const string Magic = "COLONYSNAP";
-    /// <summary>3: storage racks and grass regrowth. Version 2 snapshots still load (without them).</summary>
-    private const int Version = 3;
+    /// <summary>4: trade depots and deals (a seventh work type). 3: storage racks and grass regrowth. Versions 2-3 still
+    /// load (without what came later).</summary>
+    private const int Version = 4;
 
     /// <summary>Where the last load or take spent its time (ms), for the bench.</summary>
     public static string LastTimings { get; internal set; } = "";

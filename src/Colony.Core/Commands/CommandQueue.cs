@@ -81,6 +81,21 @@ public static class CommandCodec
         CancelWalls, DebugCompleteAll, PaintRoom, EraseRoom, PlacePart, RemoveParts, CycleRecipe, PlaceStructure,
         RemoveStructures, PlaceEdge, RemoveEdge, EdgeLine, PlaceOutline, ClearWalls, Covers, SetWorkPriority, SetHomePolicy,
         SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy, SettleGame, SetDrafted, SquadMove, SquadAttack, DebugSpawnNest, PlaceRacks, Demolish,
+        AddTradeDepot, ProposeTrade, CounterTrade, AcceptTrade, RejectTrade,
+    }
+
+    private static void Terms(BinaryWriter w, Trade.TradeTerms t)
+    {
+        w.Write(t.Lines.Count);
+        foreach (var l in t.Lines) { w.Write(l.From); w.Write(l.Item); w.Write(l.Count); }
+    }
+
+    private static Trade.TradeTerms Terms(BinaryReader r)
+    {
+        int n = Math.Clamp(r.ReadInt32(), 0, 256);
+        var lines = new Trade.TradeTerm[n];
+        for (int i = 0; i < n; i++) lines[i] = new Trade.TradeTerm(r.ReadInt32(), r.ReadString(), r.ReadInt32());
+        return new Trade.TradeTerms(lines);
     }
 
     public static byte[] EncodeLog(IEnumerable<LoggedCommand> log)
@@ -166,6 +181,11 @@ public static class CommandCodec
             case DebugSpawnNest x: Head(Tag.DebugSpawnNest); P(w, x.At); w.Write(x.Population); w.Write(x.Angry); break;
             case PlaceRacks x: Head(Tag.PlaceRacks); P(w, x.A); P(w, x.B); w.Write(x.Facing); break;
             case Demolish x: Head(Tag.Demolish); P(w, x.A); P(w, x.B); break;
+            case AddTradeDepot x: Head(Tag.AddTradeDepot); P(w, x.A); P(w, x.B); break;
+            case ProposeTrade x: Head(Tag.ProposeTrade); w.Write(x.To); Terms(w, x.Terms); break;
+            case CounterTrade x: Head(Tag.CounterTrade); w.Write(x.Deal); Terms(w, x.Terms); break;
+            case AcceptTrade x: Head(Tag.AcceptTrade); w.Write(x.Deal); break;
+            case RejectTrade x: Head(Tag.RejectTrade); w.Write(x.Deal); break;
             default: throw new NotSupportedException($"No codec for {c.GetType().Name}");
         }
     }
@@ -212,6 +232,11 @@ public static class CommandCodec
             Tag.DebugSpawnNest => new DebugSpawnNest(P(r), r.ReadInt32(), r.ReadBoolean()),
             Tag.PlaceRacks => new PlaceRacks(P(r), P(r), r.ReadInt32()),
             Tag.Demolish => new Demolish(P(r), P(r)),
+            Tag.AddTradeDepot => new AddTradeDepot(P(r), P(r)),
+            Tag.ProposeTrade => new ProposeTrade(r.ReadInt32(), Terms(r)),
+            Tag.CounterTrade => new CounterTrade(r.ReadInt32(), Terms(r)),
+            Tag.AcceptTrade => new AcceptTrade(r.ReadInt32()),
+            Tag.RejectTrade => new RejectTrade(r.ReadInt32()),
             _ => throw new InvalidDataException($"Unknown command tag {tag}"),
         };
         return c with { Player = player };

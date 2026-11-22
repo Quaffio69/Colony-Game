@@ -45,7 +45,8 @@ public static class Hauling
         if (part is { Built: false }) return part.Cost.Material == type ? StorageRole.Construction : StorageRole.Loose;
         if (part?.Role == PartRole.Input) return part.Room.Needs(type) ? StorageRole.Input : StorageRole.Loose;
         if (part?.Role == PartRole.Output) return StorageRole.Output;
-        return stockpiles.Contains(p) ? StorageRole.Stockpile : StorageRole.Loose;
+        // A trade depot's deliveries are its owner's (only its haulers take them: see Ours) and go on to its stockpiles.
+        return stockpiles.Contains(p) && !stockpiles.IsDepot(p) ? StorageRole.Stockpile : StorageRole.Loose;
     }
 
     public static List<HaulPlan> Plans(ItemPiles items, Stockpiles stockpiles, Rooms rooms, Connectivity connectivity,
@@ -119,7 +120,7 @@ public static class Hauling
             foreach (var cell in stockpiles.Cells)
             {
                 int space = items.RoomAt(cell, pile.Type);
-                if (space > 0 && sites?.At(cell) is null && // a rack going up here wants only its planks
+                if (space > 0 && sites?.At(cell) is null && !stockpiles.IsDepot(cell) && // a rack going up here wants only its planks; depots keep room for deliveries
  (faction == Owners.Any || stockpiles.OwnerOf(cell) == faction) && connectivity.ComponentOf(cell) == component) dest.Offer(Dist(cell, src), (cell, space), cell);
             }
             foreach (var (cell, space) in dest.Items)

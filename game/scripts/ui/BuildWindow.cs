@@ -185,6 +185,7 @@ public partial class BuildWindow : GlyphWindow
         ToolMode.Floor => "Floor over a box (homes count it)",
         ToolMode.Roof => "Roof over a box of floor (homes count it)",
         ToolMode.Rack => $"Shelving over stockpile cells: up to {Stockpiles.Capacity(Stockpiles.MaxRackLevels)} stacks a cell (Shift-drag takes racks down)",
+        ToolMode.TradeDepot => "Other colonies' traders deliver here; your haulers move it on to your stockpiles",
         ToolMode.Cancel => "Cancel designations and plans, remove zone cells in a box",
         ToolMode.Demolish => "Take down what is built in a box; walls on its outline too",
         ToolMode.None => "Pick something to build or order",
@@ -232,6 +233,9 @@ public partial class BuildWindow : GlyphWindow
                     $"Shelving on stockpile cells, up to {Stockpiles.MaxRackLevels} levels tall with a sliding ladder: {Stockpiles.Capacity(Stockpiles.MaxRackLevels)} stacks a cell " +
                     $"({Constructions.RackPlanksPerLevel} planks a level); drag a box over the zone, R turns the fronts",
                     () => Tool.Mode == ToolMode.Rack, () => Tool.SelectRack()),
+                new Item("$", Tone("accent"), "Trade depot", null,
+                    "Where other colonies' traders deliver what you buy from them (Trade, F6); your haulers carry it on to your stockpiles",
+                    () => Tool.Mode == ToolMode.TradeDepot, () => Tool.SelectTradeDepot()),
             ]),
             new("Farms", () =>
             [

@@ -431,6 +431,7 @@ public partial class Main : Node3D
                 if (Arg("--storage-demo") is { } storageDemo) StorageDemo(storageDemo);
                 if (Arg("--falls-demo") != null) FallsDemo();
                 if (Arg("--ants-demo") is { } antsDemo) AntsDemo(antsDemo);
+                if (Arg("--trade-demo") != null) TradeDemo();
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
                 if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
@@ -906,6 +907,28 @@ public partial class Main : Node3D
     }
 
     /// <summary>
+    /// <summary>
+    /// --trade-demo (with --colonies=2 or more): a trade depot by each colony's people, an agreed deal under way (our
+    /// logs for their berries) and a fresh offer from the next colony waiting on us; opens Trade (F6). Commands only, so
+    /// it works online too.
+    /// </summary>
+    private void TradeDemo()
+    {
+        if (_sim.Factions.Count < 2) { GD.Print("[trade-demo] needs --colonies=2 or more"); return; }
+        int other = Player == 0 ? 1 : 0;
+        foreach (int f in new[] { Player, other })
+        {
+            var c = _sim.Colonists.First(k => k.Faction == f).Position;
+            int g = _sim.World.SurfaceLevel(c.X + 4, c.Y + 4);
+            _sim.Commands.Execute(new Colony.Core.Commands.AddTradeDepot(new TilePos(c.X + 3, c.Y + 3, g - 3), new TilePos(c.X + 6, c.Y + 6, g + 3)) { Player = f });
+        }
+        static Colony.Core.Trade.TradeTerm T(int from, string item, int n) => new(from, item, n);
+        _sim.Commands.Execute(new Colony.Core.Commands.ProposeTrade(other, new([T(Player, "logs", 8), T(other, "berries", 20)])) { Player = Player });
+        _sim.Commands.Execute(new Colony.Core.Commands.AcceptTrade(_sim.Trades.All[^1].Id) { Player = other });
+        _sim.Commands.Execute(new Colony.Core.Commands.ProposeTrade(Player, new([T(other, "bread", 12), T(Player, "logs", 6), T(Player, "stone", 10)])) { Player = other });
+        _ui.OpenWindow("trade");
+    }
+
     /// --storage-demo: a stockpile with storage racks planned on it (planks and loose stone to fill it), and beside it a
     /// stone ceiling two levels over flat ground with one tile to dig and a scaffold to reach it. Plays until the racks
     /// are up and someone stands on the scaffold (or 20k ticks).

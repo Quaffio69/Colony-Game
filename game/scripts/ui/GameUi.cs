@@ -11,7 +11,7 @@ namespace ColonyGame.UI;
 
 /// <summary>
 /// The game's Glyph UI: the HUD pill (colony, date, key stocks with daily trends, alerts, level, speed), the windows
-/// (each with its hotkey: C colonists, I stocks, B build, L chronicle, H housing, J work, V inspect, F1 tests,
+/// (each with its hotkey: C colonists, I stocks, B build, L chronicle, H housing, J work, V inspect, M military, F6 trade, F1 tests,
 /// F2 appearance, F3 help), the status pill (hover hints, the tool and what it is doing) and the main menu (Esc
 /// when nothing is left to close). Reads the sim; player actions go through the same calls the old menus made.
 /// </summary>
@@ -55,6 +55,7 @@ public partial class GameUi : CanvasLayer
         Add(new WorkWindow(this), Key.J);
         Add(new InspectorWindow(this), Key.V);
         Add(new MilitaryWindow(this), Key.M);
+        Add(new TradeWindow(this), Key.F6);
         Add(new TestsWindow(this), Key.F1);
         Add(new AppearanceWindow(this), Key.F2);
         Add(new HelpWindow(this), Key.F3);

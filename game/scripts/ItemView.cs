@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Colony.Core;
 using Colony.Core.Items;
 using Colony.Core.World;
@@ -18,6 +19,8 @@ public partial class ItemView : Node3D
 {
     public static readonly Color StockpileColor = new(0.35f, 0.75f, 1f, 0.22f);
     public static readonly Color FarmColor = new(0.55f, 0.4f, 0.2f, 0.45f);
+    /// <summary>Trade depots: where other colonies' traders deliver.</summary>
+    public static readonly Color DepotColor = new(1f, 0.78f, 0.25f, 0.3f);
 
     public static Color ItemColor(ItemType t) => Rgb(t.Def.Color);
 
@@ -27,7 +30,7 @@ public partial class ItemView : Node3D
     private MultiMeshInstance3D[] _piles = [];
     private bool[] _growsTall = [];
     private readonly List<ShaderMaterial> _materials = new();
-    private MultiMeshInstance3D _zones = null!, _farms = null!;
+    private MultiMeshInstance3D _zones = null!, _farms = null!, _depots = null!;
     private int _drawnLayout = -1, _drawnZones = -1, _drawnFarms = -1, _drawnLevel = int.MinValue;
     private Material _wood = null!, _dark = null!, _metal = null!, _cloth = null!, _glass = null!, _paper = null!;
 
@@ -67,6 +70,7 @@ public partial class ItemView : Node3D
 
         _zones = Plates(StockpileColor);
         _farms = Plates(FarmColor);
+        _depots = Plates(DepotColor);
     }
 
     private MultiMeshInstance3D Plates(Color color)
@@ -105,7 +109,8 @@ public partial class ItemView : Node3D
         if (_sim.Stockpiles.Version != _drawnZones || level != _drawnLevel)
         {
             _drawnZones = _sim.Stockpiles.Version;
-            RedrawPlates(_zones, _sim.Stockpiles.Cells, level);
+            RedrawPlates(_zones, _sim.Stockpiles.Cells.Where(c => !_sim.Stockpiles.IsDepot(c)), level);
+            RedrawPlates(_depots, _sim.Stockpiles.DepotCells, level);
         }
         if (_sim.Farms.Version != _drawnFarms || level != _drawnLevel)
         {

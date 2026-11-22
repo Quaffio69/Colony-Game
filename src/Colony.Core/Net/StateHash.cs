@@ -53,6 +53,13 @@ public static class StateHash
             sum += Of(8, n.Id, Pos(n.Entrance), n.Population, n.Out, n.Health, n.Crowded, n.Awake ? 1 : 0);
         foreach (var c in sim.Wildlife.Creatures)
             sum += Of(9, c.Id, Pos(c.Position), c.Health, (long)c.Mode, c.NestId, c.TargetId);
+        foreach (var p in sim.Stockpiles.DepotCells)
+            sum += Of(12, Pos(p));
+        foreach (var d in sim.Trades.All)
+        {
+            sum += Of(13, d.Id, d.A, d.B, (long)d.State, d.Turn, d.Round);
+            foreach (var l in d.Lines) sum += Of(14, d.Id, l.From, l.Type.Index, l.Count, l.Delivered, l.InTransit);
+        }
         return Mix(sum);
     }
 }

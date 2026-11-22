@@ -39,7 +39,7 @@ public partial class DesignationTool : Node3D
         // Orders
         None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, Wall, Demolish, Cancel,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
-        Room, Part, Structure, Outline, Edge, WallLine, Floor, Roof, Rack,
+        Room, Part, Structure, Outline, Edge, WallLine, Floor, Roof, Rack, TradeDepot,
     }
 
     private const ToolMode LastOrder = ToolMode.Cancel;
@@ -129,6 +129,7 @@ public partial class DesignationTool : Node3D
         if (m == ToolMode.Floor) return $"Build: {FloorMaterials.All[FloorMaterial].Name.ToLowerInvariant()} over a box of floor (Shift-drag takes floors up)";
         if (m == ToolMode.Roof) return $"Build: {RoofMaterials.All[RoofMaterial].Name.ToLowerInvariant()} roof over a box of floor (Shift-drag takes roofs down)";
         if (m == ToolMode.Rack) return $"Build: storage racks over stockpile cells (fronts face {FacingName(_facing)}, R turns; Shift-drag takes them down)";
+        if (m == ToolMode.TradeDepot) return "Zone: trade depot (other colonies' traders deliver here; Shift-drag removes)";
         return m == ToolMode.Room ? $"Build: {Workshop.Name} room" : BaseModeName(m);
     }
 
@@ -243,6 +244,7 @@ public partial class DesignationTool : Node3D
         foreach (var mode in Enum.GetValues<ToolMode>())
             _modeMats[mode] = Overlay.Material(
                 mode == ToolMode.Stockpile ? ItemView.StockpileColor with { A = 0.3f }
+                : mode == ToolMode.TradeDepot ? ItemView.DepotColor with { A = 0.35f }
                 : CropFor(mode) is not null ? ItemView.FarmColor with { A = 0.3f }
                 : mode == ToolMode.Wall ? new Color(0.75f, 0.72f, 0.68f, 0.35f)
                 : mode is ToolMode.Cancel or ToolMode.Demolish ? new Color(1f, 0.25f, 0.2f, 0.3f)
@@ -384,6 +386,13 @@ public partial class DesignationTool : Node3D
     public void SelectRack()
     {
         Mode = ToolMode.Rack;
+        EndSelection();
+    }
+
+    /// <summary>A trade depot zone (a box of floor, like a stockpile).</summary>
+    public void SelectTradeDepot()
+    {
+        Mode = ToolMode.TradeDepot;
         EndSelection();
     }
 
@@ -822,6 +831,7 @@ public partial class DesignationTool : Node3D
             ToolMode.Structure => new RemoveStructures(a, b),
             ToolMode.Part => new RemoveParts(a, b),
             ToolMode.Rack => cancel ? new RemoveStructures(a, b) : new PlaceRacks(a, b, _facing),
+            ToolMode.TradeDepot => cancel ? new CancelOrders(a, b) : new AddTradeDepot(a, b),
             ToolMode.Cancel => new CancelOrders(a, b),
             ToolMode.Demolish => new Colony.Core.Commands.Demolish(a, b),
             ToolMode.Chop or ToolMode.Gather => cancel

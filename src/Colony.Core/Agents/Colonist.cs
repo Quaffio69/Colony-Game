@@ -9,7 +9,7 @@ namespace Colony.Core.Agents;
 public enum ColonistState { Idle, Moving, Working }
 
 /// <summary>What a colonist is doing beyond walking: a designation, one leg of a haul trip, factory work, or a meal.</summary>
-public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver, Equip, Fight, Flee, Rally, ScaffoldFetch }
+public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver, Equip, Fight, Flee, Rally, ScaffoldFetch, TradePickup, TradeDeliver }
 
 /// <summary>Broad kinds of work a colonist may prefer (see <see cref="Colonist.Labors"/>); each covers some <see cref="Work"/> types.</summary>
 public enum Labor { Designations, Hauling, Industry }
@@ -18,9 +18,10 @@ public enum Labor { Designations, Hauling, Industry }
 /// Work types a colonist can be set to (see <see cref="Colonist.Priority"/>), in the column order of the work grid.
 /// Mining = dig and stairs; Woodcutting = felling; Farming = sowing and harvesting plots and gathering wild plants;
 /// Construction = building blueprints (parts, walls, floors, roofs, wheels); Hauling = stockpiles, factory crates,
-/// building materials and home fixtures; Industry = running factory machines (and the Academy).
+/// building materials and home fixtures; Industry = running factory machines (and the Academy); Trading = carrying
+/// what the colony sold to the buyer's trade depot.
 /// </summary>
-public enum Work : byte { Mining, Woodcutting, Farming, Construction, Hauling, Industry }
+public enum Work : byte { Mining, Woodcutting, Farming, Construction, Hauling, Industry, Trading }
 
 /// <summary>
 /// A colony member. When idle it looks for work in its own connectivity component (so unreachable work never
@@ -50,6 +51,8 @@ public sealed partial class Colonist
     private readonly HashSet<TilePos> _pathFailed = new();
     private int _pathFailedConnectivity = -1;
     private HaulPlan _haul;
+    /// <summary>A trader's trip: a deal line's goods from our stores to the buyer's depot.</summary>
+    private (Trade.TradeDeal Deal, Trade.TradeLine Line, TilePos Source, TilePos Destination, int Amount) _trade;
     private CraftPlan _craft;
     private BuildPlan _build;
 
@@ -136,9 +139,9 @@ public sealed partial class Colonist
     // kinds among them (dig, chop, farm) are searched together, nearest first. New colonists get 2 for the kind
     // of work they prefer and 3 for the rest. Children don't work whatever is set.
 
-    public const int WorkTypes = 6;
+    public const int WorkTypes = 7;
     public const int LowestPriority = 4;
-    public static readonly string[] WorkNames = ["Mining", "Woodcutting", "Farming", "Construction", "Hauling", "Industry"];
+    public static readonly string[] WorkNames = ["Mining", "Woodcutting", "Farming", "Construction", "Hauling", "Industry", "Trading"];
     private readonly byte[] _priority = new byte[WorkTypes];
 
     /// <summary>0 = never does it; 1 = does it first ... 4 = last.</summary>
@@ -157,7 +160,7 @@ public sealed partial class Colonist
 
     public static Labor LaborOf(Work work) => work switch
     {
-        Work.Hauling => Labor.Hauling,
+        Work.Hauling or Work.Trading => Labor.Hauling,
         Work.Industry => Labor.Industry,
         _ => Labor.Designations,
     };
@@ -177,6 +180,7 @@ public sealed partial class Colonist
         ColonistTask.Build => Work.Construction,
         ColonistTask.CraftFetch or ColonistTask.CraftWork or ColonistTask.CraftStore => Work.Industry,
         ColonistTask.HaulPickup or ColonistTask.HaulDeliver or ColonistTask.FurnishPickup or ColonistTask.FurnishDeliver => Work.Hauling,
+        ColonistTask.TradePickup or ColonistTask.TradeDeliver => Work.Trading,
         _ => null,
     };
     private DesignationKind _jobKind;
@@ -485,8 +489,12 @@ public sealed partial class Colonist
         (ColonistTask.FurnishPickup, _) => $"fetching {ItemInfo.Name(_furnish.Item).ToLowerInvariant()} for {_furnish.Home.Name}",
         (ColonistTask.FurnishDeliver, ColonistState.Working) => $"installing {ItemInfo.Name(CarryingType).ToLowerInvariant()} in {_furnish.Home.Name}",
         (ColonistTask.FurnishDeliver, _) => $"carrying {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {_furnish.Home.Name}",
+        (ColonistTask.TradePickup, _) => $"fetching {ItemInfo.Name(_trade.Line.Type).ToLowerInvariant()} sold to {_tradePartner}",
+        (ColonistTask.TradeDeliver, _) => $"carrying {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {_tradePartner}'s trade depot",
         _ => "idle",
     };
+
+    private string _tradePartner = "";
 
     private string _haulDestination = "stockpile";
 
@@ -588,6 +596,12 @@ public sealed partial class Colonist
                     case ColonistTask.FurnishDeliver:
                         FurnishInstall(sim);
                         break;
+                    case ColonistTask.TradePickup:
+                        TradePickUp(sim);
+                        break;
+                    case ColonistTask.TradeDeliver:
+                        TradeDeliver(sim);
+                        break;
                     case ColonistTask.Equip:
                         FinishEquip(sim);
                         break;
@@ -639,9 +653,9 @@ public sealed partial class Colonist
     private bool NothingNewSinceLastSearch(ColonySim sim) =>
         _searchedDesignations == sim.Designations.Version && _searchedConnectivity == sim.Connectivity.Version &&
         _searchedItems == sim.Items.Version && _searchedStockpiles == sim.Stockpiles.Version &&
-        _searchedRooms == sim.Rooms.Version && _searchedHousing == MyHousing(sim).Version;
+        _searchedRooms == sim.Rooms.Version && _searchedHousing == MyHousing(sim).Version && _searchedTrades == sim.Trades.Version;
 
-    private int _searchedRooms = -1, _searchedHousing = -1;
+    private int _searchedRooms = -1, _searchedHousing = -1, _searchedTrades = -1;
 
     private void FindWork(ColonySim sim)
     {
@@ -653,6 +667,7 @@ public sealed partial class Colonist
         _searchedStockpiles = sim.Stockpiles.Version;
         _searchedRooms = sim.Rooms.Version;
         _searchedHousing = MyHousing(sim).Version;
+        _searchedTrades = sim.Trades.Version;
         _deferred = false;
 
         if (_pathFailedConnectivity != sim.Connectivity.Version)
@@ -678,7 +693,8 @@ public sealed partial class Colonist
                     if (!found && !_deferred && _priority[(int)Work.Construction] == priority) found = TryBuild(sim, component);
                     break;
                 case Labor.Hauling:
-                    if (_priority[(int)Work.Hauling] == priority)
+                    if (_priority[(int)Work.Trading] == priority) found = TryTrade(sim, component);
+                    if (!found && !_deferred && _priority[(int)Work.Hauling] == priority)
                         found = TryHaul(sim, component) || (!_deferred && TryFurnish(sim, component));
                     break;
                 default:
@@ -770,6 +786,104 @@ public sealed partial class Colonist
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Trading: goods this colony owes on an agreed deal, from the nearest pile in its own stores to a cell of the
+    /// buyer's trade depot with room (nearest first), as much as one load carries. The line is claimed as it goes
+    /// (<see cref="Trade.Trades.Claim"/>) so traders share the work; giving up hands it back.
+    /// </summary>
+    private bool TryTrade(ColonySim sim, int component)
+    {
+        static long Dist(TilePos a, TilePos b)
+        {
+            long dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
+            return dx * dx + dy * dy + 4 * dz * dz;
+        }
+        foreach (var (deal, line) in sim.Trades.Owed(Faction).ToList())
+        {
+            int buyer = deal.Other(Faction);
+            TilePos? dest = null;
+            long best = long.MaxValue;
+            foreach (var c in sim.Stockpiles.DepotCells)
+            {
+                if (sim.Stockpiles.OwnerOf(c) != buyer || sim.Connectivity.ComponentOf(c) != component || sim.Items.RoomAt(c, line.Type) <= 0) continue;
+                long d = Dist(c, Position);
+                if (d < best || d == best && CompareCells(c, dest!.Value) < 0) (best, dest) = (d, c);
+            }
+            if (dest is not { } to) continue; // their depot is full, missing or out of reach: try later
+            TilePos? source = null;
+            best = long.MaxValue;
+            int available = 0;
+            foreach (var (p, pile) in sim.Items.All)
+            {
+                if (pile.Type != line.Type || pile.Available <= 0 || _pathFailed.Contains(p) || sim.Connectivity.ComponentOf(p) != component) continue;
+                if (!Trade.Trades.Sendable(sim, p, pile.Type, Faction)) continue;
+                long d = Dist(p, Position);
+                if (d < best || d == best && CompareCells(p, source!.Value) < 0) (best, source, available) = (d, p, pile.Available);
+            }
+            if (source is not { } from) continue; // nothing of it in store yet: the deal waits
+            if (sim.PathBudgetExhausted)
+            {
+                _deferred = true;
+                return false;
+            }
+            int amount = Math.Min(Math.Min(line.Unclaimed, available), Math.Min(ItemInfo.CarryLimit(line.Type), sim.Items.RoomAt(to, line.Type)));
+            var path = Route(sim, ReachableAround(sim, from, component), from);
+            if (path is null)
+            {
+                _pathFailed.Add(from);
+                continue;
+            }
+            if (!sim.Items.Reserve(from, amount)) continue;
+            if (!sim.Items.ReserveIncoming(to, line.Type, amount))
+            {
+                sim.Items.Unreserve(from, amount);
+                continue;
+            }
+            sim.Trades.Claim(line, amount);
+            _trade = (deal, line, from, to, amount);
+            _tradePartner = sim.Factions[buyer].Name;
+            Begin(ColonistTask.TradePickup, from, path);
+            return true;
+        }
+        return false;
+    }
+
+    private void TradePickUp(ColonySim sim)
+    {
+        int taken = sim.Items.TakeReserved(_trade.Source, _trade.Amount);
+        if (taken < _trade.Amount)
+        {
+            sim.Items.ReleaseIncoming(_trade.Destination, _trade.Amount - taken);
+            sim.Trades.Unclaim(_trade.Line, _trade.Amount - taken);
+        }
+        if (taken == 0)
+        {
+            Finish();
+            return;
+        }
+        CarryingType = _trade.Line.Type;
+        CarryingCount = taken;
+        _trade = _trade with { Amount = taken };
+        int component = sim.Connectivity.ComponentOf(Position);
+        var path = Route(sim, ReachableAround(sim, _trade.Destination, component), _trade.Destination);
+        if (path is null)
+        {
+            Abandon(sim); // the load is dropped here, and owed again
+            return;
+        }
+        Begin(ColonistTask.TradeDeliver, _trade.Destination, path);
+    }
+
+    private void TradeDeliver(ColonySim sim)
+    {
+        int added = sim.Items.Deliver(_trade.Destination, CarryingType, CarryingCount);
+        if (added < CarryingCount) sim.Items.Drop(Position, CarryingType, CarryingCount - added); // spills beside the depot: still theirs to collect
+        int count = CarryingCount;
+        CarryingCount = 0;
+        sim.Trades.Delivered(sim, _trade.Deal, _trade.Line, count);
+        Finish();
     }
 
     /// <summary>
@@ -1154,6 +1268,8 @@ public sealed partial class Colonist
                 break;
             case ColonistTask.HaulPickup:
             case ColonistTask.HaulDeliver:
+            case ColonistTask.TradePickup:
+            case ColonistTask.TradeDeliver:
                 StartWorking(HandleTicks);
                 break;
             default:
@@ -1231,6 +1347,15 @@ public sealed partial class Colonist
                 break;
             case ColonistTask.HaulDeliver:
                 sim.Items.ReleaseIncoming(_haul.Destination, _haul.Amount);
+                break;
+            case ColonistTask.TradePickup:
+                sim.Items.Unreserve(_trade.Source, _trade.Amount);
+                sim.Items.ReleaseIncoming(_trade.Destination, _trade.Amount);
+                sim.Trades.Unclaim(_trade.Line, _trade.Amount);
+                break;
+            case ColonistTask.TradeDeliver:
+                sim.Items.ReleaseIncoming(_trade.Destination, _trade.Amount);
+                sim.Trades.Unclaim(_trade.Line, _trade.Amount); // the load is dropped below; still owed
                 break;
             case ColonistTask.CraftFetch:
                 for (int i = _fetchIndex; i < _craft.Pickups.Count; i++) sim.Items.Unreserve(_craft.Pickups[i].Cell, _craft.Pickups[i].Count);
@@ -1384,7 +1509,9 @@ public sealed partial class Colonist
         _trip = _plannedTrip = null;
         _stepTicksTotal = _stepTicksDone = 0;
         _searchedDesignations = _searchedConnectivity = _searchedItems = _searchedStockpiles = -1;
-        _searchedRooms = _searchedHousing = -1;
+        _searchedRooms = _searchedHousing = _searchedTrades = -1;
+        _trade = default;
+        _tradePartner = "";
         _retryDelay = 0;
         _deferred = false;
         _pathFailed.Clear();
@@ -1429,7 +1556,8 @@ public sealed partial class Colonist
         bool automaton = r.ReadBoolean();
         int faction = r.ReadInt32();
         var c = new Colonist(id, name, pos, education) { IsAutomaton = automaton, Faction = faction };
-        r.BaseStream.ReadExactly(c._priority);
+        if (Net.SnapIO.Before(4)) r.BaseStream.ReadExactly(c._priority.AsSpan(0, (int)Work.Trading)); // before trading; it keeps its default
+        else r.BaseStream.ReadExactly(c._priority);
         c.Satiety = r.ReadInt32(); c.StarvingTicks = r.ReadInt32(); c.Household = r.ReadInt32();
         int spouse = r.ReadInt32();
         c.IsChild = r.ReadBoolean(); c.BornTick = r.ReadInt64();

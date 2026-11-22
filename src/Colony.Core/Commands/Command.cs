@@ -522,3 +522,36 @@ public sealed record DebugSpawnNest(TilePos At, int Population, bool Angry) : Co
         return $"Debug: a nest of {Population} giant ants{(Angry ? ", angry" : "")}";
     }
 }
+
+// ---- Trade -------------------------------------------------------------------------------------------------
+
+/// <summary>Zones a trade depot over the floor of a box: where other colonies' traders deliver what they sold us.</summary>
+public sealed record AddTradeDepot(TilePos A, TilePos B) : Command
+{
+    public override string Apply(ColonySim sim) =>
+        $"Trade depot: zoned {sim.Stockpiles.AddFloorBox(A, B, Player, depot: true)} cells";
+}
+
+/// <summary>Offers another colony a deal: what each side gives.</summary>
+public sealed record ProposeTrade(int To, Trade.TradeTerms Terms) : Command
+{
+    public override string Apply(ColonySim sim) => sim.Trades.Propose(sim, Player, To, Terms);
+}
+
+/// <summary>Answers an offer with new terms (the other colony's turn next).</summary>
+public sealed record CounterTrade(int Deal, Trade.TradeTerms Terms) : Command
+{
+    public override string Apply(ColonySim sim) => sim.Trades.Counter(sim, Deal, Player, Terms);
+}
+
+/// <summary>Accepts the offer on the table: binding, the traders set out.</summary>
+public sealed record AcceptTrade(int Deal) : Command
+{
+    public override string Apply(ColonySim sim) => sim.Trades.Accept(sim, Deal, Player);
+}
+
+/// <summary>Declines an offer made to us, or withdraws our own.</summary>
+public sealed record RejectTrade(int Deal) : Command
+{
+    public override string Apply(ColonySim sim) => sim.Trades.Reject(sim, Deal, Player);
+}

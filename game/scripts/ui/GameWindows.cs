@@ -438,8 +438,10 @@ public partial class InspectorWindow : GlyphWindow
             Content.AddChild(G.Para("Half again as fast within 2 tiles of water. Shift+X over plots removes them.", "Faint"));
             return;
         }
-        Content.AddChild(new GlyphSection("Stockpile"));
+        bool depot = sim.Stockpiles.IsDepot(z.Cell);
+        Content.AddChild(new GlyphSection(depot ? "Trade depot" : "Stockpile"));
         if (sim.Factions.Count > 1) KV("Colony", sim.Factions[sim.Stockpiles.OwnerOf(z.Cell)].Name);
+        if (depot) Content.AddChild(G.Para("Other colonies' traders deliver here what you buy from them (Trade, F6); your haulers carry it on to your stockpiles.", "Faint"));
         int racks = 0, capacity = 0, used = 0;
         var goods = new Dictionary<Colony.Core.Items.ItemType, int>();
         foreach (var c in cells)
@@ -458,7 +460,7 @@ public partial class InspectorWindow : GlyphWindow
         BarRow("Space", capacity == 0 ? 0 : used / (float)capacity, $"{used}/{capacity} stacks", used >= capacity ? "bad" : null);
         Content.AddChild(G.Gap());
         Content.AddChild(new GlyphSection("Holding"));
-        if (goods.Count == 0) Content.AddChild(G.Para("Nothing yet: haulers bring loose goods here.", "Faint"));
+        if (goods.Count == 0) Content.AddChild(G.Para(depot ? "Nothing waiting: deliveries are carried on to the stockpiles." : "Nothing yet: haulers bring loose goods here.", "Faint"));
         foreach (var (type, n) in goods.OrderByDescending(g => g.Value).Take(24))
             Content.AddChild(new GlyphKV(ItemLook.Glyph(type), ItemLook.Color(type), type.Name, n.ToString()));
     }
@@ -474,7 +476,8 @@ public partial class InspectorWindow : GlyphWindow
         var role = Colony.Core.Items.Hauling.RoleOf(cell, pile.Type, sim.Stockpiles, sim.Rooms, sim.Constructions);
         KV("Lying", role switch
         {
-            Colony.Core.Items.StorageRole.Loose => sim.Stockpiles.Count == 0 ? "loose (zone a stockpile, Shift+P, to store it)" : "loose: haulers will store it",
+            _ when sim.Stockpiles.IsDepot(cell) => "in a trade depot: delivered, haulers take it on to the stockpiles",
+            Colony.Core.Items.StorageRole.Loose =>sim.Stockpiles.Count == 0 ? "loose (zone a stockpile, Shift+P, to store it)" : "loose: haulers will store it",
             Colony.Core.Items.StorageRole.Stockpile => "in a stockpile",
             Colony.Core.Items.StorageRole.Input => "in a factory's input crate",
             Colony.Core.Items.StorageRole.Output => "in a factory's output crate",
@@ -647,7 +650,7 @@ public partial class HelpWindow : GlyphWindow
         ("Esc", "cancel placing, close the window, main menu"), ("Ctrl+Tab", "next window"), ("Enter", "debug: finish all orders"),
         ("F5 / F9", "quicksave / load the newest save"), ("F10", "tune the pixel-art look (Save keeps it)"), ("F4", "play the next colony (hot-seat, several colonies)"),
         ("G", "draft everyone, then click ground to march or a nest to attack (G again: done)"), ("Shift+G", "stand everyone down"),
-        ("C I B L", "colonists, stocks, build, chronicle"), ("H J V M", "housing, work, inspect, military"), ("F1 F2 F3", "tests, appearance, this help"),
+        ("C I B L", "colonists, stocks, build, chronicle"), ("H J V M", "housing, work, inspect, military"), ("F1 F2 F3", "tests, appearance, this help"), ("F6", "trade with other colonies (offers, counters, deals)"),
     ];
 
     protected override void Build()

@@ -85,6 +85,8 @@ public sealed partial class ColonySim
     internal bool AnyScaffold => Items.UnitsOf(Colonist.ScaffoldItem) > 0;
     /// <summary>Wild creatures and their nests (giant ants).</summary>
     public Combat.Wildlife Wildlife { get; } = new();
+    /// <summary>Deals between colonies (offers, counters, deliveries to trade depots).</summary>
+    public Trade.Trades Trades { get; } = new();
     /// <summary>Colonists who died (stats).</summary>
     public int Deaths { get; private set; }
 
@@ -734,6 +736,7 @@ public sealed partial class ColonySim
         Water.Settle();
         foreach (var f in _factions) f.Housing.Settle();
         Wildlife.Settle(this);
+        Trades.Settle();
         _reservedStudents.Clear();
         RebuildDerived();
     }
@@ -774,6 +777,7 @@ public sealed partial class ColonySim
         }
         Net.SnapIO.Section(w, "wildlife"); Wildlife.SnapSave(w);
         Net.SnapIO.Section(w, "regrowth"); Regrowth.SnapSave(w);
+        Net.SnapIO.Section(w, "trades"); Trades.SnapSave(w);
         Net.SnapIO.Section(w, "sim");
         w.Write(Tick); w.Write(PathSearches); w.Write(CaveInCount); w.Write(ItemsProduced); w.Write(ColonistsEver);
         w.Write(_families); w.Write(_eventRoomsVersion); w.Write(_waterworksDue); w.Write(NeedsEnabled); w.Write(Deaths);
@@ -833,6 +837,7 @@ public sealed partial class ColonySim
         }
         Net.SnapIO.Section(r, "wildlife"); sim.Wildlife.SnapLoad(r);
         if (!Net.SnapIO.Before(3)) { Net.SnapIO.Section(r, "regrowth"); sim.Regrowth.SnapLoad(r); }
+        if (!Net.SnapIO.Before(4)) { Net.SnapIO.Section(r, "trades"); sim.Trades.SnapLoad(r); }
         Net.SnapIO.Section(r, "sim");
         sim.Tick = r.ReadInt64(); sim.PathSearches = r.ReadInt64(); sim.CaveInCount = r.ReadInt32(); sim.ItemsProduced = r.ReadInt64();
         sim.ColonistsEver = r.ReadInt32(); sim._families = r.ReadInt32(); sim._eventRoomsVersion = r.ReadInt32();

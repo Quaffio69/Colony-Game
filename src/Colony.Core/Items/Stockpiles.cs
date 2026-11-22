@@ -27,12 +27,38 @@ public sealed class Stockpiles
     /// <summary>Cells stockpiles may not claim (e.g. factory rooms). Set by <see cref="ColonySim"/>.</summary>
     public Func<TilePos, bool>? IsBlocked { get; set; }
 
-    public bool Add(TilePos cell, int faction = 0)
+    public bool Add(TilePos cell, int faction = 0, bool depot = false)
     {
+        if (_cells.Contains(cell))
+        {
+            // Re-zoning its own cell: a stockpile becomes a trade depot or back.
+            if (_owners.Of(cell) != faction || _depots.Contains(cell) == depot) return false;
+            if (depot) _depots.Add(cell);
+            else _depots.Remove(cell);
+            Version++;
+            return true;
+        }
         if (!Movement.IsStandable(_world, cell) || IsBlocked?.Invoke(cell) == true || !_cells.Add(cell)) return false;
         _owners.Set(cell, faction);
+        if (depot) _depots.Add(cell);
         Version++;
         return true;
+    }
+
+    // ---- Trade depots ------------------------------------------------------------------------------------
+    // A trade depot is a stockpile zone where other colonies' traders deliver what they sold us. Goods there are the
+    // owner's (only its colonists use them, only its haulers move them); haulers never store goods there (the room is
+    // kept for deliveries) and carry deliveries on to the ordinary stockpiles.
+    private readonly HashSet<TilePos> _depots = new();
+
+    public bool IsDepot(TilePos p) => _depots.Contains(p);
+    public IReadOnlyCollection<TilePos> DepotCells => _depots;
+    /// <summary>Whether a colony has any trade depot.</summary>
+    public bool HasDepot(int faction)
+    {
+        foreach (var p in _depots)
+            if (_owners.Of(p) == faction) return true;
+        return false;
     }
 
     // ---- Storage racks --------------------------------------------------------------------------------
@@ -86,6 +112,7 @@ public sealed class Stockpiles
         if (!_cells.Contains(cell) || !_owners.Matches(cell, faction)) return false;
         RemoveRack(cell);
         _cells.Remove(cell);
+        _depots.Remove(cell);
         _owners.Clear(cell);
         Version++;
         return true;
@@ -95,12 +122,12 @@ public sealed class Stockpiles
     /// Zones the floor in the inclusive box between two ground tiles: every solid tile in the box whose cell
     /// above is walkable. Returns how many cells were added.
     /// </summary>
-    public int AddFloorBox(TilePos a, TilePos b, int faction = 0)
+    public int AddFloorBox(TilePos a, TilePos b, int faction = 0, bool depot = false)
     {
         int n = 0;
         ForBox(a, b, p =>
         {
-            if (TileInfo.IsSolid(_world.Get(p)) && Add(p.Offset(0, 0, 1), faction)) n++;
+            if (TileInfo.IsSolid(_world.Get(p)) && Add(p.Offset(0, 0, 1), faction, depot)) n++;
         });
         return n;
     }
@@ -132,6 +159,7 @@ public sealed class Stockpiles
         Net.SnapIO.Compact(_cells);
         _owners.Compact();
         Net.SnapIO.Compact(_racks);
+        Net.SnapIO.Compact(_depots);
     }
 
     internal void SnapSave(BinaryWriter w)
@@ -143,6 +171,8 @@ public sealed class Stockpiles
         w.Write(_racks.Count);
         foreach (var (p, rack) in _racks) { Net.SnapIO.Write(w, p); w.Write(rack.Levels); w.Write(rack.Facing); }
         w.Write(RackVersion);
+        w.Write(_depots.Count);
+        foreach (var p in _depots) Net.SnapIO.Write(w, p);
     }
 
     internal void SnapLoad(BinaryReader r)
@@ -155,6 +185,9 @@ public sealed class Stockpiles
         int racks = r.ReadInt32();
         for (int i = 0; i < racks; i++) _racks[Net.SnapIO.ReadPos(r)] = new Rack(r.ReadByte(), r.ReadByte());
         RackVersion = r.ReadInt32();
+        if (Net.SnapIO.Before(4)) return;
+        int depots = r.ReadInt32();
+        for (int i = 0; i < depots; i++) _depots.Add(Net.SnapIO.ReadPos(r));
     }
 }
 

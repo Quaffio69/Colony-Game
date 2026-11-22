@@ -175,7 +175,9 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   click to find), Stocks I, Build B (tabs Orders/Zones/Rooms/Walls/Floors/Water, category | items with costs, footer
   with size/rotate/cancel; drives `DesignationTool`'s public selection API; closing it drops build tools), Chronicle L
   (events + cave-ins, sticks to the bottom), Housing H, Work J, Inspect V (home/workshop under the cursor), Military M
-  (fighters: health, gear, draft switches; nearby nests with Look/Attack), Tests & demos
+  (fighters: health, gear, draft switches; nearby nests with Look/Attack), Trade F6 (`UI.TradeWindow`: offers and deals
+  with Accept/Counter/Decline/Withdraw and delivery progress; an offer composer: give from your stores, ask from
+  theirs, click to add, − + (Shift: tens)), Tests & demos
   F1, Appearance F2 (theme, frame, corners, font, size, spacing, UI scale, glass/shadows/chips), Help F3 (keys, debug).
   Home key looks at the colony; G drafts everyone and turns on squad orders (`DesignationTool.SquadOrders`: click ground
   to march, a nest to attack; G/RMB/Esc: done), Shift+G stands everyone down. **Orders ribbon** (`UI.OrdersRibbon`): a
@@ -237,7 +239,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   `--join=127.0.0.1:7781 --net-orders --net-check=1500`; the two `[net] ... hash` lines must match (they did).
 - Limits: demos edit the world outside commands, so they're off online (a world a demo changed can still be hosted:
   snapshots hold its edits).
-- **Snapshots (`Net.Snapshot`, version 3: racks and regrowth; version 2 still loads, `SnapIO.Before(v)` skips newer sections):** the whole state in a gzip blob: the `GameSettings` (the terrain is regenerated, a
+- **Snapshots (`Net.Snapshot`, version 4: trade depots, deals, seventh work type; 3: racks and regrowth; versions 2-3 still load, `SnapIO.Before(v)` skips newer sections):** the whole state in a gzip blob: the `GameSettings` (the terrain is regenerated, a
   second at 2048), the chunks changed since generation (`VoxelWorld.Seal` after generation starts tracking them), then
   flora, piles, orders, stockpiles, farms, rooms and parts, blueprints, waterworks, water (spans, volumes, flow
   momentum, sleep state, springs; natural levels from the terrain; pipes rebuilt), colonists, colonies (society,
@@ -265,7 +267,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 
 - **Commands (`Colony.Core.Commands`):** every player action is a `Command` record (dig box, stairs, plant areas,
   zones, farms, dams, paint/erase rooms, place/remove parts, recipes, waterworks, edge pieces and lines, outlines,
-  floors/roofs, work priorities, home policy, housing policy edits, drafting and squad orders, debug complete / spawn nest). Commands name things by stable ids
+  floors/roofs, work priorities, home policy, housing policy edits, drafting and squad orders, trade depots, offers, counters, accept, reject, debug complete / spawn nest). Commands name things by stable ids
   and cells (part id, room type id, policy index, a cell of the home), never object references, and `Apply` returns
   the player's message. `sim.Commands` (`CommandQueue`): `Submit` queues, `Flush` applies before the next tick (Step
   flushes first thing), `Execute` applies now (single player; it is still "before the next tick"); every applied
@@ -287,6 +289,20 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   own. With one colony the ownership checks are skipped (`Colonist.Filter`, `Needs.Usable`), so single player pays
   nothing for them (benched). Game: `Main.Player` is the local colony (HUD, windows, commands follow it), `--colonies=N`, `--play-as=N`, F4
   hot-seat switches colony, New colony offers 1-4 colonies; colonists show a ring and name tag in their colony's colour.
+- **Trade (`Trade.Trades`, `sim.Trades`; commands `AddTradeDepot`, `ProposeTrade`, `CounterTrade`, `AcceptTrade`, `RejectTrade`):**
+  deals between colonies brokered in turns: a colony offers terms (`TradeLine`s: who gives how many of which item;
+  commands carry `TradeTerms` of item ids, value-equal), the colony whose `Turn` it is accepts, counters (new terms,
+  the other's turn, `Round`++) or declines; the offerer may withdraw. Accepting is binding and needs a trade depot on
+  every receiving side. A **trade depot** is a stockpile zone flagged depot (`Stockpiles.IsDepot`, Build, Zones): goods
+  there are its owner's (`Needs.Usable`, hauling `Ours`), haulers never store into it and carry deliveries on to the
+  stockpiles (`RoleOf` = Loose). **Traders** (work type `Trading`, labor Hauling, tried before hauling at the same
+  priority; `Colonist.TryTrade`, tasks `TradePickup`/`TradeDeliver`): the nearest pile of an owed line in their own
+  stores (`Trades.Sendable`: not factory inputs, building materials or another colony's stores) to the nearest buyer
+  depot cell with room, a load at a time; `Claim`/`Unclaim`/`Delivered` keep `InTransit` and `Delivered` per line, so
+  traders share the work and an abandoned load is owed again. Goods aren't set aside on acceptance: traders send
+  what the stores hold and wait for the rest. Done when every line is delivered; events go to both colonies. Snapshot
+  section `trades` (v4), `Settle` zeroes `InTransit`, `StateHash` covers depots and deals. `--trade-demo` (with
+  `--colonies=2`): depots, an agreed deal under way and an offer waiting; opens Trade.
 
 ## Game design decisions
 
@@ -560,8 +576,8 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   families stay together. Settlers outpace home growth (40-day bench: ~50 settlers vs ~18 births, 5 weddings);
   `Society.SettlersCome` switches settlers off (tests). Installed fixtures' lifespans vary ±20% so they don't all
   wear out on one day. Bench: `-- families [days]`.
-- **Work priorities (`Colonist.Priority`/`SetPriority`, `Work`):** six work types (Mining = dig/stairs, Woodcutting,
-  Farming = sow/harvest/gather, Construction, Hauling incl. furnishing, Industry incl. the Academy), each off (0) or
+- **Work priorities (`Colonist.Priority`/`SetPriority`, `Work`):** seven work types (Mining = dig/stairs, Woodcutting,
+  Farming = sow/harvest/gather, Construction, Hauling incl. furnishing, Industry incl. the Academy, Trading = deliveries of agreed deals), each off (0) or
   1 (first) to 4 (last), RimWorld-style. `FindWork` tries priority 1, then 2...; at one priority the broad `Labors`
   order (its `PreferredWork` first) breaks ties, and designation kinds of that priority are one nearest-first
   `JobBoard.Candidates` search (kind mask). Defaults: 2 for work in its preferred `Labor`, 3 otherwise (same order as
@@ -723,7 +739,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
       and every view; fighters fan out (one striker per tile); windows grow to fit; instant HUD hover banners.
 - [ ] Next for combat: war between colonies (colonists attacking colonists), more threats (wild animals, hostile and
       provokable peoples), medicine/bandages and carrying the downed to bed, ranged arrows drawn in flight, armour tiers.
-- [ ] Next for the demo: chat, trade between colonies, colonist pages (job clothing, titles by
+- [ ] Next for the demo: chat, NPC trading partners and caravans, colonist pages (job clothing, titles by
       proficiency once skills exist), title art behind the main menu, NAT/relay for internet play without port forwarding.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.
