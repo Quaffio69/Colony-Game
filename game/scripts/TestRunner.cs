@@ -30,8 +30,6 @@ public sealed record TestResult(TestCase Case, bool Passed, bool Stopped, string
 /// </summary>
 public static class TestRunner
 {
-    private sealed class Stop : Exception;
-
     private sealed class TestContext(string dir) : AssemblyLoadContext("ColonyTests", isCollectible: false)
     {
         protected override Assembly? Load(AssemblyName name)
@@ -97,15 +95,32 @@ public static class TestRunner
     }
 
     /// <summary>Runs a test on a background thread. <paramref name="watch"/>: stop at its first step and keep the world as set up.</summary>
-    public static Task<TestResult> Run(TestCase test, bool watch) =>
-        Task.Factory.StartNew(() => RunNow(test, watch), TaskCreationOptions.LongRunning);
+    public static Task<TestResult> Run(TestCase test, bool watch)
+    {
+        var done = new TaskCompletionSource<TestResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new System.Threading.Thread(() => done.TrySetResult(Execute(test, watch, done)))
+            { IsBackground = true, Name = $"Test {test.FullName}" };
+        thread.Start();
+        return done.Task;
+    }
 
-    public static TestResult RunNow(TestCase test, bool watch)
+    /// <summary>Runs a test and waits for its result (the calling thread isn't the one that may be parked).</summary>
+    public static TestResult RunNow(TestCase test, bool watch) => Run(test, watch).GetAwaiter().GetResult();
+
+    private static TestResult Execute(TestCase test, bool watch, TaskCompletionSource<TestResult> done)
     {
         ColonySim? sim = null;
-        DevHooks.SimCreated = s => sim ??= s;
-        DevHooks.Stepping = watch ? () => { if (sim != null) throw new Stop(); } : null;
         var clock = Stopwatch.StartNew();
+        DevHooks.SimCreated = s => sim ??= s;
+        // Watch: report the world at its first step, then park this (background) thread for good: the game now owns
+        // the sim, so the test must never step it again. Parking instead of throwing keeps the debugger quiet (a
+        // control-flow exception through Core and reflection frames breaks as "user-unhandled" under Just My Code).
+        DevHooks.Stepping = watch ? () =>
+        {
+            if (sim == null) return;
+            done.TrySetResult(new TestResult(test, true, true, "stopped at its first step (the world as the test set it up)", clock.Elapsed.TotalMilliseconds, sim));
+            System.Threading.Thread.Sleep(System.Threading.Timeout.Infinite);
+        } : null;
         try
         {
             if (test.Skip != null) return new TestResult(test, true, false, $"skipped: {test.Skip}", 0, null);
@@ -123,7 +138,6 @@ public static class TestRunner
         catch (Exception e)
         {
             var error = e is TargetInvocationException { InnerException: { } inner } ? inner : e;
-            if (error is Stop) return new TestResult(test, true, true, "stopped at its first step (the world as the test set it up)", clock.Elapsed.TotalMilliseconds, sim);
             // The assertion's message and where in the test it failed.
             string where = error.StackTrace?.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Contains(".Tests.") && l.Contains(":line ")) ?? "";
             if (where.LastIndexOf(" in ", StringComparison.Ordinal) is int at and > 0) where = where[(at + 4)..];
