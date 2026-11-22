@@ -35,7 +35,7 @@ public partial class OrdersRibbon : Control
         new(ToolMode.Chop, "♣", "pine", "Chop", Key.T, false, "Fell trees in an area (logs by tree size)"),
         new(ToolMode.Gather, "♦", "good", "Gather", Key.P, false, "Gather ripe plants in an area (berries, fiber, herbs)"),
         new(ToolMode.Stockpile, "≡", "item", "Stockpile", Key.P, true, "Zone floor where haulers store goods (racks: Build, Zones)"),
-        new(ToolMode.FarmGrain, "τ", "farm", "Farm", Key.F, true, "Farm plot: press again for the next crop (grain, herbs, glowcaps)"),
+        new(ToolMode.FarmGrain, "τ", "farm", "Farm", Key.F, true, "Farm plot: press again for the next crop (grain, herbs, flax, glowcaps)"),
         new(ToolMode.Wall, "#", "wall", "Dam wall", Key.B, true, "Full stone wall cells for dams and canals (stack to raise)"),
         new(ToolMode.Demolish, "▓", "warn", "Demolish", Key.O, true, "Take down what is built in a box: walls, doors, windows, floors, roofs, racks, waterworks, room parts (DF: o)"),
         new(ToolMode.Cancel, "×", "bad", "Cancel", Key.X, true, "Cancel designations and plans (walls, floors, parts not yet built), remove zone cells (also Del)"),
@@ -54,7 +54,7 @@ public partial class OrdersRibbon : Control
     public static bool IsOrder(ToolMode m) => m is not ToolMode.None && !DesignationTool.IsBuild(m);
 
     private static bool Covers(Entry e, ToolMode m) =>
-        e.Mode == m || e.Mode == ToolMode.FarmGrain && m is ToolMode.FarmHerbs or ToolMode.FarmGlowcaps;
+        e.Mode == m || e.Mode == ToolMode.FarmGrain && m is ToolMode.FarmHerbs or ToolMode.FarmGlowcaps or ToolMode.FarmFlax;
 
     private readonly GameUi _ui;
     private readonly GlyphPanel _pillPanel = new() { Pill = true }, _ribbonPanel = new() { Pill = true };
@@ -194,7 +194,7 @@ public partial class OrdersRibbon : Control
         public Row() : this(null!) { }
 
         private static string NameOf(Entry e, ToolMode current) =>
-            e.Mode == ToolMode.FarmGrain ? current switch { ToolMode.FarmHerbs => "Herbs", ToolMode.FarmGlowcaps => "Glowcaps", ToolMode.FarmGrain => "Grain", _ => e.Name } : e.Name;
+            e.Mode == ToolMode.FarmGrain ? current switch { ToolMode.FarmHerbs => "Herbs", ToolMode.FarmGlowcaps => "Glowcaps", ToolMode.FarmFlax => "Flax", ToolMode.FarmGrain => "Grain", _ => e.Name } : e.Name;
 
         private static int EntryCells(Entry e, ToolMode current, bool compact) => compact ? 2 + e.KeyName.Length + 1 : 2 + NameOf(e, current).Length + 1 + e.KeyName.Length + 2;
 

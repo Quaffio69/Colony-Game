@@ -857,6 +857,7 @@ public partial class Main : Node3D
         // Farms: grain and herbs in the open, glowcaps under a stone roof.
         _sim.Farms.AddFloorBox(Colony.Core.Nature.PlantKind.Wheat, new TilePos(sx, sy + 13, g), new TilePos(sx + 7, sy + 16, g));
         _sim.Farms.AddFloorBox(Colony.Core.Nature.PlantKind.Herbs, new TilePos(sx, sy + 18, g), new TilePos(sx + 7, sy + 20, g));
+        _sim.Farms.AddFloorBox(Colony.Core.Nature.PlantKind.Flax, new TilePos(sx + 9, sy + 13, g), new TilePos(sx + 14, sy + 20, g));
         for (int y = sy + 22; y <= sy + 26; y++)
         for (int x = sx; x <= sx + 7; x++) _sim.World.Set(x, y, g + 4, TileType.Stone);
         _sim.Farms.AddFloorBox(Colony.Core.Nature.PlantKind.Glowcap, new TilePos(sx + 1, sy + 23, g), new TilePos(sx + 6, sy + 25, g));

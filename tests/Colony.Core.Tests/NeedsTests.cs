@@ -176,7 +176,7 @@ public class NeedsTests
     [Fact]
     public void Crops_GrowAtTheirExactPace()
     {
-        foreach (var kind in new[] { PlantKind.Wheat, PlantKind.Herbs, PlantKind.Glowcap })
+        foreach (var kind in new[] { PlantKind.Wheat, PlantKind.Herbs, PlantKind.Glowcap, PlantKind.Flax })
         {
             int ticks = PlantInfo.GrowTicks(kind), rounds = ticks / Farms.GrowInterval, sum = 0;
             for (int r = 0; r < rounds; r++) sum += Farms.GrowthStep(r + 17, ticks);

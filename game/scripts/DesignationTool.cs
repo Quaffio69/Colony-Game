@@ -37,7 +37,7 @@ public partial class DesignationTool : Node3D
     public enum ToolMode
     {
         // Orders
-        None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, Wall, Demolish, Cancel,
+        None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, FarmFlax, Wall, Demolish, Cancel,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
         Room, Part, Structure, Outline, Edge, WallLine, Floor, Roof, Rack, TradeDepot,
     }
@@ -76,6 +76,7 @@ public partial class DesignationTool : Node3D
         ToolMode.FarmGrain => PlantKind.Wheat,
         ToolMode.FarmHerbs => PlantKind.Herbs,
         ToolMode.FarmGlowcaps => PlantKind.Glowcap,
+        ToolMode.FarmFlax => PlantKind.Flax,
         _ => null,
     };
 
@@ -151,6 +152,7 @@ public partial class DesignationTool : Node3D
         ToolMode.FarmGrain => "Farm plot: grain",
         ToolMode.FarmHerbs => "Farm plot: herbs",
         ToolMode.FarmGlowcaps => "Fungus farm: glowcaps (under a roof)",
+        ToolMode.FarmFlax => "Farm plot: flax (fiber)",
         ToolMode.Wall => "Build wall (dams, canals; Z/X raise it)",
         _ => m.ToString(),
     };
@@ -402,7 +404,7 @@ public partial class DesignationTool : Node3D
     public void PickOrder(ToolMode mode)
     {
         if (mode == ToolMode.FarmGrain && CropFor(Mode) is not null)
-            mode = Mode switch { ToolMode.FarmGrain => ToolMode.FarmHerbs, ToolMode.FarmHerbs => ToolMode.FarmGlowcaps, _ => ToolMode.FarmGrain };
+            mode = Mode switch { ToolMode.FarmGrain => ToolMode.FarmHerbs, ToolMode.FarmHerbs => ToolMode.FarmFlax, ToolMode.FarmFlax => ToolMode.FarmGlowcaps, _ => ToolMode.FarmGrain };
         SelectOrder(mode);
     }
 

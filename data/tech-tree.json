@@ -113,7 +113,7 @@
     { "id": "quartz", "name": "Quartz", "category": "raw", "source": "Mining quartz geodes (any depth)", "model": "crystals", "color": "#f0eef8", "stack": 25, "carry": 5 },
     { "id": "sulfur", "name": "Sulfur", "category": "raw", "source": "Mining sulfur pockets (deep, hot rock)", "model": "lumps", "color": "#e8e040", "stack": 25, "carry": 5 },
     { "id": "aetherite", "name": "Aetherite", "category": "raw", "source": "Mining aetherite (deepest strata; faintly glowing)", "model": "crystals", "color": "#5ce8f0", "stack": 25, "carry": 5 },
-    { "id": "fiber", "name": "Fiber", "category": "raw", "source": "Gathering reeds and shrubs", "model": "bundle", "color": "#c7bd6b", "stack": 30, "carry": 10 },
+    { "id": "fiber", "name": "Fiber", "category": "raw", "source": "Flax farms (plots on grass or soil), or gathering reeds and shrubs", "model": "bundle", "color": "#c7bd6b", "stack": 30, "carry": 10 },
     { "id": "berries", "name": "Berries", "category": "raw", "source": "Gathering berry bushes", "uses": ["need: food (raw)"], "food": 1, "model": "basket", "color": "#bf1f4d", "stack": 30, "carry": 10 },
     { "id": "grain", "name": "Grain", "category": "raw", "source": "Grain farms (farm plots on grass or soil)", "model": "sheaves", "color": "#e0b84a", "stack": 30, "carry": 10 },
     { "id": "herbs", "name": "Herbs", "category": "raw", "source": "Gathering ferns and wildflowers, or herb gardens", "model": "bundle", "color": "#5ca64a", "stack": 30, "carry": 10 },

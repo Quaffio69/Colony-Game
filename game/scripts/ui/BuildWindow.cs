@@ -176,7 +176,7 @@ public partial class BuildWindow : GlyphWindow
         ToolMode.Chop => "Fell every tree in an area, on the surface whatever level you view",
         ToolMode.Gather => "Gather ripe berries, fiber and herbs in an area",
         ToolMode.Stockpile => "Haulers bring loose goods here",
-        ToolMode.FarmGrain or ToolMode.FarmHerbs => "Sown and harvested by farmers; half again as fast within 2 tiles of water",
+        ToolMode.FarmGrain or ToolMode.FarmHerbs or ToolMode.FarmFlax => "Sown and harvested by farmers; half again as fast within 2 tiles of water",
         ToolMode.FarmGlowcaps => "Glowcaps grow on any floor under a roof",
         ToolMode.Wall => "A full stone wall cell: dams and canals (stack them to raise it)",
         ToolMode.Room => Tool.Workshop.IsHome ? $"Paint a home: any size and levels, at least {Colony.Core.Agents.Housing.MinCells} cells" : $"Paint the {Tool.Workshop.Name.ToLowerInvariant()} room over floor, then place its parts",
@@ -241,6 +241,7 @@ public partial class BuildWindow : GlyphWindow
             [
                 Order("τ", "farm", "Grain plot", ToolMode.FarmGrain, "Wheat: grain and herbs, on grass or soil"),
                 Order("♣", "good", "Herb plot", ToolMode.FarmHerbs, "Herbs, on grass or soil"),
+                Order("‖", "info", "Flax plot", ToolMode.FarmFlax, "Flax: fiber (beds, thread, cloth, rope, paper), on grass or soil"),
                 Order("°", "gem", "Glowcap plot", ToolMode.FarmGlowcaps, "Glowcaps on any floor under a roof"),
             ]),
         ],

@@ -57,6 +57,48 @@ public static class Hauling
         // Goods a hauler of this colony may take: loose (anyone's), or in its own stockpiles and rooms.
         bool Ours(TilePos p) => faction == Owners.Any || (!stockpiles.Contains(p) || stockpiles.OwnerOf(p) == faction) && (rooms.PartAt(p) is not { } part || part.Room.Faction == faction);
 
+        // 0. Clearing: goods lying on a blueprint's footprint that aren't its material block its delivery (a cell holds
+        // one kind of item), so they go first: to the nearest stockpile with room, else to a free floor cell nearby.
+        // Found by a playtest: crates planned on dig rubble waited for days, as those piles were rarely among the few
+        // loose piles a hauler considers.
+        var blocked = new Nearest<(TilePos Cell, ItemPile Pile)>(Considered);
+        void Blocked(TilePos c, ItemType material)
+        {
+            if (items.TryGet(c, out var pile) && pile.Type != material && pile.Available > 0 && Usable(c) && Ours(c))
+                blocked.Offer(Dist(c, from), (c, pile), c);
+        }
+        foreach (var room in rooms.All)
+        {
+            if (faction != Owners.Any && room.Faction != faction) continue;
+            foreach (var bp in room.Blueprints)
+                foreach (var c in bp.Cells) Blocked(c, bp.Cost.Material);
+        }
+        if (sites is not null)
+            foreach (var bp in sites.All)
+                if (faction == Owners.Any || bp.Faction == faction) Blocked(bp.Cell, bp.Cost.Material);
+        foreach (var (src, pile) in blocked.Items)
+        {
+            var dest = new Nearest<(TilePos Cell, int Room)>(1);
+            foreach (var cell in stockpiles.Cells)
+            {
+                int space = items.RoomAt(cell, pile.Type);
+                if (space > 0 && sites?.At(cell) is null && !stockpiles.IsDepot(cell) && (faction == Owners.Any || stockpiles.OwnerOf(cell) == faction)
+                    && connectivity.ComponentOf(cell) == component) dest.Offer(Dist(cell, src), (cell, space), cell);
+            }
+            if (!dest.Items.Any())
+                // No stockpile room: set it down on free floor beside the footprint.
+                for (int r = 1; r <= 4 && !dest.Items.Any(); r++)
+                for (int dy = -r; dy <= r; dy++)
+                for (int dx = -r; dx <= r; dx++)
+                {
+                    var c = src.Offset(dx, dy, 0);
+                    if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != r || !Usable(c) || items.TryGet(c, out _) || rooms.PartAt(c) != null || sites?.At(c) is not null) continue;
+                    dest.Offer(Dist(c, src), (c, ItemInfo.StackLimit(pile.Type)), c);
+                }
+            foreach (var (cell, space) in dest.Items)
+                plans.Add(new HaulPlan(src, cell, pile.Type, Math.Min(Math.Min(pile.Available, space), ItemInfo.CarryLimit(pile.Type))));
+        }
+
         // 1. Demand: input crates that want their machines' inputs.
         var demands = new Nearest<(TilePos Cell, ItemType Type, int Room)>(Considered);
         foreach (var room in rooms.All)

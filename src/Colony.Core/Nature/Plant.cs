@@ -21,6 +21,7 @@ public enum PlantKind : byte
     Wheat,
     Herbs,
     Glowcap,
+    Flax,
 }
 
 /// <summary>
@@ -34,7 +35,7 @@ public readonly record struct Plant(TilePos Position, PlantKind Kind, byte Growt
 /// <summary>Static facts about each <see cref="PlantKind"/>.</summary>
 public static class PlantInfo
 {
-    public const int KindCount = 13;
+    public const int KindCount = 14;
 
     public static bool IsTree(PlantKind k) => k <= PlantKind.Willow;
 
@@ -56,6 +57,7 @@ public static class PlantInfo
         PlantKind.Wheat => "Wheat",
         PlantKind.Herbs => "Herb garden",
         PlantKind.Glowcap => "Glowcaps",
+        PlantKind.Flax => "Flax",
         _ => k.ToString(),
     };
 
@@ -75,6 +77,7 @@ public static class PlantInfo
         PlantKind.Wheat => 0.9f,
         PlantKind.Herbs => 0.5f,
         PlantKind.Glowcap => 0.45f,
+        PlantKind.Flax => 1.0f,
         _ => 1f,
     };
 
@@ -87,7 +90,7 @@ public static class PlantInfo
     public static Items.ItemType? Harvest(PlantKind k) => k switch
     {
         PlantKind.BerryBush => Items.ItemType.Berries,
-        PlantKind.Reeds or PlantKind.Shrub => Items.ItemType.Fiber,
+        PlantKind.Reeds or PlantKind.Shrub or PlantKind.Flax => Items.ItemType.Fiber,
         PlantKind.Fern or PlantKind.Flowers or PlantKind.Herbs => Items.ItemType.Herbs,
         PlantKind.Wheat => Items.ItemType.Grain,
         PlantKind.Glowcap => Items.ItemType.Glowcaps,
@@ -105,6 +108,7 @@ public static class PlantInfo
         PlantKind.Wheat => Balance.WheatGrowTicks,
         PlantKind.Herbs => Balance.HerbGrowTicks,
         PlantKind.Glowcap => Balance.GlowcapGrowTicks,
+        PlantKind.Flax => Balance.FlaxGrowTicks,
         _ => 0,
     };
 

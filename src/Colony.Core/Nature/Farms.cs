@@ -34,7 +34,7 @@ public sealed class Farms
     public Func<TilePos, bool>? IsBlocked { get; set; }
 
     /// <summary>Crops a plot can grow.</summary>
-    public static readonly PlantKind[] Crops = { PlantKind.Wheat, PlantKind.Herbs, PlantKind.Glowcap };
+    public static readonly PlantKind[] Crops = { PlantKind.Wheat, PlantKind.Herbs, PlantKind.Glowcap, PlantKind.Flax };
 
     /// <summary>Zones the floor in the box between two ground tiles for <paramref name="crop"/>. Returns how many cells.</summary>
     public int AddFloorBox(PlantKind crop, TilePos a, TilePos b, int faction = 0)

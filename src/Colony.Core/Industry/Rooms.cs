@@ -452,6 +452,25 @@ public sealed class Rooms
 
     private static bool Pending(Room room, PartRole role) => room.Blueprints.Any(p => p.Role == role);
 
+    /// <summary>
+    /// The output crate a batch of <paramref name="product"/> goes to: one already holding it with room, else an empty
+    /// one, but only while enough empty crates stay free for the room's other products that hold none yet (as input
+    /// crates do). Without that, the busiest machine's product took every crate that came free and the others never
+    /// ran (found by a playtest: planks in the crates meant for furniture).
+    /// </summary>
+    public static TilePos? OutputCrateFor(Room room, Items.ItemType product, int count, Items.ItemPiles items, Func<TilePos, bool> usable)
+    {
+        var crates = room.PartsWithRole(PartRole.Output).Select(c => c.Cells[0]).Where(usable).ToList();
+        foreach (var c in crates)
+            if (items.TryGet(c, out var pile) && pile.Type == product && items.RoomAt(c, product) >= count) return c;
+        var empty = crates.Where(c => !items.TryGet(c, out _)).ToList();
+        if (empty.Count == 0) return null;
+        int othersWithout = room.PartsWithRole(PartRole.Machine)
+            .Where(m => m.Recipe is { Kind: Items.ItemKind.Good } r && r.Output != product).Select(m => m.Recipe!.Output).Distinct()
+            .Count(o => !room.PartsWithRole(PartRole.Output).Any(c => items.TryGet(c.Cells[0], out var p) && p.Type == o));
+        return empty.Count > othersWithout && items.RoomAt(empty[0], product) >= count ? empty[0] : null;
+    }
+
     /// <summary>Units of <paramref name="type"/> in the room's crates with the given role.</summary>
     public static int Stock(Room room, PartRole role, Items.ItemType type, Items.ItemPiles items, bool available = false)
     {

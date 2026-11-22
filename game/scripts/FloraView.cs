@@ -260,6 +260,7 @@ public partial class FloraView : Node3D
         PlantKind.Wheat => new Color(0.86f, 0.72f, 0.3f),
         PlantKind.Herbs => new Color(0.35f, 0.6f, 0.3f),
         PlantKind.Glowcap => new Color(0.36f, 0.86f, 0.8f),
+        PlantKind.Flax => new Color(0.46f, 0.62f, 0.32f),
         _ => Colors.Magenta,
     };
 
@@ -398,6 +399,18 @@ public partial class FloraView : Node3D
             caps.Add((Ball(0.1f + h * 0.2f, 0.09f), At(x, h, z), cap));
         }
         _meshes[(int)PlantKind.Glowcap] = Compose(caps.ToArray());
+        // Flax: slender upright stems topped with small sky-blue flowers.
+        var flaxStem = Leaves(PlantKind.Flax);
+        var flaxBloom = Material(new Color(0.45f, 0.62f, 0.95f), 0.1f);
+        var flax = new List<(PrimitiveMesh, Transform3D, Material)>();
+        for (int i = 0; i < 6; i++)
+        {
+            float a = i * 2.1f, r = 0.06f + 0.16f * (i % 3) / 2f, tz = Mathf.Cos(a) * 0.08f, tx = Mathf.Sin(a) * 0.08f;
+            float x = Mathf.Cos(a) * r, z = Mathf.Sin(a) * r, h = 0.75f + 0.1f * (i % 2);
+            flax.Add((Rod(0.012f, 0.01f, h, 4), At(x, h / 2, z, tz, tx), flaxStem));
+            flax.Add((Ball(0.05f, 0.04f), At(x + tz * 0.5f, h + 0.02f, z - tx * 0.5f), flaxBloom));
+        }
+        _meshes[(int)PlantKind.Flax] = Compose(flax.ToArray());
 
         // Far LOD: a two-cone spindle on a short stalk, coloured per instance.
         var marker = Material(new Color(1f, 1f, 1f), 1f, glyph: DwarfRender.GlyphAtlas.Oak); // distant trees still count as trees

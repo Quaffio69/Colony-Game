@@ -217,7 +217,7 @@ static class Orders
             case "stockpile": { var (p, q) = Ground(sim, a, opts); return Run(new AddStockpile(p, q)); }
             case "farm":
             {
-                var crop = a[1] switch { "wheat" or "grain" => PlantKind.Wheat, "herbs" => PlantKind.Herbs, "glowcaps" or "glowcap" => PlantKind.Glowcap, _ => throw new ArgumentException("crop is wheat, herbs or glowcaps") };
+                var crop = a[1] switch { "wheat" or "grain" => PlantKind.Wheat, "herbs" => PlantKind.Herbs, "flax" => PlantKind.Flax, "glowcaps" or "glowcap" => PlantKind.Glowcap, _ => throw new ArgumentException("crop is wheat, herbs, flax or glowcaps") };
                 var (p, q) = Ground(sim, a[1..], opts);
                 return Run(new AddFarm(crop, p, q));
             }
@@ -606,7 +606,7 @@ static class Reference
             | `chop X1 Y1 X2 Y2` | fell every tree in the area (logs) |
             | `gather X1 Y1 X2 Y2` | gather ripe plants in the area (berries = food, fiber, herbs) |
             | `stockpile X1 Y1 X2 Y2 [z=LEVEL]` | zone a stockpile on the floor (haulers store goods there) |
-            | `farm wheat|herbs|glowcaps X1 Y1 X2 Y2 [z=LEVEL]` | farm plots (wheat/herbs on grass or soil; glowcaps on any floor under a roof) |
+            | `farm wheat|herbs|flax|glowcaps X1 Y1 X2 Y2 [z=LEVEL]` | farm plots (wheat, herbs, flax = fiber, on grass or soil; glowcaps on any floor under a roof) |
             | `room ROOMTYPE X1 Y1 X2 Y2 [z=LEVEL]` | paint a workshop room over the floor (room types below) |
             | `home X1 Y1 X2 Y2 [z=LEVEL]` | paint a home (4+ cells; beds and furniture are brought by haulers per its policy) |
             | `part PARTID X Y [size=1..5] [rot] [z=LEVEL]` | place a station/crate/tool in a room (a blueprint: builders build it from delivered materials) |

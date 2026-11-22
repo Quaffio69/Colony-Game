@@ -49,6 +49,9 @@ public static class Balance
 
     /// <summary>Ticks from sowing to harvest.</summary>
     public const int WheatGrowTicks = Day * 4, HerbGrowTicks = Day * 5 / 2, GlowcapGrowTicks = Day * 3;
+    /// <summary>Flax: the fiber crop (beds, thread, cloth, rope, paper). Before it, fiber came only from wild plants
+    /// and a playtest found it the bottleneck of almost every chain.</summary>
+    public const int FlaxGrowTicks = Day * 3;
     /// <summary>Units a ripe crop gives.</summary>
     public const int CropYield = 4;
     /// <summary>Growth speed of an irrigated plot (water within two tiles).</summary>

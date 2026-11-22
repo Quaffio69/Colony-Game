@@ -184,7 +184,7 @@ public partial class Notices : Control
             }
             else
             {
-                var entry = OrdersRibbon.Entries.FirstOrDefault(e => e.Mode == tool.Mode || e.Mode == ToolMode.FarmGrain && tool.Mode is ToolMode.FarmHerbs or ToolMode.FarmGlowcaps);
+                var entry = OrdersRibbon.Entries.FirstOrDefault(e => e.Mode == tool.Mode || e.Mode == ToolMode.FarmGrain && tool.Mode is ToolMode.FarmHerbs or ToolMode.FarmGlowcaps or ToolMode.FarmFlax);
                 glyph = entry?.Glyph ?? "#";
                 tone = entry?.Tone ?? "warn";
                 string full = tool.ModeName(tool.Mode);

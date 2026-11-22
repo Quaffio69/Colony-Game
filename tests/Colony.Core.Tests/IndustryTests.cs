@@ -261,6 +261,45 @@ public class IndustryTests
     }
 
     [Fact]
+    public void ABlueprintOnGoodsLyingAbout_IsClearedAndBuilt()
+    {
+        // The second agent playtest: crates planned on dig rubble waited for days ("needs 2 logs and a builder").
+        var sim = Meadow();
+        sim.Rooms.InstantBuild = false;
+        sim.Stockpiles.AddFloorBox(G(2, 2), G(6, 6));
+        sim.Items.Drop(new TilePos(3, 3, 4), ItemType.Log, 10);
+        // A backlog of loose stone between the stockpile and the room: always nearer the haulers than the rubble.
+        for (int i = 0; i < 60; i++) sim.Items.Drop(new TilePos(8 + i % 10, 2 + i / 10, 4), ItemType.Stone, 2);
+        sim.Rooms.Paint(RoomType.Carpentry, G(30, 30), G(34, 34));
+        sim.Items.Drop(new TilePos(32, 32, 4), ItemType.Stone, 3); // rubble where the crate goes
+        var crate = sim.Rooms.Place(PartType.InputCrate, new TilePos(32, 32, 4), false)!;
+        for (int i = 0; i < 2; i++)
+        {
+            var c = sim.AddColonist($"C{i}", new TilePos(7 + i, 4, 4));
+            foreach (var w in Enum.GetValues<Work>()) c.SetPriority(w, w is Work.Hauling or Work.Construction ? 1 : 0);
+        }
+        int t = 0;
+        for (; t < 2500 && !crate.Built; t++) sim.Step();
+        Assert.True(crate.Built, $"not built after {t} ticks");
+    }
+
+    [Fact]
+    public void AnOutputCrate_IsKeptForEachProduct_NotTakenByTheBusiestOne()
+    {
+        var sim = Meadow();
+        sim.Rooms.Paint(RoomType.Carpentry, G(10, 10), G(17, 15));
+        var room = sim.Rooms.All[0];
+        var saw = sim.Rooms.Place(PartType.Sawbench, new TilePos(10, 10, 4), false)!; // planks
+        var joinery = sim.Rooms.Place(Catalog.Part("carpentry.joinery_bench"), new TilePos(10, 13, 4), false)!;
+        sim.Rooms.SetRecipe(joinery, Catalog.RecipeFor(Catalog.Item("rough_furniture"))!);
+        var a = sim.Rooms.Place(PartType.OutputCrate, new TilePos(17, 15, 4), false)!.Cells[0];
+        var b = sim.Rooms.Place(PartType.OutputCrate, new TilePos(16, 15, 4), false)!.Cells[0];
+        sim.Items.Drop(a, ItemType.Plank, 40); // the planks' crate is full
+        Assert.Null(Rooms.OutputCrateFor(room, ItemType.Plank, 4, sim.Items, _ => true)); // the empty one is kept for furniture
+        Assert.Equal(b, Rooms.OutputCrateFor(room, Catalog.Item("rough_furniture"), 1, sim.Items, _ => true));
+    }
+
+    [Fact]
     public void Construction_BootstrapsFromLogs_ThenPlanksBuildTheBiggerMachines()
     {
         var sim = Meadow();

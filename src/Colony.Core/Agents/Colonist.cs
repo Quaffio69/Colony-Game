@@ -932,12 +932,7 @@ public sealed partial class Colonist
             TilePos? output = null;
             if (recipe.Kind == ItemKind.Good)
             {
-                foreach (var crate in room.PartsWithRole(PartRole.Output))
-                {
-                    var c = crate.Cells[0];
-                    if (sim.Items.RoomAt(c, recipe.Output) >= batch.OutCount && sim.Connectivity.ComponentOf(c) == component)
-                    { output = c; break; }
-                }
+                output = Rooms.OutputCrateFor(room, recipe.Output, batch.OutCount, sim.Items, c => sim.Connectivity.ComponentOf(c) == component);
                 if (output is null) continue;
             }
 
