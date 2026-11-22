@@ -108,7 +108,7 @@ public class CombatTests
     {
         var sim = Flat(200);
         sim.Wildlife.AddNest(sim, CreatureKinds.GiantAnt, At(100, 100), 39);
-        Run(sim, Needs.Day * 4);
+        Run(sim, Needs.Day * (Balance.NestFirstFoundingDays + 1));
         Assert.True(sim.Wildlife.Nests.Count >= 2, "a full nest sends founders off");
         var a = sim.Wildlife.Nests[0].Entrance;
         var b = sim.Wildlife.Nests[1].Entrance;
@@ -247,13 +247,16 @@ public class CombatTests
         Assert.Equal(1, nest.Crowded);
         Assert.Contains(sim.Events, e => e.Text.Contains("Expect raids"));
         bool raided = false;
-        for (int i = 0; i < Needs.Day && !raided; i++)
+        for (int i = 0; i < Balance.FirstRaidDelay + 300 && !raided; i++)
         {
             sim.Step();
             raided = sim.Wildlife.Creatures.Any(a => a.Mode == CreatureMode.Raid);
         }
         Assert.True(raided);
         Assert.Contains(sim.Events, e => e.Text.Contains("raid"));
+        Run(sim, 20);
+        // Sized to the colony, not the nest: three settlers meet RaidBase + 1 ants, though a third of the nest is 12.
+        Assert.Equal(Balance.RaidBase + 1, sim.Wildlife.Creatures.Count(a => a.Mode == CreatureMode.Raid));
         Run(sim, 1500);
         Assert.True(people.Any(p => p.Health < Colonist.MaxHealth || p.Downed || !sim.Colonists.Contains(p)), "the raiders reach the colony");
     }

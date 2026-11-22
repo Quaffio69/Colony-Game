@@ -97,14 +97,14 @@ public static class PlantInfo
     public static bool IsGatherable(Plant p) => Harvest(p.Kind) is not null && p.Growth >= (IsCrop(p.Kind) ? (byte)255 : RipeGrowth);
 
     /// <summary>Units a ripe plant yields: 2-5, more the more grown it is.</summary>
-    public static int HarvestYield(Plant p) => IsCrop(p.Kind) ? 4 : 2 + (p.Growth - RipeGrowth) * 3 / (255 - RipeGrowth);
+    public static int HarvestYield(Plant p) => IsCrop(p.Kind) ? Balance.CropYield : 2 + (p.Growth - RipeGrowth) * 3 / (255 - RipeGrowth);
 
     /// <summary>Ticks a crop takes from sowing to harvest.</summary>
     public static int GrowTicks(PlantKind k) => k switch
     {
-        PlantKind.Wheat => 2400,
-        PlantKind.Herbs => 1800,
-        PlantKind.Glowcap => 3000,
+        PlantKind.Wheat => Balance.WheatGrowTicks,
+        PlantKind.Herbs => Balance.HerbGrowTicks,
+        PlantKind.Glowcap => Balance.GlowcapGrowTicks,
         _ => 0,
     };
 

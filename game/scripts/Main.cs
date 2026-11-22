@@ -694,7 +694,7 @@ public partial class Main : Node3D
     /// A small waterworks next to the colony (dev only: edits tiles directly): a spring-fed channel on a stone
     /// terrace falls onto a water wheel and runs on to a large pond (the spring never stops, so after some minutes
     /// it overflows: dam or drain it); a pump powered by the wheel lifts pond water into a ditch beside a wheat
-    /// field (irrigated, so it grows twice as fast).
+    /// field (irrigated, so it grows half again as fast).
     /// </summary>
     private void WaterDemo()
     {

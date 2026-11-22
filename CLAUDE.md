@@ -290,6 +290,16 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
 
 ## Game design decisions
 
+- **Balance (`Colony.Core.Balance`):** the pacing knobs live in one file (time, population, farming, work ticks,
+  recipe labour, ants); system constants point there, so tune there and measure with `-- balance [size] [days]`
+  (resources round the landing, ore within 64 columns/48 levels, nests, labour, food per tile, then days with no
+  player). Target pace (1x, day = 4 min): between an RTS and DF. Personal rhythms stay brisk (three meals, a fifth of
+  the day asleep); colony growth is slow enough that each step is a decision: settlers in waves from day 3, a colony
+  doubling in ~1 hour, wheat 4 days (bread: 1.5 tiles a colonist), glowcaps 3 days (2.3 tiles), digging stone 90
+  ticks, recipe labour 120 + 45/tier, education 2400/4800/7200 ticks a promotion, ants raiding every ~3 days sized to
+  the colony. Bread chain: grain*2 -> flour, flour*2 + charcoal -> bread*2 (4 meals each). Wild small plants start
+  mostly ripe (late summer) so foraging bridges the first harvest.
+
 - **Industry over crafting (core direction):** gameplay starts dwarf-like (basic resource production) and
   grows into specialised industries, with the focus on the industrial side. No generic 3x3 crafting spots:
   production happens in player-built factories from a dedicated factory builder (in the spirit of Songs of
@@ -496,7 +506,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   `TileType.Wall` (digs back out as stone). `Fluids.Waterworks`: a wheel's power = water flowing through its
   cell per step / `FlowPerPower` (hang it in a waterfall: wheels may mount on a wall); pumps lift water from
   their cell to the cell ahead and one level up; power is one colony-wide pool for now (pumps run at the
-  share the wheels cover). Farm plots within 2 tiles of water grow twice as fast (`Farms.Irrigated`).
+  share the wheels cover). Farm plots within 2 tiles of water grow 1.5x as fast (`Farms.Irrigated`).
 - **Needs and population (`Agents.Needs`, `Agents.Society`):** a game day is `Needs.Day` (4800 ticks, 4 min at 1x).
   Food is personal: `Colonist.Satiety` (a day when full) drains; below `Hungry` an idle colonist eats before its
   next job, below `Famished` it drops its work (only if food is in reach) and walks to the nearest food pile it may
@@ -508,8 +518,9 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   `Met` per need, `Standard` smoothed. Daily mood (`Colonist.Happiness`): half home (`Housing.Score`), a fifth belly,
   the rest the goods standard; `WorkSpeed` 0.85-1.15. Unhappy (< 0.25, i.e. homeless counts) 5 days running: the
   unhappiest, newest first, leaves, one a day; neither unhappiness nor starvation takes a colony below
-  `Needs.NeverBelow` (7): hardship thins, never empties (no death spirals, by design). Settlers arrive daily while
-  there are >= 3 days of food and nobody starves: pop x (5% + 20% x mood), capped by free beds but at least 1, max 12.
+  `Needs.NeverBelow` (7): hardship thins, never empties (no death spirals, by design). Settlers arrive in waves (day 3, then
+  every 3 days) while there are >= 3 days of food and nobody starves: pop x (2% + 10% x mood) a day, capped by free
+  beds but at least 1, max 24.
   Founders bring ~2 weeks of food; daily warnings below 2 days. `ColonySim.NeedsEnabled` switches needs off (tests).
 - **Homes (`Agents.Housing`):** a home is a room of type `Catalog.Home` (build menu; not a workshop, takes no parts),
   any size and levels, min 4 cells; adjacent home floor merges into one home (separate homes need a wall or gap).
@@ -538,7 +549,7 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   Scale-up path: `Demands` and fixture counts are linear scans per home.
 - **Families (`Society.Families`, `Housing.AssignResidents`):** a colonist's `Household` is its own id while single;
   newlyweds get a family id (`ColonySim.NewFamily`), shared by their children (`InFamily`). Daily, after settlers
-  arrive (so they take beds first): children grow up after `Needs.ChildDays` (12) and stay home until they marry;
+  arrive (so they take beds first): children grow up after `Needs.ChildDays` (16) and stay home until they marry;
   a couple marries (`MarriageChance`, two adults of different households: never siblings) only into a home of its own
   (`Housing.CoupleHomes`: no family's, not shared, 2+ beds, at most the two of them lodging; one where settlers lodge
   is taken) and claims it (`Home.Family`); couples at home with a spare bed have children (`BirthChance`, while
@@ -589,14 +600,14 @@ ambitions: many interlocking systems and open-world procedural narrative storyte
   (`CreatureKinds`: health, `Attack`, speed, `Temperament` Docile/Provokable/Hostile, drop, nest cap and mound health),
   so animals and other peoples' soldiers slot in later. **Giant ants** (the first): 8 health (one weapon blow; two
   punches), bite 3 per 24 ticks, quicker than colonists; a third drop chitin. **Nests** are counted, not simulated: a
-  population underground breeds to 40 (one per `BirthInterval`), a full nest founds another 30-60 tiles off every few
-  days (not near colonies or nests; `MaxNests` = map area / 100²), `Populate` scatters them at generation (a 55% chance
+  population underground breeds to 40 (one per `BirthInterval`, a third of a day), a full nest founds another 30-60 tiles off
+  every 6-8 days (64+ from landings, 40+ from colony land, 40+ from nests; `MaxNests` = map area / 128²), `Populate` scatters them at generation (a 55% chance
   per 128² cell, 64+ tiles from every landing). A nest is **awake** (foragers out, `2 + total/8`) only while a colonist
   is within `WakeRange` (56) or it is fighting; asleep, its ants go back underground. **Temperament:** ants leave
   colonists alone until provoked: struck (`Hurt`/`StrikeNest` -> `Alarm`: angry at that colony for `CalmTicks` (2 days),
   defenders boil out 3 every 2 ticks), or a colony's land (16² blocks with its rooms, stockpiles, farms, landing;
-  `ColonyReach` 6) meets the nest's territory (radius 12 + total/4, max 24): `Crowded`, announced, then a raid every
-  ~1.5 days (a third of the nest, 4-16, filing out along one shared A* `Trail` to the nearest colonist of that colony
+  `ColonyReach` 6) meets the nest's territory (radius 12 + total/4, max 24): `Crowded`, announced, a day later the first raid, then one every
+  ~3 days (a third of the nest, 4-16, but at most 3 + half the colony's grown colonists, filing out along one shared A* `Trail` to the nearest colonist of that colony
   within `RaidRange` 96; nothing if unreachable). Defenders fight only near their nest; raiders roam 20 tiles off the
   trail's end; nobody bites a downed colonist. The mound has 600 health; destroyed, up to 20 survivors fight on as
   `Lost` and wander off within a day. **Swarm pathing:** no ant searches: foragers and the homeward follow the nest's

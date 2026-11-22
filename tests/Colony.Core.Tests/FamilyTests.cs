@@ -16,6 +16,7 @@ public class FamilyTests
             w.Set(x, y, z, TileType.Stone);
         var sim = new ColonySim(w);
         sim.Items.Drop(new TilePos(35, 35, 4), Catalog.Item("bread"), 400); // well fed: food is not what these test
+        sim.Items.Drop(new TilePos(35, 30, 4), Catalog.Item("straw_pallet"), 20); // nor beds wearing out over the months
         sim.Society.SettlersCome = false; // only home-grown colonists here (settlers would take the free beds first)
         return sim;
     }
@@ -51,7 +52,7 @@ public class FamilyTests
         var home = Cottage(sim, 4, 4, beds: 3);
         var a = sim.AddColonist("Ann", new TilePos(20, 20, 4));
         var b = sim.AddColonist("Bo", new TilePos(21, 20, 4));
-        Assert.True(RunUntil(sim, () => a.Spouse != null, 15) > 0, "they marry");
+        Assert.True(RunUntil(sim, () => a.Spouse != null, 45) > 0, "they marry");
         Assert.Equal(b, a.Spouse);
         Assert.Equal(a, b.Spouse);
         Assert.Equal(a.Household, b.Household);
@@ -79,11 +80,12 @@ public class FamilyTests
     {
         var sim = FlatSim();
         sim.Society.SettlersCome = true;
-        var home = Cottage(sim, 4, 4, beds: 3);
         var a = sim.AddColonist("Ann", new TilePos(20, 20, 4));
         sim.AddColonist("Bo", new TilePos(21, 20, 4));
+        Days(sim, Balance.FirstSettlerDay - 1); // no home yet: nobody can marry
+        var home = Cottage(sim, 4, 4, beds: 3);
         Days(sim, 1);
-        Assert.Equal(3, home.Residents.Count); // a settler came on the first morning and took the spare bed
+        Assert.Equal(3, home.Residents.Count); // a settler came with the first wave and took the spare bed
         Days(sim, 6);
         Assert.Null(a.Spouse);
         Assert.Equal(0, home.Family);
@@ -97,20 +99,22 @@ public class FamilyTests
         var home = Cottage(sim, 4, 4, beds: 4);
         var a = sim.AddColonist("Ann", new TilePos(20, 20, 4));
         var b = sim.AddColonist("Bo", new TilePos(21, 20, 4));
-        Assert.True(RunUntil(sim, () => a.Spouse != null, 15) > 0);
-        Assert.True(RunUntil(sim, () => sim.Colonists.Count(c => c.IsChild) == 2, 20) > 0, "two children: four beds");
-        var kids = sim.Colonists.Where(c => c.IsChild).ToList();
-        Assert.All(kids, k => Assert.Equal(a.Household, k.Household));
-        Assert.All(kids, k => Assert.Equal(home, k.Home));
-
+        Assert.True(RunUntil(sim, () => a.Spouse != null, 45) > 0);
+        Assert.True(RunUntil(sim, () => sim.Colonists.Any(c => c.IsChild), 80) > 0, "a child");
         // Children don't work: a dig waits for the grown-ups (who are kept busy elsewhere: there are none).
+        var first = sim.Colonists.Single(c => c.IsChild);
         sim.Designations.Designate(new TilePos(30, 30, 3));
         a.Spouse!.Satiety = a.Satiety = Needs.FullSatiety * 3;
         Days(sim, 1);
-        Assert.All(kids, k => Assert.NotEqual(ColonistTask.Designation, k.Task));
+        if (first.IsChild) Assert.NotEqual(ColonistTask.Designation, first.Task);
+        sim.Designations.Cancel(new TilePos(30, 30, 3));
 
-        Days(sim, 4);
-        Assert.Equal(2, sim.Colonists.Count(c => c.IsChild)); // the home is full: no more
+        Assert.True(RunUntil(sim, () => sim.Society.Births == 2, 80) > 0, "two children: four beds");
+        var kids = sim.Colonists.Where(c => c.Household == a.Household && c != a && c != b).ToList();
+        Assert.Equal(2, kids.Count);
+        Assert.All(kids, k => Assert.Equal(home, k.Home));
+        Days(sim, 20);
+        Assert.Equal(2, sim.Society.Births); // the home is full (grown children still live there): no more
         Assert.Equal(4, home.Residents.Count);
 
         Assert.True(RunUntil(sim, () => kids.All(k => !k.IsChild), Needs.ChildDays + 2) > 0, "they grow up");
@@ -125,8 +129,8 @@ public class FamilyTests
         var home = Cottage(sim, 4, 4, beds: 4);
         var a = sim.AddColonist("Ann", new TilePos(20, 20, 4));
         sim.AddColonist("Bo", new TilePos(21, 20, 4));
-        Assert.True(RunUntil(sim, () => sim.Colonists.Count(c => c.IsChild) == 2, 30) > 0);
-        var kids = sim.Colonists.Where(c => c.IsChild).ToList();
+        Assert.True(RunUntil(sim, () => sim.Society.Births == 2, 120) > 0);
+        var kids = sim.Colonists.Where(c => c.Household == a.Household && c != a && c.Spouse != a).ToList();
         Assert.True(RunUntil(sim, () => kids.All(k => !k.IsChild), Needs.ChildDays + 2) > 0);
 
         var second = Cottage(sim, 20, 4, beds: 2);
@@ -136,7 +140,7 @@ public class FamilyTests
 
         // An outsider arrives: one of the grown children marries them and they take the new home.
         var outsider = sim.AddColonist("Out", new TilePos(25, 25, 4));
-        Assert.True(RunUntil(sim, () => outsider.Spouse != null, 15) > 0);
+        Assert.True(RunUntil(sim, () => outsider.Spouse != null, 45) > 0);
         Assert.Contains(outsider.Spouse!, kids);
         Assert.Equal(outsider.Household, second.Family);
         Assert.Equal(second, outsider.Spouse!.Home);
@@ -150,7 +154,7 @@ public class FamilyTests
         Cottage(sim, 4, 4, beds: 2);
         var a = sim.AddColonist("Ann", new TilePos(20, 20, 4));
         var b = sim.AddColonist("Bo", new TilePos(21, 20, 4));
-        Assert.True(RunUntil(sim, () => a.Spouse != null, 15) > 0);
+        Assert.True(RunUntil(sim, () => a.Spouse != null, 45) > 0);
         for (int i = 0; i < Needs.NeverBelow + 2; i++) sim.AddColonist($"S{i}", new TilePos(5 + i, 30, 4));
         foreach (var c in sim.Colonists) c.UnhappyDays = Needs.UnhappyDaysToLeave + 1;
         Days(sim, 3);

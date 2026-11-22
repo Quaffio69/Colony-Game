@@ -228,7 +228,7 @@ public static class PartInfo
     }
 
     /// <summary>Ticks of builder work once the materials are on site.</summary>
-    public static int BuildTicks(PartType t, int size = 1) => 40 + 3 * Cost(t, size).Count;
+    public static int BuildTicks(PartType t, int size = 1) => Balance.PartBuildTicks + Balance.PartBuildTicksPerItem * Cost(t, size).Count;
 
     /// <summary>Recipe units a machine processes per batch.</summary>
     public static int Batch(PartType t, int size = 1) => t.Role == PartRole.Machine ? MachineBatch[Index(t, size)] : 1;

@@ -93,11 +93,11 @@ public static class FloraGenerator
                 float meadow = Noise.Fbm2D(x / 70f, y / 70f, s.Seed + 81, 3);
                 if (forest > 0.5f)
                 {
-                    if (roll < 0.22f) kind = pick < 0.6f ? PlantKind.Fern : pick < 0.85f ? PlantKind.Shrub : PlantKind.BerryBush;
+                    if (roll < 0.22f) kind = pick < 0.5f ? PlantKind.Fern : pick < 0.7f ? PlantKind.Shrub : PlantKind.BerryBush;
                 }
                 else if (roll < 0.03f + Math.Max(0f, meadow - 0.5f) * 0.5f)
                 {
-                    kind = pick < 0.65f ? PlantKind.Flowers : pick < 0.88f ? PlantKind.Shrub : PlantKind.BerryBush;
+                    kind = pick < 0.55f ? PlantKind.Flowers : pick < 0.78f ? PlantKind.Shrub : PlantKind.BerryBush;
                 }
             }
             if (kind is { } k) result.Add(MakePlant(s, x, y, surface, k, gx, gy, mostlyMature: false));
@@ -138,8 +138,8 @@ public static class FloraGenerator
     private static Plant MakePlant(WorldGenSettings s, int x, int y, int surface, PlantKind kind, int gx, int gy, bool mostlyMature)
     {
         float g = Noise.Hash(gx, gy, 21, s.Seed + (int)kind * 31);
-        // Trees: mostly mature, some saplings. Small plants: any stage.
-        byte growth = (byte)(mostlyMature ? (g < 0.15f ? 40 + g * 900 : 200 + g * 55) : 80 + g * 175);
+        // Trees: mostly mature, some saplings. Small plants: late summer, most of them ripe (wild food to start on).
+        byte growth = (byte)(mostlyMature ? (g < 0.15f ? 40 + g * 900 : 200 + g * 55) : 120 + g * 135);
         byte variant = (byte)(Noise.Hash(gx, gy, 22, s.Seed + 900) * 255);
         return new Plant(new TilePos(x, y, surface + 1), kind, growth, variant);
     }

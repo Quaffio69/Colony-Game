@@ -435,7 +435,7 @@ public partial class InspectorWindow : GlyphWindow
                 crops[name] = (n + 1, g + (has ? 1 : 0), r + (has && Colony.Core.Nature.PlantInfo.IsGatherable(plant) ? 1 : 0));
             }
             foreach (var (name, (n, g, r)) in crops) KV(name, $"{n} plots, {g} sown, {r} ripe");
-            Content.AddChild(G.Para("Twice as fast within 2 tiles of water. Shift+X over plots removes them.", "Faint"));
+            Content.AddChild(G.Para("Half again as fast within 2 tiles of water. Shift+X over plots removes them.", "Faint"));
             return;
         }
         Content.AddChild(new GlyphSection("Stockpile"));

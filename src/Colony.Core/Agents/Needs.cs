@@ -13,7 +13,7 @@ namespace Colony.Core.Agents;
 public static class Needs
 {
     /// <summary>A game day in ticks (4 minutes at normal speed): the rhythm of eating, consumption and arrivals.</summary>
-    public const int Day = 4800;
+    public const int Day = Balance.Day;
     /// <summary>A full belly lasts a day.</summary>
     public const int FullSatiety = Day;
     /// <summary>Satiety one meal of nutrition gives (three a day; a berry is one, a loaf of bread four).</summary>
@@ -35,12 +35,12 @@ public static class Needs
     public const float Unhappy = 0.25f; // fed but homeless and in rags (0.2) counts: homes matter
     public const int UnhappyDaysToLeave = 5, NeverBelow = 7;
 
-    /// <summary>Days from birth to grown (12 days: 48 minutes at normal speed).</summary>
-    public const int ChildDays = 12;
+    /// <summary>Days from birth to grown.</summary>
+    public const int ChildDays = Balance.ChildDays;
     /// <summary>Daily chance a couple marries when there is an empty home for them (settlers move in first).</summary>
-    public const float MarriageChance = 0.35f;
+    public const float MarriageChance = Balance.MarriageChance;
     /// <summary>Daily chance a couple with a free bed at home has a child.</summary>
-    public const float BirthChance = 0.2f;
+    public const float BirthChance = Balance.BirthChance;
 
     /// <summary>A colonist starving (no satiety left) this long leaves the colony.</summary>
     public const int StarvingLimit = Day;
@@ -210,14 +210,17 @@ public sealed class Society
     }
 
     /// <summary>
-    /// Settlers come to a colony with food to spare and nobody starving: a few more each day the happier it is, as
-    /// many as there are free beds (one comes regardless). They arrive at the colony's landing place.
+    /// Settlers come in waves (from <see cref="Balance.FirstSettlerDay"/>, every <see cref="Balance.SettlerWaveDays"/>)
+    /// to a colony with food to spare and nobody starving: more the happier it is, as many as there are free beds (one
+    /// comes regardless). They arrive at the colony's landing place.
     /// </summary>
     private void Settle(ColonySim sim)
     {
+        if (Days < Balance.FirstSettlerDay || (Days - Balance.FirstSettlerDay) % Balance.SettlerWaveDays != 0) return;
         int eaters = Eaters(sim, Faction);
         if (!SettlersCome || eaters == 0 || Members(sim).Any(c => c.Starving) || FoodDays(sim, Faction) < Needs.SettlerFoodDays) return;
-        int count = Math.Clamp((int)MathF.Round(eaters * (0.05f + 0.2f * Happiness)), 1, 12);
+        float perDay = Balance.SettlerGrowth + Balance.SettlerGrowthMood * Happiness;
+        int count = Math.Clamp((int)MathF.Round(eaters * perDay * Balance.SettlerWaveDays), 1, Balance.SettlerWaveMax);
         count = Math.Max(1, Math.Min(count, Homes(sim).FreeBeds));
         var spots = sim.ArrivalSpots(count, Faction);
         foreach (var at in spots)

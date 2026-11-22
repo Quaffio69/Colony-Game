@@ -464,6 +464,82 @@ if (args.Length > 0 && args[0] == "families")
     return;
 }
 
+if (args.Length > 0 && args[0] == "balance")
+{
+    // The pacing numbers as the player meets them (see Colony.Core.Balance): resources round the landing, labour and
+    // food per tile, then the colony and the ants over days with no player. dotnet run ... -- balance [size] [days]
+    int bsize = args.Length > 1 ? int.Parse(args[1]) : 512, bdays = args.Length > 2 ? int.Parse(args[2]) : 24;
+    var bs = ColonySim.Generate(new WorldGenSettings(12345, bsize, bsize, 384), 7);
+    var bw = bs.World;
+    int sx = bs.Terrain!.SpawnX, sy = bs.Terrain.SpawnY;
+    Console.WriteLine($"== Round the landing ({sx},{sy}), world {bsize}x{bsize}");
+    foreach (int r in new[] { 32, 64, 128 })
+    {
+        int trees = 0, logs = 0, berries = 0, fiber = 0, herbs = 0;
+        foreach (var pl in bs.Flora.All)
+        {
+            if (Math.Max(Math.Abs(pl.Position.X - sx), Math.Abs(pl.Position.Y - sy)) > r) continue;
+            if (Colony.Core.Nature.PlantInfo.IsTree(pl.Kind)) { trees++; logs += ColonySim.LogYield(pl); continue; }
+            if (Colony.Core.Nature.PlantInfo.Harvest(pl.Kind) is not { } item || !Colony.Core.Nature.PlantInfo.IsGatherable(pl)) continue;
+            int y = Colony.Core.Nature.PlantInfo.HarvestYield(pl);
+            if (item == Colony.Core.Items.ItemType.Berries) berries += y;
+            else if (item == Colony.Core.Items.ItemType.Fiber) fiber += y;
+            else herbs += y;
+        }
+        Console.WriteLine($"within {r,3}: {trees} trees ({logs} logs), ripe now: {berries} berries ({berries / 21f:0.0} founder-days), {fiber} fiber, {herbs} herbs");
+    }
+    // Ore within 64 columns, from the surface down 48 levels (what a young colony could dig to).
+    var ore = new Dictionary<TileType, int>();
+    for (int y = Math.Max(0, sy - 64); y < Math.Min(bsize, sy + 64); y++)
+    for (int x = Math.Max(0, sx - 64); x < Math.Min(bsize, sx + 64); x++)
+    {
+        int top = bw.SurfaceLevel(x, y);
+        for (int z = Math.Max(0, top - 48); z <= top; z++)
+        {
+            var t = bw.Get(x, y, z);
+            if (TileInfo.IsMineral(t) || t is TileType.Clay or TileType.Sand) ore[t] = ore.GetValueOrDefault(t) + 1;
+        }
+    }
+    Console.WriteLine("ore/clay/sand within 64 columns, 48 levels down: " + string.Join(", ", ore.OrderBy(e => e.Key).Select(e => $"{e.Key} {e.Value}")));
+    var nests = bs.Wildlife.Nests.Select(n => Math.Sqrt(Math.Pow(n.Entrance.X - sx, 2) + Math.Pow(n.Entrance.Y - sy, 2))).OrderBy(d => d).ToList();
+    Console.WriteLine($"nests: {nests.Count} (max {bs.Wildlife.MaxNests}); nearest {string.Join(", ", nests.Take(4).Select(d => d.ToString("0")))} tiles");
+
+    Console.WriteLine("== Labour (ticks; 20 a second) and food");
+    Console.WriteLine($"dig soil {Colony.Core.Orders.Designations.WorkTicks(Colony.Core.Orders.DesignationKind.Dig, TileType.Soil)}, " +
+                      $"stone {Colony.Core.Orders.Designations.WorkTicks(Colony.Core.Orders.DesignationKind.Dig, TileType.Stone)}, " +
+                      $"ore {Colony.Core.Orders.Designations.WorkTicks(Colony.Core.Orders.DesignationKind.Dig, TileType.IronOre)}; " +
+                      $"walk {Colony.Core.Agents.Colonist.TicksPerFlatStep}/tile");
+    float day = Colony.Core.Agents.Needs.Day, meals = 3; // meals a colonist eats a day
+    foreach (var (kind, name, mealsPerUnit) in new[] { (Colony.Core.Nature.PlantKind.Wheat, "wheat->bread", 2f), (Colony.Core.Nature.PlantKind.Glowcap, "glowcaps (raw)", 1f) })
+    {
+        float perTileDay = Balance.CropYield * mealsPerUnit / (Colony.Core.Nature.PlantInfo.GrowTicks(kind) / day);
+        Console.WriteLine($"{name}: {Colony.Core.Nature.PlantInfo.GrowTicks(kind) / day:0.0} days to grow, {perTileDay:0.00} meals/tile/day = " +
+                          $"{meals / perTileDay:0.0} tiles a colonist ({meals / (perTileDay * Balance.IrrigationSpeed):0.0} irrigated)");
+    }
+    foreach (var id in new[] { "planks", "bread", "clothing", "copper_ingot", "tools", "literate", "scholar" })
+    {
+        var rec = Colony.Core.Industry.Catalog.Recipes.First(r => r.Output == Colony.Core.Industry.Catalog.Item(id) || r.Output.Def.Id == id);
+        Console.WriteLine($"recipe {id}: {rec.WorkTicks} ticks ({rec.WorkTicks / 20f:0} s) for {rec.OutCount}");
+    }
+
+    Console.WriteLine($"== {bdays} days with no player");
+    var bclock = Stopwatch.StartNew();
+    int seenEvents = 0;
+    for (int d = 1; d <= bdays; d++)
+    {
+        for (int t = 0; t < Colony.Core.Agents.Needs.Day; t++) bs.Step();
+        var s = bs.Society;
+        int near = bs.Wildlife.Nests.Count(n => Math.Max(Math.Abs(n.Entrance.X - sx), Math.Abs(n.Entrance.Y - sy)) <= 96);
+        Console.WriteLine($"day {d,2}: {bs.Colonists.Count} colonists, food {Colony.Core.Agents.Society.FoodDays(bs):0.0} days, settlers {s.SettlersArrived}, " +
+                          $"left {s.Departed}, nests {bs.Wildlife.Nests.Count} ({near} within 96), ants out {bs.Wildlife.Creatures.Count}");
+        foreach (var e in bs.Events.Skip(seenEvents))
+            if (e.Text.Contains("ant", StringComparison.OrdinalIgnoreCase) || e.Text.Contains("settler")) Console.WriteLine($"         {e.Text}");
+        seenEvents = bs.Events.Count;
+    }
+    Console.WriteLine($"{bdays} days in {bclock.ElapsedMilliseconds} ms");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "colony")
 {
     // Population over game days with no player: the founders' food, settlers, hunger, departures.

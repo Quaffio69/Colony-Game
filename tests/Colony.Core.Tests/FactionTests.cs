@@ -150,7 +150,7 @@ public class FactionTests
     {
         var sim = ColonySim.Generate(new WorldGenSettings(Seed: 11, Width: 128, Depth: 128, Height: 48), colonists: 4, factions: 2);
         sim.NeedsEnabled = true;
-        for (int i = 0; i < Needs.Day + 5; i++) sim.Step();
+        for (int i = 0; i < Needs.Day * Balance.FirstSettlerDay + 5; i++) sim.Step();
         Assert.True(sim.Factions[0].Society.SettlersArrived >= 1);
         Assert.True(sim.Factions[1].Society.SettlersArrived >= 1);
         Assert.Equal(4 + sim.Factions[1].Society.SettlersArrived, sim.Colonists.Count(c => c.Faction == 1));

@@ -86,7 +86,7 @@ public sealed class Constructions
         _ => new BuildCost(Catalog.Item(RoofMaterials.All[Math.Clamp(material, 1, RoofMaterials.Count - 1)].Item), 1),
     };
 
-    public static int BuildTicks(StructureKind kind) => kind switch
+    public static int BuildTicks(StructureKind kind) => (int)(Balance.StructureBuildScale * kind switch
     {
         StructureKind.Wall => 50,
         StructureKind.EdgeWall => 40,
@@ -95,7 +95,7 @@ public sealed class Constructions
         StructureKind.Door or StructureKind.Window => 80,
         StructureKind.Rack => 90,
         _ => 120,
-    };
+    });
 
     /// <summary>Planks a storage rack costs per level it rises.</summary>
     public const int RackPlanksPerLevel = 3;

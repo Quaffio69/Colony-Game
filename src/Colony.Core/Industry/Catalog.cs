@@ -219,7 +219,7 @@ public static class Catalog
                 Output = output,
                 OutCount = Int(e, "count") ?? 1,
                 Inputs = inputs,
-                WorkTicks = Int(e, "ticks") ?? 80 + 30 * tiers[output],
+                WorkTicks = Int(e, "ticks") ?? Balance.RecipeTicks + Balance.RecipeTicksPerTier * tiers[output],
                 Education = edu,
                 Workshop = w,
                 Station = station,

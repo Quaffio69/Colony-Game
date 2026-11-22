@@ -246,7 +246,7 @@ public class ProductionTests
         sim.AddColonist("Hauler", F(13, 12));
 
         int t = 0;
-        for (; t < 20_000 && sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Grain.Index] < 36; t++) sim.Step();
+        for (; t < Balance.WheatGrowTicks + 8000 && sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Grain.Index] < 36; t++) sim.Step();
         Assert.Equal(36, sim.Items.Totals(sim.Stockpiles.Contains)[ItemType.Grain.Index]); // 9 plots x 4 grain
         for (int i = 0; i < 400; i++) sim.Step();
         Assert.All(sim.Farms.Cells, c => Assert.True(sim.Flora.TryGet(c, out var p) && p.Kind == PlantKind.Wheat, $"{c} not resown"));

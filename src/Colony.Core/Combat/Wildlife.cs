@@ -30,9 +30,9 @@ public sealed class Wildlife
     public const int ColonyReach = 6;
     private const int BlockShift = 4;
     public const int CalmTicks = Needs.Day * 2;
-    public const int BirthInterval = Needs.Day / 6;
-    public const int RaidInterval = Needs.Day * 3 / 2;
-    public const int MaxRaid = 16;
+    public const int BirthInterval = Balance.NestBirthTicks;
+    public const int RaidInterval = Needs.Day * Balance.RaidIntervalDays;
+    public const int MaxRaid = Balance.RaidMax;
     public const int ThreatRefresh = 24;
     /// <summary>Nests a map holds at most (they stop founding new ones).</summary>
     public int MaxNests { get; private set; } = 8;
@@ -67,7 +67,7 @@ public sealed class Wildlife
     public void Populate(ColonySim sim, int seed)
     {
         var w = sim.World;
-        MaxNests = Math.Max(4, (int)((long)w.Width * w.Depth / (100 * 100)));
+        MaxNests = Math.Max(4, (int)((long)w.Width * w.Depth / (Balance.NestSpacing * Balance.NestSpacing)));
         const int cell = 128;
         for (int gy = 0; gy * cell < w.Depth; gy++)
         for (int gx = 0; gx * cell < w.Width; gx++)
@@ -75,7 +75,7 @@ public sealed class Wildlife
             if (Procedural.Noise.Hash(gx, gy, 1, seed ^ 0xA17) >= 0.55f) continue;
             int x = gx * cell + 16 + (int)(Procedural.Noise.Hash(gx, gy, 2, seed ^ 0xA17) * (cell - 32));
             int y = gy * cell + 16 + (int)(Procedural.Noise.Hash(gx, gy, 3, seed ^ 0xA17) * (cell - 32));
-            if (Site(sim, x, y, landingGap: 64) is not { } p) continue;
+            if (Site(sim, x, y, landingGap: Balance.NestLandingGap) is not { } p) continue;
             int pop = 10 + (int)(Procedural.Noise.Hash(gx, gy, 4, seed ^ 0xA17) * 20);
             AddNest(sim, CreatureKinds.GiantAnt, p, pop);
         }
@@ -87,7 +87,7 @@ public sealed class Wildlife
         var n = new Nest(_nextNest++, kind, entrance, population, sim.Tick)
         {
             NextBirth = sim.Tick + BirthInterval + _nextNest * 37 % BirthInterval,
-            NextColony = sim.Tick + Needs.Day * 3,
+            NextColony = sim.Tick + Needs.Day * Balance.NestFirstFoundingDays,
         };
         _nests.Add(n);
         _nestById[n.Id] = n;
@@ -96,7 +96,7 @@ public sealed class Wildlife
     }
 
     /// <summary>The standable dry surface cell at a column, if it suits a nest (away from colonies and other nests).</summary>
-    private TilePos? Site(ColonySim sim, int x, int y, int landingGap)
+    private TilePos? Site(ColonySim sim, int x, int y, int landingGap, int landGap = 24)
     {
         var w = sim.World;
         if (x < 4 || y < 4 || x >= w.Width - 4 || y >= w.Depth - 4) return null;
@@ -110,7 +110,7 @@ public sealed class Wildlife
             if (Sq(n.Entrance.X - x) + Sq(n.Entrance.Y - y) < 40 * 40) return null;
         RefreshLand(sim);
         for (int f = 0; f < _land.Count; f++)
-            if (Meets(x, y, 24, _land[f])) return null;
+            if (Meets(x, y, landGap, _land[f])) return null;
         return p;
     }
 
@@ -236,14 +236,14 @@ public sealed class Wildlife
     {
         long t = sim.Tick;
         if (t < n.NextColony || n.Population < 12) return;
-        n.NextColony = t + Needs.Day * 4 + (int)(Gear.Roll(t, n.Id, 0, 21) * Needs.Day);
+        n.NextColony = t + Needs.Day * Balance.NestFoundingDays + (int)(Gear.Roll(t, n.Id, 0, 21) * Needs.Day * Balance.NestFoundingJitterDays);
         if (_nests.Count >= MaxNests) return;
         for (int attempt = 0; attempt < 8; attempt++)
         {
             double angle = Gear.Roll(t, n.Id, attempt, 22) * 2 * Math.PI;
             float r = 30 + Gear.Roll(t, n.Id, attempt, 23) * 30;
             int x = n.Entrance.X + (int)(r * Math.Cos(angle)), y = n.Entrance.Y + (int)(r * Math.Sin(angle));
-            if (Site(sim, x, y, landingGap: 40) is not { } p) continue;
+            if (Site(sim, x, y, landingGap: Balance.NestLandingGap, landGap: Balance.NestFoundingLandGap) is not { } p) continue;
             n.Population -= 6;
             AddNest(sim, n.Kind, p, 6);
             if (sim.Colonists.Any(c => Math.Max(Math.Abs(c.Position.X - x), Math.Abs(c.Position.Y - y)) <= WakeRange * 2))
@@ -273,7 +273,7 @@ public sealed class Wildlife
                 {
                     if (!n.HostileTo(f, t))
                         sim.Announce($"{Cap(n.Kind.Plural)} grow restless: {sim.Factions[f].Name}'s land has reached their nest. Expect raids", f);
-                    n.NextRaid = Math.Min(n.NextRaid, t + Needs.Day / 2);
+                    n.NextRaid = Math.Min(n.NextRaid, t + Balance.FirstRaidDelay);
                 }
                 if (((lost >> f) & 1) != 0) n.AngryUntil[f] = Math.Max(n.AngryUntil[f], t + CalmTicks);
             }
@@ -382,7 +382,11 @@ public sealed class Wildlife
             p => corridor.Contains(sim.Connectivity.RegionOf(p)));
         if (trail is null) return;
         n.Trail = trail;
-        n.ToEmerge = Math.Min(MaxRaid, Math.Max(4, n.Population / 3)); // a raiding party, not the whole nest
+        int grown = 0;
+        foreach (var c in sim.Colonists)
+            if (c.Faction == target.Faction && !c.IsChild) grown++;
+        // A raiding party, not the whole nest, and sized to the colony: a young one isn't overrun.
+        n.ToEmerge = Math.Min(Math.Min(MaxRaid, Balance.RaidBase + grown / 2), Math.Max(Balance.RaidMin, n.Population / 3));
         n.EmergeMode = CreatureMode.Raid;
         n.Awake = true;
         sim.Announce($"A swarm of {n.Kind.Plural} pours out of their nest to raid {sim.Factions[target.Faction].Name}!", target.Faction);

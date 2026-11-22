@@ -1,6 +1,7 @@
 using Colony.Core.Agents;
 using Colony.Core.Industry;
 using Colony.Core.Items;
+using Colony.Core.Nature;
 using Colony.Core.World;
 
 namespace Colony.Core.Tests;
@@ -141,15 +142,46 @@ public class NeedsTests
             if (berries > 0) sim.Items.Drop(new TilePos(16, 16, 4), ItemType.Berries, berries);
             return sim;
         }
-        var fed = Colony(4 * 3 * 4 + 60); // four colonists, over four days of food
-        Run(fed, Needs.Day);
+        var fed = Colony(4 * 3 * 7 + 60); // four colonists, food to spare when the first wave is due
+        Run(fed, Needs.Day * Balance.FirstSettlerDay);
         Assert.Equal(5, fed.Colonists.Count);
         Assert.Equal(1, fed.Society.SettlersArrived);
         Assert.Contains(fed.Events, e => e.Text.Contains("settler"));
 
         var hungry = Colony(10);
-        Run(hungry, Needs.Day);
+        Run(hungry, Needs.Day * Balance.FirstSettlerDay);
         Assert.Equal(4, hungry.Colonists.Count);
+    }
+
+    [Fact]
+    public void Settlers_ComeInWaves_FromTheFirstWaveDay()
+    {
+        var sim = FlatSim(32);
+        for (int i = 0; i < 4; i++) sim.AddColonist($"C{i}", new TilePos(4 + i, 4, 4));
+        sim.Items.Drop(new TilePos(16, 16, 4), ItemType.Berries, 30);
+        sim.Items.Drop(new TilePos(17, 16, 4), ItemType.Berries, 30);
+        sim.Items.Drop(new TilePos(18, 16, 4), ItemType.Berries, 30);
+        sim.Items.Drop(new TilePos(16, 17, 4), Catalog.Item("bread"), 30);
+        Run(sim, Needs.Day * (Balance.FirstSettlerDay - 1));
+        Assert.Equal(0, sim.Society.SettlersArrived); // the founders' first days are their own
+        Run(sim, Needs.Day);
+        int first = sim.Society.SettlersArrived;
+        Assert.True(first >= 1);
+        Run(sim, Needs.Day * (Balance.SettlerWaveDays - 1));
+        Assert.Equal(first, sim.Society.SettlersArrived); // nobody between waves
+        Run(sim, Needs.Day);
+        Assert.True(sim.Society.SettlersArrived > first, "the next wave");
+    }
+
+    [Fact]
+    public void Crops_GrowAtTheirExactPace()
+    {
+        foreach (var kind in new[] { PlantKind.Wheat, PlantKind.Herbs, PlantKind.Glowcap })
+        {
+            int ticks = PlantInfo.GrowTicks(kind), rounds = ticks / Farms.GrowInterval, sum = 0;
+            for (int r = 0; r < rounds; r++) sum += Farms.GrowthStep(r + 17, ticks);
+            Assert.InRange(sum, 254, 256); // full growth in GrowTicks, not rounded up to whole steps a round
+        }
     }
 
     [Fact]

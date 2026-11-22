@@ -206,15 +206,15 @@ public sealed class Designations
     {
         int dig = tile switch
         {
-            TileType.Grass or TileType.Soil or TileType.Sand => 25,
-            TileType.Clay => 35,
-            TileType.Stone => 60,
-            TileType.Aetherite => 120,
-            _ when TileInfo.IsMineral(tile) => 80,
-            _ when TileInfo.IsStair(tile) => 20, // already carved: only reshaping or clearing it
-            _ => 40,
+            TileType.Grass or TileType.Soil or TileType.Sand => Balance.DigLoose,
+            TileType.Clay => Balance.DigClay,
+            TileType.Stone => Balance.DigStone,
+            TileType.Aetherite => Balance.DigAetherite,
+            _ when TileInfo.IsMineral(tile) => Balance.DigOre,
+            _ when TileInfo.IsStair(tile) => Balance.DigStair, // already carved: only reshaping or clearing it
+            _ => Balance.DigOther,
         };
-        return IsStair(kind) ? dig + 30 : dig;
+        return IsStair(kind) ? dig + Balance.StairCarveTicks : dig;
     }
 
     private static int ForBox(TilePos a, TilePos b, Func<TilePos, bool> action)

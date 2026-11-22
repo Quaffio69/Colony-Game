@@ -6,7 +6,7 @@
     "To add a product: add an item and a recipe naming an existing workshop and station. Add a station only for a genuinely new process; add a workshop only for a new trade.",
     "Education gates recipes, not rooms: a worker may run a recipe at or below their level, so one Smelter has unskilled hands at the bloomery beside Scholars at the aether furnace.",
     "Tiers are not stored: a product's tier is 1 + the highest tier among its inputs (raw = 0).",
-    "Counts are optional and rough for now: 'logs*2' in inputs, 'count' for outputs (default 1), 'ticks' for one unit of labour (default 80 + 30 per tier).",
+    "Counts are optional and rough for now: 'logs*2' in inputs, 'count' for outputs (default 1), 'ticks' for one run of labour (default 120 + 45 per tier: Balance.RecipeTicks).",
     "Home fixtures: 'material' is what a piece is mostly made of (wood, stone, metal, glass, cloth, clay: colonists may like one); 'place' says where a light or decor piece goes in a home (table, wall, floor, corner); 'fixture' names the home slot an item fills (bed, furniture, tableware, lighting, decor), 'tier' its quality (1 humble, 2 comfortable, 3 fine; each slot runs 1..n) and 'wear' the days it lasts in a home before it is replaced. Homes will be furnished by tier per slot, so upgrading means raising a tier, not refurnishing.",
     "'uses' entries of the form 'need: X' make an item satisfy colonists' need X (food; dress, household goods, comfort, health: the living standard). Foods give 'food' meals of nutrition per unit (a colonist eats about 3 a day).",
     "Station 'build' lists the material a machine is built from by size: one entry for all sizes; two for size 1 / sizes 2-5; three for size 1 / sizes 2-3 / sizes 4-5. Size 1 must be buildable before the station exists. 'model' picks the station's 3D stand-in (defaults to the station id).",
@@ -212,7 +212,7 @@
     { "id": "magister", "name": "Magister", "category": "knowledge", "kind": "education", "uses": ["workers for Magister recipes"], "model": "books", "color": "#3d8a4e" }
   ],
   "recipes": [
-    { "output": "planks", "count": 4, "ticks": 100, "workshop": "carpentry", "station": "saw_bench", "education": "Unskilled", "inputs": ["logs"] },
+    { "output": "planks", "count": 4, "ticks": 150, "workshop": "carpentry", "station": "saw_bench", "education": "Unskilled", "inputs": ["logs"] },
     { "output": "furniture", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks*3", "cloth"] },
     { "output": "fine_furniture", "workshop": "carpentry", "station": "joinery_bench", "education": "Literate", "inputs": ["furniture", "gold_leaf", "pigments"] },
     { "output": "rough_furniture", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["logs*2"] },
@@ -250,8 +250,8 @@
     { "output": "woven_rug", "workshop": "textiles", "station": "loom", "education": "Unskilled", "inputs": ["thread*3"] },
     { "output": "tapestry", "workshop": "textiles", "station": "loom", "education": "Unskilled", "inputs": ["cloth*2", "pigments*2"] },
 
-    { "output": "flour", "count": 2, "workshop": "kitchen", "station": "millstone", "education": "Unskilled", "inputs": ["grain*2"] },
-    { "output": "bread", "count": 3, "workshop": "kitchen", "station": "oven", "education": "Unskilled", "inputs": ["flour*2", "charcoal"] },
+    { "output": "flour", "workshop": "kitchen", "station": "millstone", "education": "Unskilled", "inputs": ["grain*2"] },
+    { "output": "bread", "count": 2, "workshop": "kitchen", "station": "oven", "education": "Unskilled", "inputs": ["flour*2", "charcoal"] },
     { "output": "berry_wine", "workshop": "kitchen", "station": "vats", "education": "Unskilled", "inputs": ["berries*3", "glass"] },
 
     { "output": "copper_ingot", "workshop": "smelter", "station": "bloomery", "education": "Unskilled", "inputs": ["copper_ore*2", "charcoal"] },
@@ -277,19 +277,19 @@
     { "output": "springs", "count": 3, "workshop": "artificer", "station": "tinker_bench", "education": "Literate", "inputs": ["steel"] },
     { "output": "instruments", "workshop": "artificer", "station": "tinker_bench", "education": "Literate", "inputs": ["lenses*2", "bronze", "cogs*2"] },
     { "output": "clockwork", "workshop": "artificer", "station": "tinker_bench", "education": "Scholar", "inputs": ["cogs*3", "springs*2", "bronze"] },
-    { "output": "orrery", "ticks": 600, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["clockwork*2", "lenses*2", "gold_leaf*2"] },
+    { "output": "orrery", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["clockwork*2", "lenses*2", "gold_leaf*2"] },
     { "output": "aether_cell", "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["aether_ingot", "resonant_crystal", "wire*2"] },
     { "output": "automaton_core", "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["clockwork", "aether_cell", "runestones"] },
-    { "output": "automaton", "ticks": 600, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["automaton_core", "steel_plate*3", "clockwork*2"] },
-    { "output": "power_armor", "ticks": 600, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["plate_armor", "aether_cell", "clockwork"] },
+    { "output": "automaton", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["automaton_core", "steel_plate*3", "clockwork*2"] },
+    { "output": "power_armor", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["plate_armor", "aether_cell", "clockwork"] },
 
     { "output": "tinctures", "workshop": "alchemy", "station": "alembic", "education": "Literate", "inputs": ["herbs*2", "glass"] },
     { "output": "quicksilver", "workshop": "alchemy", "station": "alembic", "education": "Scholar", "inputs": ["sulfur", "silver_ingot"] },
     { "output": "elixirs", "workshop": "alchemy", "station": "alembic", "education": "Scholar", "inputs": ["tinctures", "glimmer_dust", "quicksilver"] },
     { "output": "glimmer_dust", "count": 2, "workshop": "alchemy", "station": "mortar", "education": "Scholar", "inputs": ["quartz", "glowcaps*2"] },
     { "output": "resonant_crystal", "workshop": "alchemy", "station": "attunement_circle", "education": "Scholar", "inputs": ["quartz", "wire", "glimmer_dust"] },
-    { "output": "farseer_orb", "ticks": 600, "workshop": "alchemy", "station": "attunement_circle", "education": "Magister", "inputs": ["resonant_crystal*2", "lenses", "silver_ingot", "quicksilver"] },
-    { "output": "philosophers_stone", "ticks": 900, "workshop": "alchemy", "station": "athanor", "education": "Magister", "inputs": ["aether_ingot*2", "gold_ingot*2", "quicksilver*2", "elixirs*2"] },
+    { "output": "farseer_orb", "ticks": 900, "workshop": "alchemy", "station": "attunement_circle", "education": "Magister", "inputs": ["resonant_crystal*2", "lenses", "silver_ingot", "quicksilver"] },
+    { "output": "philosophers_stone", "ticks": 1350, "workshop": "alchemy", "station": "athanor", "education": "Magister", "inputs": ["aether_ingot*2", "gold_ingot*2", "quicksilver*2", "elixirs*2"] },
 
     { "output": "paper", "count": 3, "workshop": "scriptorium", "station": "paper_vat", "education": "Unskilled", "inputs": ["logs", "fiber*2"] },
     { "output": "pigments", "count": 2, "workshop": "scriptorium", "station": "colour_mill", "education": "Unskilled", "inputs": ["berries*2", "herbs"] },
@@ -299,8 +299,8 @@
     { "output": "treatises", "workshop": "scriptorium", "station": "writing_desk", "education": "Literate", "inputs": ["books", "instruments"] },
     { "output": "grimoires", "workshop": "scriptorium", "station": "writing_desk", "education": "Scholar", "inputs": ["books", "runestones", "glimmer_dust"] },
 
-    { "output": "literate", "ticks": 400, "workshop": "academy", "station": "lectern", "education": "Literate", "inputs": ["books", "paper*2"] },
-    { "output": "scholar", "ticks": 600, "workshop": "academy", "station": "observatory", "education": "Scholar", "inputs": ["treatises", "instruments"] },
-    { "output": "magister", "ticks": 900, "workshop": "academy", "station": "attunement_circle", "education": "Magister", "inputs": ["grimoires", "resonant_crystal"] }
+    { "output": "literate", "ticks": 2400, "workshop": "academy", "station": "lectern", "education": "Literate", "inputs": ["books", "paper*2"] },
+    { "output": "scholar", "ticks": 4800, "workshop": "academy", "station": "observatory", "education": "Scholar", "inputs": ["treatises", "instruments"] },
+    { "output": "magister", "ticks": 7200, "workshop": "academy", "station": "attunement_circle", "education": "Magister", "inputs": ["grimoires", "resonant_crystal"] }
   ]
 }

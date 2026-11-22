@@ -96,12 +96,23 @@ public sealed class Farms
             if (!PlantInfo.IsCrop(plant.Kind)) continue; // a wild plant got there first; leave it
             if (plant.Growth < 255)
             {
-                int step = (int)MathF.Ceiling(255f * GrowInterval / PlantInfo.GrowTicks(plant.Kind));
-                if (water is not null && Irrigated(water, cell)) step *= 2; // irrigated plots grow twice as fast
+                int ticks = PlantInfo.GrowTicks(plant.Kind);
+                if (water is not null && Irrigated(water, cell)) ticks = (int)(ticks / Balance.IrrigationSpeed); // irrigated plots grow faster
+                int step = GrowthStep(tick / GrowInterval, ticks);
                 flora.Update(plant with { Growth = (byte)Math.Min(255, plant.Growth + step) });
             }
             else if (!orders.Contains(cell)) orders.Designate(cell, DesignationKind.Gather, _owners.Of(cell));
         }
+    }
+
+    /// <summary>
+    /// Growth gained in growth round <paramref name="round"/> by a crop taking <paramref name="growTicks"/>: the exact
+    /// share, its fractions spread over rounds (a byte of growth can't hold them), so slow crops keep their true pace.
+    /// </summary>
+    public static int GrowthStep(long round, int growTicks)
+    {
+        long per = 255L * GrowInterval;
+        return (int)((round + 1) * per / growTicks - round * per / growTicks);
     }
 
     /// <summary>Water within <see cref="IrrigationRadius"/> tiles, on the plot's level or the one below (a ditch beside it).</summary>

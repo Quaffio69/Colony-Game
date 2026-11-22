@@ -234,11 +234,11 @@ public sealed partial class ColonySim
     /// <summary>Simulation ticks of work a designation takes.</summary>
     public int WorkTicks(TilePos target, DesignationKind kind)
     {
-        if (kind == DesignationKind.Gather) return 30;
-        if (kind == DesignationKind.Sow) return 20;
+        if (kind == DesignationKind.Gather) return Balance.GatherTicks;
+        if (kind == DesignationKind.Sow) return Balance.SowTicks;
         if (kind != DesignationKind.Chop) return Designations.WorkTicks(kind, World.Get(target));
         if (!Flora.TryGet(target, out var tree)) return 1;
-        return 40 + (int)(PlantInfo.MatureHeight(tree.Kind) * tree.Growth / 255f * 14f);
+        return Balance.ChopTicks + (int)(PlantInfo.MatureHeight(tree.Kind) * tree.Growth / 255f * Balance.ChopTicksPerLevel);
     }
 
     /// <summary>Logs a felled tree leaves: bigger and older trees give more.</summary>
