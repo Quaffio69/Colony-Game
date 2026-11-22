@@ -64,6 +64,7 @@ public partial class MainMenu : Control
         _box.AddChild(title);
         var sub = G.Text("dig deep · build big · grow a people", "Dim", align: HorizontalAlignment.Center);
         _box.AddChild(sub);
+        _box.AddChild(G.Text($"v{GameInfo.Version}", "Faint", align: HorizontalAlignment.Center));
         _box.AddChild(G.Gap(1.5f));
 
         if (_page == "loading" || _ui.Main.Loading) BuildLoading();
@@ -81,7 +82,7 @@ public partial class MainMenu : Control
             Item(_ui.Main.Online ? "Multiplayer (online)" : "Multiplayer", "", () => Go("multiplayer"), "Several players' colonies in one world: host a game or join one");
             _box.AddChild(G.Gap(0.5f));
             Item("Appearance", "", () => { Show(false); _ui.OpenWindow("appearance"); }, "Themes, fonts and effects (F2)");
-            Item("Tests & demos", "", () => { Show(false); _ui.OpenWindow("tests"); }, "Developer: run tests, build demos (F1)");
+            if (GameInfo.DevBuild) Item("Tests & demos", "", () => { Show(false); _ui.OpenWindow("tests"); }, "Developer: run tests, build demos (F1)");
             Item("Quit", "", () => GetTree().Quit(), "Leave the game (nothing is saved yet)");
         }
 

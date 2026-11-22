@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Colony Game launcher: installs the game from GitHub Releases, checks for updates, updates and plays.
+    .NET Framework 4.8 (built into Windows 10 and 11), so it is one small exe that needs nothing installed.
+    The release workflow stamps -p:Version=X.Y.Z and -p:GitHubRepo=owner/name; built by hand it is 0.0.0 (a dev
+    build: it never replaces itself) and reads the repo from launcher.repo next to it or from -repo=owner/name.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>ColonyLauncher</AssemblyName>
+    <RootNamespace>ColonyLauncher</RootNamespace>
+    <ApplicationIcon>..\..\game\icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>0.0.0</Version>
+    <GitHubRepo></GitHubRepo>
+    <Product>Colony Game</Product>
+    <Description>Colony Game launcher</Description>
+    <Copyright>Copyright © 2026 the Colony Game authors (MIT)</Copyright>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Lets the .NET SDK build for .NET Framework anywhere (no targeting pack install needed, CI included). -->
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Fonts and the icon live inside the exe. -->
+    <Resource Include="..\..\game\fonts\IBMPlexMono-Regular.ttf" Link="Fonts\IBMPlexMono-Regular.ttf" />
+    <Resource Include="..\..\game\fonts\IBMPlexMono-SemiBold.ttf" Link="Fonts\IBMPlexMono-SemiBold.ttf" />
+    <Resource Include="..\..\game\icon.ico" Link="icon.ico" />
+    <EmbeddedResource Include="..\..\game\fonts\IBMPlexMono-OFL.txt" Link="Licenses\IBMPlexMono-OFL.txt" LogicalName="IBMPlexMono-OFL.txt" />
+    <EmbeddedResource Include="..\..\LICENSE" Link="Licenses\LICENSE" LogicalName="LICENSE" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>GitHubRepo</_Parameter1>
+      <_Parameter2>$(GitHubRepo)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

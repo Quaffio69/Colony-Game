@@ -8,8 +8,16 @@ TestResults/
 # Godot
 .godot/
 *.translation
-export_presets.cfg
 mono_crash.*
+
+# Release builds (made by the release workflow, or locally)
+/build/
+/dist/
+
+# Local notes and editor settings (never published)
+AGENT_PROMPT.md
+README_FIRST.md
+.vscode/settings.json
 
 # OS
 Thumbs.db

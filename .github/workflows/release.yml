@@ -1,0 +1,147 @@
+# Builds and publishes a release when a version tag is pushed:
+#
+#   git tag -a v0.3.0 -m "Trade between colonies; balance pass"   (the message becomes the release notes)
+#   git push origin v0.3.0
+#
+# It runs the tests, exports the game for Windows with the version stamped in (main menu, multiplayer), zips it with a
+# SHA-256 checksum, builds the launcher (which knows this repository and checks it for updates) and publishes a GitHub
+# Release with all three files. A tag with a hyphen (v0.3.0-beta) makes a pre-release, which launchers ignore.
+# "Run workflow" on the Actions tab builds the same files as a downloadable artifact without publishing anything.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 0.3.0 (builds the files without publishing a release)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: "4.7.2"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Version
+        id: v
+        shell: pwsh
+        run: |
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "${{ inputs.version }}" }
+          if ($v -notmatch '^\d+\.\d+\.\d+') { throw "'$v' is not a version like 0.3.0" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version $v"
+
+      - name: Test
+        run: dotnet test tests/Colony.Core.Tests -c Release
+
+      - name: Cache Godot
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/godot
+          key: godot-${{ env.GODOT_VERSION }}-mono-win64-v1
+
+      - name: Get Godot and its export templates
+        shell: pwsh
+        run: |
+          $dir = "${{ runner.temp }}/godot"
+          $base = "https://github.com/godotengine/godot-builds/releases/download/$env:GODOT_VERSION-stable"
+          if (-not (Test-Path "$dir/editor")) {
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            Invoke-WebRequest "$base/Godot_v$env:GODOT_VERSION-stable_mono_win64.zip" -OutFile "$dir/editor.zip"
+            Expand-Archive "$dir/editor.zip" "$dir/editor"
+            Invoke-WebRequest "$base/Godot_v$env:GODOT_VERSION-stable_mono_export_templates.tpz" -OutFile "$dir/templates.zip"
+            # Only the Windows templates (the full set is over a gigabyte).
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            New-Item -ItemType Directory -Force "$dir/templates" | Out-Null
+            $zip = [System.IO.Compression.ZipFile]::OpenRead("$dir/templates.zip")
+            foreach ($e in $zip.Entries) {
+              if ($e.Name -eq "version.txt" -or $e.Name -match '^windows_') {
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, "$dir/templates/$($e.Name)", $true)
+              }
+            }
+            $zip.Dispose()
+            Remove-Item "$dir/editor.zip", "$dir/templates.zip"
+          }
+          $dest = "$env:APPDATA/Godot/export_templates/$env:GODOT_VERSION.stable.mono"
+          New-Item -ItemType Directory -Force $dest | Out-Null
+          Copy-Item "$dir/templates/*" $dest
+          $exe = Get-ChildItem "$dir/editor" -Recurse -Filter "*_console.exe" | Select-Object -First 1
+          "GODOT=$($exe.FullName)" >> $env:GITHUB_ENV
+
+      - name: Stamp the version
+        shell: pwsh
+        run: |
+          $file = "game/project.godot"
+          (Get-Content $file) -replace '^config/version=".*"$', 'config/version="${{ steps.v.outputs.version }}"' | Set-Content $file
+          Select-String -Path $file -Pattern "config/version"
+
+      - name: Export the game
+        shell: pwsh
+        run: |
+          # A fresh checkout has no import cache: import first (the editor quits when done), then export.
+          & $env:GODOT --headless --path game --import 2>&1 | Out-Host
+          New-Item -ItemType Directory -Force build/windows | Out-Null
+          & $env:GODOT --headless --path game --export-release "Windows Desktop" ../build/windows/ColonyGame.exe 2>&1 | Out-Host
+          if (-not (Test-Path build/windows/ColonyGame.exe)) { throw "The export produced no ColonyGame.exe" }
+          Copy-Item LICENSE, THIRD_PARTY_NOTICES.md build/windows/
+
+      - name: Package the game
+        shell: pwsh
+        run: |
+          $v = "${{ steps.v.outputs.version }}"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = "dist/ColonyGame-$v-windows.zip"
+          [System.IO.Compression.ZipFile]::CreateFromDirectory("$PWD/build/windows", "$PWD/$zip", [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  ColonyGame-$v-windows.zip" | Set-Content -Encoding ascii "$zip.sha256"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Build the launcher
+        shell: pwsh
+        run: |
+          dotnet build launcher/ColonyLauncher -c Release "-p:Version=${{ steps.v.outputs.version }}" "-p:GitHubRepo=${{ github.repository }}" -o build/launcher
+          Copy-Item build/launcher/ColonyLauncher.exe dist/
+
+      - name: Release notes
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          # The annotated tag's message (git tag -a vX.Y.Z -m "..."), if any.
+          git fetch --force origin "refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }}"
+          $notes = git tag -l --format="%(contents)" "${{ github.ref_name }}"
+          if (-not $notes) { $notes = "Colony Game ${{ github.ref_name }}" }
+          $notes | Set-Content -Encoding utf8 notes.md
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          body_path: notes.md
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/ColonyGame-*-windows.zip
+            dist/ColonyGame-*-windows.zip.sha256
+            dist/ColonyLauncher.exe
+
+      - name: Keep the files (manual runs)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: colony-game-${{ steps.v.outputs.version }}
+          path: dist/*
