@@ -394,7 +394,9 @@ public partial class MainWindow : Window
     internal static string PlainNotes(string md)
     {
         if (string.IsNullOrWhiteSpace(md)) return "No notes for this version.";
-        var lines = md.Replace("\r", "").Split('\n').Select(line =>
+        // GitHub's generated "**Full Changelog**: https://..." line: the "Full release notes" link covers it.
+        var kept = md.Replace("\r", "").Split('\n').Where(l => !Regex.IsMatch(l, @"^\W*Full Changelog\W*:", RegexOptions.IgnoreCase));
+        var lines = kept.Select(line =>
         {
             var s = line.TrimEnd();
             s = Regex.Replace(s, @"^\s{0,3}#{1,6}\s*", "");                 // headings
