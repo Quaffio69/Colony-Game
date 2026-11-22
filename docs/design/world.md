@@ -1,0 +1,110 @@
+# World: movement, terrain, water, building
+
+Movement rules, stairs, designations, the water simulation and terrain hydrology, thin walls, floors and roofs, waterworks and cave-ins.
+
+- **Movement:** agents are 1 tile tall and occupy an open cell; standable = solid floor below, or the cell is
+  itself a stair. Walk 8-way (no corner cutting); climb/drop exactly one level onto an orthogonal neighbour
+  through plain air above the lower end (raw climbs slow, cheap if either end is a stair cell). Legality
+  must stay symmetric (connectivity needs an undirected graph); costs may differ (up vs down).
+- **Stairs (DF-style):** `UpStair`, `DownStair`, `UpDownStair` are carved, non-solid, structural cells.
+  Vertical move from a cell that goes up into the cell directly above that goes down. Designating a stair
+  onto an existing stair adds directions (up onto down = up/down). `TileInfo`: `IsSolid` blocks movement,
+  `IsStructural` carries cave-in load, `IsStair`/`GoesUp`/`GoesDown`. `Chunk.SolidCount` counts solid only;
+  `NonAirCount` is for emptiness checks.
+- **Designations (DF-style UI):** click to anchor a corner, click again to apply; Z/X (or Shift/Ctrl taps) while
+  selecting move the free corner between levels and the view follows. Tools (their ribbon hotkeys, or Tab/Shift+Tab):
+  Dig, Stairs (auto: down on top, up/down between, up at bottom), Up, Down, Up/Down, ..., Cancel (the removal box as a
+  tool: designations, zone cells and every plan in the box: walls, floors, racks, unbuilt room parts), Demolish (command
+  `Demolish`: takes down at once everything built in the box, leaving its materials: thin walls/doors/windows on any edge
+  touching it, so a box over a home's floor clears its walls all round; floors, roofs, racks, waterworks, room parts).
+  Shift+click starts a removal box; a right click aborts the box, then puts the tool down. Hovering a blueprint says
+  what it waits for (materials and where they come from, or a builder). Founders bring `StartingLogs` (20): enough for
+  a size-1 saw horse and joinery bench (2 logs each) and a scaffold.
+  Exception: plant orders (Chop, Gather; `Designations.IsPlantOrder`) are 2D areas draped on the surface
+  (`DesignatePlantArea`, any level, ignores the view level), since that work always happens on the surface;
+  their marks are drawn whatever level is viewed. Dig/stairs/stockpiles/rooms stay level-based boxes.
+
+- **Water (`Fluids.Water`): shallow-water flow over column spans** (city-builder style, generalised to caves). A
+  column is a list of spans: vertical runs of open cells resting on solid ground (the sky above the surface, a
+  tunnel). A span holds a continuous depth of water (fixed point, `U` = 1/65536 level per unit), so surfaces are
+  smooth heights. Water moves between overlapping spans of neighbouring columns through pipes driven by the
+  difference in surface height clipped to the shared window (water pours over a lip into a lower neighbour:
+  falls, pits, flooding a tunnel under an overhang); each pipe keeps 31/32 of last step's flow (momentum) plus
+  1/5 of the head difference times the depth at the window (up to a level), scaled down if a span would give more
+  than it holds. Accel must stay above 4 (sides) or alternate columns ping-pong. **Pressure** (`Pressurize`): each
+  step, connected spans full to their ceilings form a flooded region acting as one pipe between its open ends (free
+  spans linked to it). Its pressure = the ends' heads averaged by opening size; ends above it give, ends below take
+  (half the difference a step, at most a level per opening), equal amounts, so the region stays exactly full and
+  hides no water; inside it pipes carry nothing (`Confined`). Pressure is even along a still tunnel; a shaft at the
+  far end fills to the lake's level, or gushes out if it opens below it (artesian). If the ends stand below the
+  region's roof it isn't pressed and drains normally. (The first try, pressure as stiff squeezed-in water, hid
+  water and lost head along tunnels: a 30-tile tunnel showed 37 levels at one end, 12 at the other.)
+  `Water.Pressure` reports it (and the hover text). No siphons (no suction).
+  Spans are rebuilt from the world on `ChunkChanged`, laying old water back in cell by cell (water
+  in now-solid cells goes to the space above). Map borders drain. Springs add up to a rate until their span's
+  surface reaches their limit. Public amounts are thousandths of a cell (`Full`); `MassAt` = how full a cell is.
+  **Seepage:** water above its column's natural level (generated: just under a lake's shore / a river's bank, or the
+  ground on land) loses `Seepage` a step (~a level per 6 game minutes). Without it, lakes whose inflow beats their
+  outlet rose forever and flooded the land over hours (the books balanced; it was real accumulation). Dug-out water
+  below the old ground is never touched; a fed reservoir still fills. `Total + Drained + Evaporated - Sourced` is
+  constant (exact conservation).
+  Generated rivers start `RiverFill` of their channel, lakes at their sill; springs at every `RiverSources` point
+  (rate by catchment gain, never filling past 0.9 of the channel); `ColonySim.WaterSettleSteps` (400) run in the
+  background while the first frames draw (`WaterReady` gates ticks and edits). Wheels read `ThroughFlow`.
+- **Terrain hydrology** (`Terrain.Generate`, fine grid, whole levels; `-- terrain` bench checks it): rivers are
+  1-2 deep with a level of bank above their water (room for their flow; flush banks flooded): each river tile's
+  level is the lowest land within 2 tiles minus one, min-smoothed over the river within 2 tiles.
+  `SetWaterLevels` priority-floods from the map edge (lowest first): levels never rise downstream (the river
+  below is lowered, unless it runs into a higher lake: then the valley here is below that lake and joins it);
+  lakes keep the level their basin fills to and spill into a lower outflow at the outlet; a river below the lake
+  it enters becomes lake (backwater); side-by-side river tiles share the lower level (not if that would sink a
+  river under the lake it feeds); where a river passes a lake lower down, that lake edge becomes shore unless it
+  would cut water off from the edge. `MarkSpringPools` gives each stream head a pool; `BuildLakeSills` raises the
+  bed at each lake outlet to a level below the lake (the lake drains only to its sill). `ShapeBanks` grades land
+  within `BankReach` tiles to rise a level per tile from the bank. River/lake neighbours don't count as cliffs
+  for surface materials (sand banks, not stone). The bench must show 0 water beside lower land, 0 systems not
+  reaching the edge, 0 water tiles with no downhill way out, and only lake-outlet side steps.
+
+- **Thin walls (`World.EdgeInfo`, `WallMaterials`):** walls, doors and windows stand on cell edges, one level tall,
+  so rooms keep their floor. Each cell owns its east (+x) and north (+y) edge: a `ushort` per cell in `Chunk.Edges`
+  (allocated on first use; low byte east, high byte north), each byte kind (2 bits: wall, door, window) + material
+  (6 bits: log, rubble, plank, stone block, brick: item cost, look, quality 0-2). `VoxelWorld.SetEdge` notifies both
+  cells' chunks like a tile change (so connectivity, rooms, water and views follow); `EdgeRevision` for views;
+  `ITileReader.EdgesAt` (and `TileBox` copies edges) so movement reads them on the world or a snapshot.
+  **Movement:** walls/windows block a move across them (doors don't); a diagonal is blocked by any of the four edges
+  round its corner; a climb or drop crosses the edge at the upper of its two levels (a one-level wall can't be
+  stepped over); symmetric (tested on random terrain). Rooms and homes split along walls. **Water:** each pipe has
+  a `Sill`: the top of the watertight edge run from the bottom of the shared window (`Water.SillOf`), so a wall line
+  is a dam that spills over its crest; a door is no dam. **Building:** `Constructions.PlaceEdge`/`PlaceOutline`
+  (walls round a box)/`CancelEdge`/`Demolish` (instant, refunds); edge blueprints are delivered to whichever adjacent
+  cell has floor (`Blueprint.Cell` = site, `EdgeCell`/`Side` = the edge) and built by builders like other structures;
+  a door or window may be cut into a built wall (the wall's material comes back). Costs: wall 1 of its material,
+  door 2 planks, window 1 glass. **Tool:** build menu "Walls & doors": Outline (box), Wall/Door/Window (click the
+  edge nearest the cursor; RMB removes), material row. **Look:** `EdgeView` (stacked logs, rubble, plank panels,
+  coursed blocks, brick; coping, corner posts, door leaves, glazed windows; blueprint ghosts). **Homes:** the shell
+  (`HomeLayout.Survey`: outline closed by walls/doors/windows/rock, their tier vs expectation, windows) is a fifth of
+  `Housing.Score`; wall materials count for liked materials. The old full-cell `TileType.Wall` (Tab order) stays
+  for dams and embankments.
+- **Floors and roofs (`World.CoverInfo`, `FloorMaterials`, `RoofMaterials`):** a byte per cell (`Chunk.Covers`): floor
+  (plank, flagstone, tiles) low nibble, roof (thatch, shingle, slate, clay tile) high nibble; no effect on movement or
+  water. A cell filled solid loses both; a floor whose ground is dug away goes. `Constructions.PlaceCover`/
+  `PlaceCoverBox`/`ClearCoverBox` (refunds); built by builders from 1 item a cell. Tools: Floors and Roofs rows in
+  the build menu (box), and Line (click an edge, drag along it: walls, doors or windows). `CoverView`: patterned floor
+  plates; roofs a height field per level (vertex height = pitch x distance in from the roof's edge: hip roofs and
+  ridges for any outline), drawn above their cell with `roof.gdshader` (sliced exactly at the cut, courses and
+  staggered joints from world position) so a home's own level shows its interior. Furniture stays under one level.
+  Home shell = walls .45 + floor .25 + roof .2 + windows .1 (`HomeShell.Score`); bare rock underfoot or overhead is
+  humble, bare earth and open sky nothing.
+- **Waterworks:** `Orders.Constructions` holds single-cell blueprints (walls from 1 stone; water wheels and
+  pumps from planks) built like room parts (haulers deliver, Designations-labor builders build;
+  `ColonySim.CompleteConstruction`). Walls stack on wall blueprints, so dams rise level by level; a wall is
+  `TileType.Wall` (digs back out as stone). `Fluids.Waterworks`: a wheel's power = water flowing through its
+  cell per step / `FlowPerPower` (hang it in a waterfall: wheels may mount on a wall); pumps lift water from
+  their cell to the cell ahead and one level up; power is one colony-wide pool for now (pumps run at the
+  share the wheels cover). Farm plots within 2 tiles of water grow 1.5x as fast (`Farms.Irrigated`).
+
+- **Cave-ins (DF-style):** a solid tile is supported if face-adjacent solid tiles connect it to z=0. After a
+  dig (`ColonySim.CompleteDesignation` -> `World.CaveIns`), each unsupported neighbouring mass falls as one
+  rigid piece until it lands; designations on it are cancelled; colonists ride it down or pop out on top.
+  Masses over `CaveIns.MaxMassTiles` count as self-supporting. Any code removing solid tiles should go
+  through `CompleteDesignation` or call `ColonySim.CheckSupport`. No damage yet (no health system).

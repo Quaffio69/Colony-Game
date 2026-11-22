@@ -44,7 +44,7 @@ and run `ColonyGame.exe`.
   `dotnet build ColonyGame.sln`, `dotnet test ColonyGame.sln`.
 - The simulation (`src/Colony.Core`) is plain .NET with no Godot dependency; `game/` is the Godot front end;
   `launcher/` is the launcher (WPF, .NET Framework 4.8); `tools/Colony.Bench` has headless benchmarks.
-- `CLAUDE.md` is the detailed design and architecture document.
+- Design and architecture: `docs/design/` (one file per system), `docs/roadmap.md`; `CLAUDE.md` is the short version for AI-assisted work.
 
 ## Releasing
 
