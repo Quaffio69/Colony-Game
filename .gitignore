@@ -13,6 +13,7 @@ mono_crash.*
 # Release builds (made by the release workflow, or locally)
 /build/
 /dist/
+/playtests/
 
 # Local notes and editor settings (never published)
 AGENT_PROMPT.md

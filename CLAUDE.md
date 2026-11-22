@@ -19,6 +19,7 @@ compete). Public on GitHub (`Quaffio69/Colony-Game`, MIT); players install throu
 | `docs/design/performance.md` | meshing, connectivity, job board, pathfinding, change tracking, far view, water stepping costs |
 | `docs/design/ui.md` | Glyph UI (spec in `docs/ui/GLYPH_UI.md`), windows, hotkeys, mouse, selection, notices, main menu |
 | `docs/design/distribution.md` | release workflow (tag → GitHub Release), launcher (`launcher/`), icon |
+| `docs/playtest/README.md` | agent playtesting: `tools/Colony.Playtest` (turn-based text play), the playtester brief (`AGENT.md`), reports in `docs/playtest/reports/` |
 | `docs/dev-commands.md` | every run/bench/demo/debug flag |
 | `docs/roadmap.md` | milestones done and next |
 
@@ -71,6 +72,7 @@ When a change alters what one of these says, update that doc in the same commit 
   (`--size=1024x1024x384` for fast iteration; demos and flags in `docs/dev-commands.md`)
 - Sim bench: `dotnet run -c Release --project tools/Colony.Bench -- [size] [colonists] [ticks]`; pacing:
   `-- balance [size] [days]`; also `colony`, `families`, `ants`, `water`, `snapshot` modes.
+- Playtest: `dotnet run --project tools/Colony.Playtest -- new|turn|probe|report|export DIR` (see `docs/playtest/README.md`).
 - UI self-test: `<godot_console.exe> --path game -- --ui-selftest` (PASS/FAIL; a few checks are timing-sensitive).
 - Launcher: `dotnet build launcher/ColonyLauncher -c Release`; preview `-state=update -screenshot=out.png`.
 - Release: `git tag -a vX.Y.Z -m "notes"` then `git push origin vX.Y.Z` (only when the user asks).
