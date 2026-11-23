@@ -86,8 +86,8 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [x] Joining a game that has hung hangs the joining player too (it was the 24 MB snapshot of 10M orders; the cap keeps it small).
 - [x] A desynced game kept playing: a client now stops and reloads the game from the host (tested across two processes).
 - [x] Enter completed every order instantly in release builds: now Ctrl+Enter, developer builds only.
-- [ ] Tests in the game seemed broken. `--ui-selftest` fails 4 checks on main (since before 2026-11-22's fixes): simulated keys and
-      clicks never reach the world tools (n picks Dig, Shift+P, Ctrl tap, click to select). The Tests window is dev builds only now.
+- [x] Tests in the game seemed broken: `--ui-selftest` clicked before the new world's water had settled, when the world takes no
+      orders; it waits now (all pass). Players pressing keys then get told why nothing happens. Tests window: dev builds only.
 - [x] Rooms cannot be shrunk: they could (Shift+drag with the room tool), but nothing said so; the tool hint does now, and parts taken down leave their materials.
 
 ### Controls and clarity

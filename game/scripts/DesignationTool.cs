@@ -598,7 +598,13 @@ public partial class DesignationTool : Node3D
 
     public override void _UnhandledInput(InputEvent e)
     {
-        if (_sim == null || !_sim.WaterReady) return; // the world can't be edited while its water settles
+        if (_sim == null) return;
+        if (!_sim.WaterReady) // the world can't be edited while its water settles: say so rather than ignore the player
+        {
+            if (e is InputEventKey { Pressed: true, Echo: false } or InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } && !OverMenu)
+                UI.GlyphStatus.Say("The world is still settling its water: it takes orders in a moment", 3);
+            return;
+        }
 
         // No tool: dragging moves the view level; let go to stop.
         if (_levelDrag)

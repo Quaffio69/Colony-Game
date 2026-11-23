@@ -81,6 +81,10 @@ public partial class UiSelfTest : Node
     private async Task Run()
     {
         await Frames(10);
+        // The world takes no orders until its water has settled (a few seconds on a fresh world): wait for it, or the
+        // world-input checks below fail for no reason of their own.
+        for (int i = 0; i < 3000 && !_ui.Sim.WaterReady; i++) await Frames(1);
+        Check("the world is ready for orders (water settled)", _ui.Sim.WaterReady);
         var m = GlyphManager.Instance!;
         var colonists = _ui.Window("colonists")!;
         var build = _ui.Window("build")!;
