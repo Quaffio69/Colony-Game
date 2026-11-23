@@ -5,8 +5,8 @@ namespace Colony.Core.Nature;
 /// <summary>
 /// Grass creeping back over fresh dirt: soil laid bare under the open sky (a dug-out surface, the floor of a pit or
 /// cut) turns to grass after a while. Only cells a dig exposed are watched (registered by
-/// <see cref="ColonySim.CompleteDesignation"/>), so nothing scans the map. A cell is due between half a day and a day
-/// and a half after it was bared (hashed per cell, so a dug field greens unevenly); when due it greens if a
+/// <see cref="ColonySim.CompleteDesignation"/>), so nothing scans the map. A cell is due <see cref="Balance.GrassRegrowDays"/>
+/// to that plus <see cref="Balance.GrassRegrowSpread"/> days after it was bared (hashed per cell, so a dug field greens unevenly); when due it greens if a
 /// neighbouring top is grass (so bare patches fill in from their edges), else it waits for another round, greening
 /// anyway after <see cref="Rounds"/>. Underground soil, soil under a floor, a roof or standing water, and cells no
 /// longer soil drop out. Deterministic: a list in registration order, checked every <see cref="Interval"/> ticks.
@@ -33,7 +33,7 @@ public sealed class Regrowth
     }
 
     private static long Delay(TilePos p, int round) =>
-        Agents.Needs.Day / 2 + (long)(Procedural.Noise.Hash(p.X, p.Y, p.Z + round * 977, 0x6A55) * Agents.Needs.Day);
+        (long)(Balance.Day * (Balance.GrassRegrowDays + Procedural.Noise.Hash(p.X, p.Y, p.Z + round * 977, 0x6A55) * Balance.GrassRegrowSpread));
 
     internal void Tick(ColonySim sim)
     {

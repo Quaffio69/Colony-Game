@@ -181,7 +181,7 @@ public sealed class Society
     public float Happiness { get; private set; } = 0.5f;
 
     /// <summary>
-    /// Each colonist's happiness for the day: half their home (<see cref="Housing.Score"/>; none for the homeless),
+    /// Each colonist's happiness moves <see cref="Balance.MoodChange"/> of the way toward the day's mood: half their home (<see cref="Housing.Score"/>; none for the homeless),
     /// a fifth their belly, the rest the living standard, plus up to 0.15 for likes met (<see cref="Colonist.LikesBonus"/>).
     /// Kept gentle on purpose: at worst work goes 15% slower
     /// (<see cref="Colonist.WorkSpeed"/>) and the unhappiest drift away one at a time, never below a founding party.
@@ -194,7 +194,8 @@ public sealed class Society
         {
             if (c.IsAutomaton) continue;
             float food = c.Starving ? 0 : c.Hungry ? 0.5f : 1;
-            c.Happiness = Math.Clamp(0.5f * Housing.Score(c.Home, c) + 0.2f * food + 0.3f * Standard + c.LikesBonus(sim.Tick), 0, 1);
+            float today = Math.Clamp(0.5f * Housing.Score(c.Home, c) + 0.2f * food + 0.3f * Standard + c.LikesBonus(sim.Tick), 0, 1);
+            c.Happiness += (today - c.Happiness) * Balance.MoodChange; // a good or bad day moves mood only part of the way
             c.WorkTicks = c.PreferredTicks = 0; // a new day of work
             c.UnhappyDays = c.Happiness < Needs.Unhappy ? c.UnhappyDays + 1 : 0;
             sum += c.Happiness;

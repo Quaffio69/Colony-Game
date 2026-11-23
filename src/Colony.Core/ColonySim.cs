@@ -95,8 +95,6 @@ public sealed partial class ColonySim
     /// <summary>Whole-world water steps run while the world loads, so rivers and lakes start at their flowing rest.</summary>
     public const int WaterSettleSteps = 400;
 
-    /// <summary>Share of dug stone tiles that leave a usable stone (the rest is rubble).</summary>
-    public const float StoneYield = 0.5f;
 
     public ColonySim(VoxelWorld world)
     {
@@ -245,12 +243,12 @@ public sealed partial class ColonySim
 
     /// <summary>Logs a felled tree leaves: bigger and older trees give more.</summary>
     public static int LogYield(Plant tree) =>
-        1 + (int)MathF.Round(PlantInfo.MatureHeight(tree.Kind) * tree.Growth / 255f * 0.6f);
+        1 + (int)MathF.Round(PlantInfo.MatureHeight(tree.Kind) * tree.Growth / 255f * Balance.LogsPerLevel);
 
     /// <summary>Item left by removing the rock at <paramref name="p"/> (digging it out or carving it into stairs).</summary>
     public static ItemType? MiningYield(TilePos p, TileType removed) => removed switch
     {
-        TileType.Stone when Procedural.Noise.Hash(p.X, p.Y, p.Z, 0x5703E) < StoneYield => ItemType.Stone,
+        TileType.Stone when Procedural.Noise.Hash(p.X, p.Y, p.Z, 0x5703E) < Balance.StoneYield => ItemType.Stone,
         TileType.Clay => ItemType.Clay,
         TileType.Sand => ItemType.Sand,
         TileType.CopperOre => ItemType.CopperOre,

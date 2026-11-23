@@ -1297,10 +1297,11 @@ public sealed partial class Colonist
             return;
         }
         CarryingType = _haul.Type;
+        int component = sim.Connectivity.ComponentOf(Position);
+        taken += TopUp(sim, _haul.Source, _haul.Destination, _haul.Type, taken, component);
         CarryingCount = taken;
         _haul = _haul with { Amount = taken };
 
-        int component = sim.Connectivity.ComponentOf(Position);
         var path = Route(sim, ReachableAround(sim, _haul.Destination, component), _haul.Destination);
         if (path is null)
         {
@@ -1309,6 +1310,37 @@ public sealed partial class Colonist
         }
         Begin(ColonistTask.HaulDeliver, _haul.Destination, path);
     }
+
+    /// <summary>
+    /// Fills the rest of a load from loose piles of the same item right beside the one just picked up (gathering and
+    /// felling leave many small piles, and a playtest's haulers walked a whole trip for 2-5 herbs at a time). Only goods
+    /// lying loose (not in a stockpile, crate, depot or building site), as far as the destination has room. Returns
+    /// the units added.
+    /// </summary>
+    private static int TopUp(ColonySim sim, TilePos source, TilePos destination, ItemType type, int carrying, int component)
+    {
+        int added = 0, limit = ItemInfo.CarryLimit(type);
+        for (int dy = -TopUpReach; dy <= TopUpReach && carrying + added < limit; dy++)
+        for (int dx = -TopUpReach; dx <= TopUpReach && carrying + added < limit; dx++)
+        {
+            var c = source.Offset(dx, dy, 0);
+            if (c == source || !sim.Items.TryGet(c, out var pile) || pile.Type != type || pile.Available <= 0) continue;
+            if (sim.Stockpiles.Contains(c) || sim.Rooms.PartAt(c) != null || sim.Constructions.At(c) != null || sim.Connectivity.ComponentOf(c) != component) continue;
+            int n = Math.Min(Math.Min(pile.Available, limit - carrying - added), sim.Items.RoomAt(destination, type));
+            if (n <= 0) break; // destination full
+            if (!sim.Items.ReserveIncoming(destination, type, n)) break;
+            if (!sim.Items.Reserve(c, n))
+            {
+                sim.Items.ReleaseIncoming(destination, n);
+                continue;
+            }
+            added += sim.Items.TakeReserved(c, n);
+        }
+        return added;
+    }
+
+    /// <summary>How far round a picked-up pile a hauler gathers more of the same (Chebyshev tiles, same level).</summary>
+    private const int TopUpReach = 2;
 
     private void Deliver(ColonySim sim) => Deliver(sim, _haul.Destination);
 

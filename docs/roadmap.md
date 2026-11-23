@@ -118,9 +118,9 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [ ] Bigger maps, pushing how large a world can be (needs the optimisation below).
 
 ### Balance
-- [ ] Grass regrows more slowly.
-- [ ] Happiness lasts longer.
-- [ ] Haulers carry more per trip (also the agent playtests: hauling took ~45% of colony time).
+- [x] Grass regrows more slowly (2-4 days instead of 0.5-1.5).
+- [x] Happiness lasts longer (mood moves 35% a day toward the day's, instead of resetting daily).
+- [x] Haulers carry more per trip (loads of 10, logs 6; topped up from small piles beside) and trees give fewer logs.
 
 ### New features
 - [ ] Heavy machinery for digging, hauling etc., built in a workshop.

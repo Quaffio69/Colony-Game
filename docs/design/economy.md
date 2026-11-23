@@ -25,7 +25,7 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   `PlantInfo.MatureHeight` are meant to drive future yields. Ground changes go through
   `ColonySim.CompleteDesignation`/cave-ins, which remove or carry plants; code that edits tiles elsewhere
   should call `Flora.Validate`. No growth/regrowth simulation yet. **Grass regrowth (`Nature.Regrowth`):** soil a dig
-  lays bare (the tile below a dug one, registered in `CompleteDesignation`) turns to grass after 0.5-1.5 days (hashed per
+  lays bare (the tile below a dug one, registered in `CompleteDesignation`) turns to grass after 2-4 days (`Balance.GrassRegrowDays`) (hashed per
   cell) if it is open to the sky (top of its column, no floor/roof over it, not flooded: then it waits), when a
   neighbouring top is grass (so patches fill in from their edges), or anyway after `Rounds` (3) checks. A watched list
   checked every 240 ticks; nothing scans the map. In snapshots (v3).
@@ -37,7 +37,8 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   ones as `ItemType.Log` etc.). Digging stone leaves stone 50% of the time, clay/sand/minerals always; felling
   leaves logs scaled by tree size (`ColonySim.MiningYield`/`LogYield`). Piles re-settle when their ground changes (digs,
   cave-ins). `Stockpiles` are zoned floor cells (all types for now); `Hauling.Plans` pairs the nearest loose
-  piles with the nearest stockpile cell with room (linear scans; spatial index is the scale-up path).
+  piles with the nearest stockpile cell with room (linear scans; spatial index is the scale-up path). A load is the item's `carry` (default 10, logs 6); picking up, a
+  hauler tops it up from loose piles of the same item within 2 tiles (`Colonist.TopUp`: gathering leaves many small piles).
   Who hauls is set by work priorities (see Work priorities). `ItemPiles.UnitsOf(type)` is a running per-type tally
   (no scan). **Storage racks** (`Stockpiles.Racks`, `StructureKind.Rack`): warehouse shelving built on a stockpile cell
   (command `PlaceRacks` over a box, R turns the fronts; Build, Zones, Storage; removed by `RemoveStructures`, with its

@@ -44,6 +44,28 @@ public class StorageTests
     }
 
     [Fact]
+    public void AHauler_TopsUpALoad_FromSmallPilesLyingBeside()
+    {
+        var sim = Meadow();
+        var store = new TilePos(4, 4, 4);
+        sim.Stockpiles.AddFloorBox(store.Offset(0, 0, -1), store.Offset(0, 0, -1));
+        // Gathering leaves small piles: five of 2 herbs, within two tiles of each other.
+        foreach (var (x, y) in new[] { (20, 20), (21, 20), (22, 20), (20, 21), (21, 22) }) sim.Items.Drop(new TilePos(x, y, 4), ItemType.Herbs, 2);
+        sim.Items.Drop(new TilePos(20, 25, 4), ItemType.Herbs, 2); // out of reach of the others: a trip of its own
+        var hauler = sim.AddColonist("H", new TilePos(6, 6, 4));
+        int most = 0;
+        for (int t = 0; t < 6000 && !(sim.Items.TryGet(store, out var p) && p.Count == 12); t++)
+        {
+            sim.Step();
+            most = Math.Max(most, hauler.CarryingCount);
+        }
+        Assert.Equal(10, most); // one trip for the five piles
+        Assert.True(sim.Items.TryGet(store, out var stored));
+        Assert.Equal(12, stored.Count);
+        Assert.Equal(12, sim.Items.UnitsOf(ItemType.Herbs));
+    }
+
+    [Fact]
     public void ABuiltRack_HoldsSeveralStacks_AndComesDownForItsPlanks()
     {
         var sim = Meadow();
@@ -99,7 +121,7 @@ public class StorageTests
         Assert.Equal(5, sim.Regrowth.Count);
         for (int x = 5; x <= 8; x++) Assert.Equal(TileType.Soil, sim.World.Get(x, 5, 2));
 
-        for (int t = 0; t < Needs.Day * 2; t++) sim.Step();
+        for (int t = 0; t < Needs.Day * 13; t++) sim.Step(); // 2-4 days a round, up to three rounds for a cell with no grassy neighbour
         for (int x = 5; x <= 8; x++) Assert.Equal(TileType.Grass, sim.World.Get(x, 5, 2));
         Assert.Equal(TileType.Soil, sim.World.Get(20, 5, 2)); // no sky there
         Assert.Equal(0, sim.Regrowth.Count);

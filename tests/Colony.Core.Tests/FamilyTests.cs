@@ -177,7 +177,7 @@ public class FamilyTests
         var b = sim.AddColonist("Bo", new TilePos(21, 20, 4));
         Assert.True(RunUntil(sim, () => a.Spouse != null, 45) > 0);
         for (int i = 0; i < Needs.NeverBelow + 2; i++) sim.AddColonist($"S{i}", new TilePos(5 + i, 30, 4));
-        foreach (var c in sim.Colonists) c.UnhappyDays = Needs.UnhappyDaysToLeave + 1;
+        foreach (var c in sim.Colonists) { c.UnhappyDays = Needs.UnhappyDaysToLeave + 1; c.Happiness = 0; }
         Days(sim, 3);
         Assert.Contains(a, sim.Colonists);
         Assert.Contains(b, sim.Colonists);

@@ -333,7 +333,7 @@ public class HousingTests
         sim.Housing.SetPolicy(home, Policy(sim, "Cottage"));
         sim.Items.Drop(new TilePos(20, 20, 4), ItemType.Berries, 200);
         Run(sim, 2); // housing assigns the free bed
-        Run(sim, Needs.Day);
+        Run(sim, Needs.Day * 4); // mood moves part way each day
         Assert.Equal(home, housed.Home);
         Assert.True(housed.Happiness > homeless.Happiness + 0.3f, $"{housed.Happiness} vs {homeless.Happiness}");
         Assert.True(housed.WorkSpeed > homeless.WorkSpeed);
@@ -350,7 +350,7 @@ public class HousingTests
             var sim = FlatSim();
             for (int i = 0; i < n; i++) sim.AddColonist($"C{i}", new TilePos(2 + i, 2, 4));
             sim.Items.Drop(new TilePos(20, 20, 4), Catalog.Item("bread"), 40); // fed, but homeless and unclothed
-            foreach (var c in sim.Colonists) c.UnhappyDays = Needs.UnhappyDaysToLeave;
+            foreach (var c in sim.Colonists) { c.UnhappyDays = Needs.UnhappyDaysToLeave; c.Happiness = 0; }
             return sim;
         }
         var small = Colony(Needs.NeverBelow);

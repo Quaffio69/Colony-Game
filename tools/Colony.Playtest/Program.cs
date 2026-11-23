@@ -375,8 +375,11 @@ static class Report
         var totals = sim.Items.Totals();
         var stocks = Enumerable.Range(0, totals.Length).Where(i => totals[i] > 0).Select(i => (Type: new ItemType((ushort)i), N: totals[i])).OrderByDescending(e => e.N).ToList();
         s.AppendLine($"- Goods: {(stocks.Count == 0 ? "none" : string.Join(", ", stocks.Select(e => $"{e.Type.Id} {e.N}")))}");
-        int loose = sim.Items.All.Where(e => !sim.Stockpiles.Contains(e.Key) && sim.Rooms.PartAt(e.Key) == null).Sum(e => e.Value.Count);
-        s.AppendLine($"- Stockpile cells {sim.Stockpiles.Count}; lying loose (not in a stockpile or crate) {loose}");
+        var looseByType = sim.Items.All.Where(e => !sim.Stockpiles.Contains(e.Key) && sim.Rooms.PartAt(e.Key) == null)
+            .GroupBy(e => e.Value.Type).Select(g => (Type: g.Key, N: g.Sum(e => e.Value.Count))).OrderByDescending(e => e.N).ThenBy(e => e.Type.Index).ToList();
+        int loose = looseByType.Sum(e => e.N);
+        s.AppendLine($"- Stockpile cells {sim.Stockpiles.Count}; lying loose (not in a stockpile or crate) {loose}" +
+                     (loose == 0 ? "" : $": {string.Join(", ", looseByType.Take(6).Select(e => $"{e.Type.Id} {e.N}"))}"));
 
         if (TimeSpent is { Count: > 0 } time)
         {

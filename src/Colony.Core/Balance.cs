@@ -13,7 +13,7 @@ namespace Colony.Core;
 /// <item>Population doubles in ~12-18 days (~1 hour) when homes and food keep up; homes, not arrivals, are the limit.</item>
 /// <item>Food: through bread a wheat tile feeds ~0.7 colonists (1.5 tiles each), raw glowcaps ~0.45 (~2.25 tiles each);
 /// a farmer tends ~25-40 tiles. Processing pays: bread feeds more per tile than raw crops, for labour and charcoal.</item>
-/// <item>Digging: a miner clears ~40-50 stone tiles a working day; a mature tree takes ~8 s to fell, gives ~4 logs.</item>
+/// <item>Digging: a miner clears ~40-50 stone tiles a working day; a mature tree takes ~8 s to fell, gives ~3 logs.</item>
 /// <item>Education: a promotion takes half a day to two days of a teacher's time plus its books and instruments.</item>
 /// <item>Ants: nests 64+ tiles off; they found new ones no nearer, a week apart. Once a colony's land meets one there
 /// is a day's warning, then a raid every ~3 days sized to the colony (7 founders face ~6 ants).</item>
@@ -58,6 +58,25 @@ public static class Balance
     public const int CropYield = 4;
     /// <summary>Growth speed of an irrigated plot (water within two tiles).</summary>
     public const float IrrigationSpeed = 1.5f;
+
+    // ---- Yields and hauling ---------------------------------------------------------------------------------------
+
+    /// <summary>Logs a felled tree gives: one, plus this per level of its grown height (a mature oak: ~3). Was 0.6,
+    /// but a playtest piled up 1000+ logs that mostly cost hauling time.</summary>
+    public const float LogsPerLevel = 0.4f;
+    /// <summary>Share of dug stone tiles that leave a usable stone (the rest is rubble that vanishes).</summary>
+    public const float StoneYield = 0.5f;
+    // How much a hauler carries per trip is per item in data/tech-tree.json ("carry", default 10; logs 6); a hauler
+    // also tops a load up from loose piles of the same item beside it (Colonist.TopUp).
+
+    // ---- Grass and mood -------------------------------------------------------------------------------------------
+
+    /// <summary>Bare dug soil under the sky greens after this many days, plus up to the spread (hashed per cell; a cell
+    /// with no grassy neighbour waits a few rounds). Was half a day plus up to one: players found it too quick.</summary>
+    public const float GrassRegrowDays = 2, GrassRegrowSpread = 2;
+    /// <summary>Share of the way a colonist's happiness moves each day toward that day's mood (home, food, living
+    /// standard, likes), so good days build up and one bad day only dents it. Was 1 (mood reset daily).</summary>
+    public const float MoodChange = 0.35f;
 
     // ---- Work (ticks) --------------------------------------------------------------------------------------------
 

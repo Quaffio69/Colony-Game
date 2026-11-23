@@ -92,7 +92,7 @@ public static class Catalog
                 Model = Opt(e, "model") ?? "crates",
                 Color = Opt(e, "color") is { } hex ? ParseColor(hex, id) : 0xff00ff,
                 StackLimit = Int(e, "stack") ?? (isRaw ? 25 : 40),
-                CarryLimit = Int(e, "carry") ?? (isRaw ? 5 : 6),
+                CarryLimit = Int(e, "carry") ?? 10,
                 Source = Opt(e, "source"),
                 Uses = e.TryGetProperty("uses", out var uses) ? uses.EnumerateArray().Select(u => u.GetString()!).ToList() : [],
                 Need = NeedOf(e),
