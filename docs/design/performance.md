@@ -42,6 +42,12 @@ How the game stays fast on 2048x2048x384 maps: meshing, reachability, jobs, path
   horizon draws coarse (close up 44.7k -> 1.6k draws); in iso the range is off and the whole-view switch sets every block
   in range. Roots are never hidden and a section only keeps its parent while it has a mesh and is visible (`LinkFar`):
   Godot errors (`dep_instance->array_index == -1`) on dependencies of hidden or empty instances. Each block keeps its highest sampled top (`TopAround`): the iso camera stands back only far enough to clear the local terrain (the world top put it, and its shadow cascades, hundreds of tiles into empty air: shadows lost, more draws). The bench waits for them.
+  **Far shadows** (`WorldView.FarShadows`, iso, from 0.5 tiles an art pixel): each block has a shadows-only copy
+  (`FarShadow_*`, same mesh) that casts the terrain's shadows while sections stop casting: every cascade draws its casters
+  again, and at 1440p, 1 tile a pixel, sections in four cascades were ~5k of 8.3k draws (CPU-bound, 9.9 ms -> 4.9 ms).
+  Shadow edges follow the 2-tile heightfield (a pixel or two at these zooms; screenshots compare nearly identical). Dirty
+  blocks rebuild every 2 s while it is on. Tried and dropped: not casting from sections roofed by solid chunks (none were:
+  the 11.7k drawn sections are all surface).
 - **Water** (`Fluids.Water`): per 16x16-column block (a chunk column) of spans; only awake blocks step (a block
   sleeps once its water is still; flowing rivers never are). Two passes per step (outflows, then volumes), each
   writing only its own block, so blocks run in parallel deterministically; pipes are precomputed per span

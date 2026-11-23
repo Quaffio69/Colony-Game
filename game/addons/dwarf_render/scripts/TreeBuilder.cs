@@ -124,6 +124,23 @@ public static class TreeBuilder
 	}
 	static readonly List<(Vector3, Vector3, Vector3)> Ico = Icosphere();
 	static readonly List<(Vector3, Vector3, Vector3)> Ico0 = Icosahedron();
+	static readonly List<(Vector3, Vector3, Vector3)> Octa = Octahedron();
+
+	// Eight faces: the coarsest blobs, for trees a few pixels across.
+	static List<(Vector3, Vector3, Vector3)> Octahedron()
+	{
+		var tris = new List<(Vector3, Vector3, Vector3)>();
+		Vector3[] ring = { Vector3.Right, Vector3.Back, Vector3.Left, Vector3.Forward };
+		for (int i = 0; i < 4; i++)
+		{
+			tris.Add((Vector3.Up, ring[i], ring[(i + 1) % 4]));
+			tris.Add((Vector3.Down, ring[(i + 1) % 4], ring[i]));
+		}
+		return tris;
+	}
+
+	/// <summary>Tree levels of detail: 0 full, 1 coarse (20-face blobs), 2 coarsest (8-face blobs, 3-sided cones and trunk).</summary>
+	public const int Coarsest = 2;
 
 	// The plain icosahedron (20 faces): the coarse LOD's blobs (shading follows the canopy's spherical normals, not the facets).
 	static List<(Vector3, Vector3, Vector3)> Icosahedron()
@@ -139,14 +156,17 @@ public static class TreeBuilder
 	}
 
 	static void Blob(MeshBuf mb, Vector3 c, float r, float squash, int seed, Color col,
-	                 Func<Vector3, (Vector3, float, float, float, float, float)> attr, bool coarse = false)
+	                 Func<Vector3, (Vector3, float, float, float, float, float)> attr, int level = 0)
 	{
 		Vector3 J(Vector3 p)
 		{
 			float k = 1 + (JHash(MathF.Round(p.X * 100) + seed, MathF.Round(p.Y * 100), MathF.Round(p.Z * 100)) - 0.5f) * 0.32f;
 			return new Vector3(p.X * k * r, p.Y * k * r * squash, p.Z * k * r) + c;
 		}
-		foreach (var (a, b, d) in coarse ? Ico0 : Ico) { var A = J(a); var B = J(b); var D = J(d); mb.Tri(A, B, D, (A + B + D) / 3 - c, col, attr); }
+		// The octahedron is scaled to hold about the 20-face blob's volume (its mean radius is ~0.70 of its corners', the
+		// icosahedron's ~0.87): unscaled, the coarsest forest looked thinner and darker.
+		float grow = level >= 2 ? 1.25f : 1f;
+		foreach (var (a, b, d) in level switch { 0 => Ico, 1 => Ico0, _ => Octa }) { var A = J(a * grow); var B = J(b * grow); var D = J(d * grow); mb.Tri(A, B, D, (A + B + D) / 3 - c, col, attr); }
 	}
 
 	static void Cone(MeshBuf mb, Vector3 c, float r, float h, int seed, Color col, Func<Vector3, (Vector3, float, float, float, float, float)> attr, int N = 7)
@@ -192,25 +212,37 @@ public static class TreeBuilder
 	/// <para>With <paramref name="lodEdge"/> &gt; 0 (needs <paramref name="into"/>) the mesh also carries a coarse LOD (20-face
 	/// blobs, 4-sided cones and trunk, no branches or leaf cards: about a quarter of the triangles) that Godot draws, in the
 	/// view and in shadows, once that many world units fit in a pixel.</para></summary>
+	/// <para>With <paramref name="coreMaterial"/> (needs <paramref name="into"/>) the inner core is a surface of its own with
+	/// that material (<see cref="DwarfMaterials.FoliageCore"/>: opaque, so it takes early depth tests).</para>
 	public static (ArrayMesh canopy, ArrayMesh bark) Build(TreeSpecies species, float scale = 1f, int seed = 1, float cardSize = 0.5f,
-		ArrayMesh into = null, Material canopyMaterial = null, Material barkMaterial = null, bool leafCards = true, float lodEdge = 0f)
+		ArrayMesh into = null, Material canopyMaterial = null, Material barkMaterial = null, bool leafCards = true, float lodEdge = 0f,
+		Material coreMaterial = null, int level = 0)
 	{
-		var (canopy, bark) = Shape(species, scale, seed, cardSize, leafCards, coarse: false);
-		if (into != null && lodEdge > 0f)
+		bool split = into != null && coreMaterial != null;
+		var (canopy, core, bark) = Shape(species, scale, seed, cardSize, leafCards && level == 0, level, split);
+		if (into != null && lodEdge > 0f && level == 0)
 		{
-			var (canopyLow, barkLow) = Shape(species, scale, seed, cardSize, leafCards: false, coarse: true);
+			var (canopyLow, coreLow, barkLow) = Shape(species, scale, seed, cardSize, leafCards: false, 1, split);
+			if (split) core.ToMeshWithLod(coreLow, lodEdge, true, into, coreMaterial); // first: drawn before the shell's layers
 			canopy.ToMeshWithLod(canopyLow, lodEdge, true, into, canopyMaterial);
 			bark.ToMeshWithLod(barkLow, lodEdge, false, into, barkMaterial);
 			return (into, into);
 		}
-		if (into != null) { canopy.ToMesh(true, into, canopyMaterial); bark.ToMesh(false, into, barkMaterial); return (into, into); }
+		if (into != null)
+		{
+			if (split) core.ToMesh(true, into, coreMaterial);
+			canopy.ToMesh(true, into, canopyMaterial); bark.ToMesh(false, into, barkMaterial); return (into, into);
+		}
 		return (canopy.ToMesh(true), bark.ToMesh(false));
 	}
 
-	// One level of detail; the same seed gives the same tree (blob places, colours) at either.
-	static (MeshBuf canopy, MeshBuf bark) Shape(TreeSpecies species, float scale, int seed, float cardSize, bool leafCards, bool coarse)
+	// One level of detail; the same seed gives the same tree (blob places, colours) at either. The core goes into the canopy
+	// buffer unless split.
+	static (MeshBuf canopy, MeshBuf core, MeshBuf bark) Shape(TreeSpecies species, float scale, int seed, float cardSize, bool leafCards,
+		int level, bool split)
 	{
-		int cyl = coarse ? 4 : 6, cone = coarse ? 4 : 7;
+		bool coarse = level > 0;
+		int cyl = level switch { 0 => 6, 1 => 4, _ => 3 }, cone = level switch { 0 => 7, 1 => 4, _ => 3 };
 		var rnd = new Random(seed * 7919 + (int)species * 104729);
 		float R() => (float)rnd.NextDouble();
 		var (barkHex, leafHex) = Colours[species];
@@ -219,6 +251,7 @@ public static class TreeBuilder
 		var barkC = Color.FromHtml(barkHex);
 		float s = scale, seedF = (int)species + (seed * 0.137f) % 1f;
 		var canopy = new MeshBuf(); var bark = new MeshBuf();
+		var core = split ? new MeshBuf() : canopy;
 		var baseP = new Vector3(0, -0.15f, 0);
 		var blobs = new List<(Vector3 c, float r, float sq, Vector3 sphC, float h)>();
 		float H = 1; bool cones = false;
@@ -284,12 +317,12 @@ public static class TreeBuilder
 			if (cones)
 			{
 				Cone(canopy, bl.c, bl.r, bl.h, seed * 97, leafC, Attr(0, 0, 0), cone);
-				Cone(canopy, bl.c, bl.r * 0.62f, bl.h * 0.8f, seed * 53, leafC, Attr(1, 0, 1), cone);
+				Cone(core, bl.c, bl.r * 0.62f, bl.h * 0.8f, seed * 53, leafC, Attr(1, 0, 1), cone);
 			}
 			else
 			{
-				Blob(canopy, bl.c, bl.r, bl.sq, seed * 97, leafC, Attr(0, 0, 0), coarse);
-				Blob(canopy, bl.c, bl.r * 0.66f, bl.sq, seed * 53, leafC, Attr(1, 0, 1), coarse);
+				Blob(canopy, bl.c, bl.r, bl.sq, seed * 97, leafC, Attr(0, 0, 0), level);
+				Blob(core, bl.c, bl.r * 0.66f, bl.sq, seed * 53, leafC, Attr(1, 0, 1), level);
 			}
 			// Leaf cards scattered over the blob surface, facing roughly outward.
 			var cc = cones ? bl.c + new Vector3(0, -bl.h * 0.15f, 0) : bl.c;
@@ -311,6 +344,6 @@ public static class TreeBuilder
 				canopy.Tri(p00, p11, p01, nrm, leafC, cardAttr, new Vector2(0, 0), new Vector2(1, 1), new Vector2(0, 1));
 			}
 		}
-		return (canopy, bark);
+		return (canopy, core, bark);
 	}
 }

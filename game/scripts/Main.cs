@@ -528,6 +528,20 @@ public partial class Main : Node3D
     private int _sweepIndex = -1, _sweepFrame;
     private readonly List<double> _sweepMs = new();
     private long _sweepDraws, _sweepPrims;
+    private double _sweepGpu, _sweepCpu;
+
+    /// <summary>GPU ms of the last frame's art pass (the world) and the render setup CPU ms (the bench's split of a frame).</summary>
+    private (double Gpu, double Cpu) FrameSplit()
+    {
+        double gpu = 0;
+        if (_renderer?.ArtViewport is { } art)
+        {
+            var rid = art.GetViewportRid();
+            RenderingServer.ViewportSetMeasureRenderTime(rid, true);
+            gpu = RenderingServer.ViewportGetMeasuredRenderTimeGpu(rid);
+        }
+        return (gpu, RenderingServer.GetFrameSetupTimeCpu());
+    }
 
     /// <summary>
     /// --bench-zooms=8,30,120,...: after the world is built, steps the camera through rig distances (40 frames to settle,
@@ -536,9 +550,15 @@ public partial class Main : Node3D
     private void ZoomSweep(string list, double delta)
     {
         var zooms = list.Split(',').Select(z => float.Parse(z, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        if (_sweepIndex < 0 && Arg("--no-vsync") != null) { DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled); Engine.MaxFps = 0; } // real frame times
+        if (_breakdown != null)
+        {
+            if (!_breakdown.MoveNext()) { _breakdown = null; _sweepFrame = 131; }
+            return;
+        }
         if (_sweepIndex < 0 || _sweepFrame >= 130)
         {
-            if (_sweepIndex >= 0)
+            if (_sweepIndex >= 0 && _sweepFrame == 130)
             {
                 _sweepMs.Sort();
                 double avg = _sweepMs.Average();
@@ -546,12 +566,16 @@ public partial class Main : Node3D
                     ? $"art {_renderer.ArtSize.X}x{_renderer.ArtSize.Y}, {_renderer.TexelWorld:0.00} t/px, far {(_world.FarView ? "on" : "off")}, ascii {_renderer.AsciiAmount * 100:0}%"
                     : "classic";
                 GD.Print($"[zoom] {zooms[_sweepIndex],5:0} tiles: avg {avg,6:0.00} ms, p95 {_sweepMs[(int)(_sweepMs.Count * 0.95)],6:0.00}, max {_sweepMs[^1],6:0.00}; " +
-                         $"draws {_sweepDraws / _sweepMs.Count}, prims {_sweepPrims / _sweepMs.Count / 1000}k; {look}; shadow dist {_sun.DirectionalShadowMaxDistance:0} ({(_sun.ShadowEnabled ? "on" : "off")})");
+                         $"world GPU {_sweepGpu / _sweepMs.Count:0.00} ms, render CPU {_sweepCpu / _sweepMs.Count:0.00} ms; draws {_sweepDraws / _sweepMs.Count}, prims {_sweepPrims / _sweepMs.Count / 1000}k; {look}; shadow dist {_sun.DirectionalShadowMaxDistance:0} ({(_sun.ShadowEnabled ? "on" : "off")})");
+                if (Arg("--ids-check") != null && _renderer != null) GD.Print("[ids] " + _renderer.CompareIds());
+                if (Arg("--tree-count") != null) { var (n, tris) = _flora.FullTreesNear(_rig.Camera.GlobalPosition); GD.Print($"[trees] {n} full trees in range, {tris / 1000}k LOD-0 triangles"); }
+                if (Arg("--bench-breakdown") != null) { _breakdown = BreakdownSteps(); return; }
             }
             _sweepIndex++;
             _sweepFrame = 0;
             _sweepMs.Clear();
             _sweepDraws = _sweepPrims = 0;
+            _sweepGpu = _sweepCpu = 0;
             if (_sweepIndex >= zooms.Length) { _benchActive = false; GetTree().Quit(); return; }
             _rig.Focus(_rig.Position, zooms[_sweepIndex]);
             return;
@@ -561,6 +585,39 @@ public partial class Main : Node3D
         _sweepMs.Add(delta * 1000.0);
         _sweepDraws += (long)RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.TotalDrawCallsInFrame);
         _sweepPrims += (long)RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.TotalPrimitivesInFrame);
+        var (g, c) = FrameSplit();
+        _sweepGpu += g; _sweepCpu += c;
+    }
+
+    // --bench-breakdown: after each zoom of the sweep, hides each view (and then the sun's shadows) in turn and prints what the
+    // frame costs without it: where the draws, primitives and milliseconds go.
+    private IEnumerator<bool>? _breakdown;
+
+    private IEnumerator<bool> BreakdownSteps()
+    {
+        var parts = new List<(string Name, Action<bool> Show)>();
+        foreach (var child in GetChildren())
+            if (child is Node3D n3 && n3 != _rig && n3.Visible && CountDrawables(n3) > 0) parts.Add((n3.Name, v => n3.Visible = v));
+        parts.Add(("sun shadows", v => _sun.ShadowEnabled = v));
+        var line = new System.Text.StringBuilder("[parts] without:");
+        foreach (var (name, show) in parts)
+        {
+            show(false);
+            for (int i = 0; i < 12; i++) yield return true;
+            double ms = 0, gpu = 0; long draws = 0, prims = 0;
+            const int N = 30;
+            for (int i = 0; i < N; i++)
+            {
+                ms += GetProcessDeltaTime() * 1000.0;
+                gpu += FrameSplit().Gpu;
+                draws += (long)RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.TotalDrawCallsInFrame);
+                prims += (long)RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.TotalPrimitivesInFrame);
+                yield return true;
+            }
+            show(true);
+            line.Append($" {name} {ms / N:0.00} ms (gpu {gpu / N:0.00}) {draws / N} draws {prims / N / 1000}k;");
+        }
+        GD.Print(line.ToString());
     }
 
     private int _orbitFrame = -1;

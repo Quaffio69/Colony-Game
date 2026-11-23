@@ -35,6 +35,8 @@ public partial class Main
     private void SetUpRenderer()
     {
         if (Arg("--no-sun-shadows") != null) _sun.ShadowEnabled = false; // dev: compare looks and cost
+        if (Arg("--shadow-filter") is { } sf && int.TryParse(sf, out int q)) // dev: 0 hard .. 5 ultra
+            RenderingServer.DirectionalSoftShadowFilterSetQuality((RenderingServer.ShadowQuality)q);
         if (!StyledRender) return;
         GameLooks.RegisterBlocks();
         _renderer = new DwarfRenderer
@@ -44,6 +46,10 @@ public partial class Main
             GameCamera = _rig.Camera.GetPath(),
             SunLight = _sun.GetPath(),
             CreateTuningPanel = false, // the Graphics window (F10) is in the game's own UI
+            IdsSkipSun = Arg("--ids-sun") == null, // dev: the old ids pass with the sun (and its shadow cascades)
+            DevNoIds = Arg("--no-ids") != null,    // dev: what the ids pass costs (glyphs read garbage)
+            IdsFromArtPass = Arg("--ids-viewport") == null, // dev: the old second render for ids
+            DevBothIds = Arg("--ids-check") != null, // dev: both, diffed in the zoom sweep
         };
         AddChild(_renderer);
         // Dev overrides for benches (never saved): the game's defaults, a projection, a pixel size.
@@ -116,11 +122,17 @@ public partial class Main
         // its shadow passes dear per pixel); with the markers there are none (a pixel or two each over the long low-angle shadow
         // range). Hysteresis so a zoom near an edge doesn't flip them. --no-shadow-proxies compares.
         _flora.Detail = _renderer.TexelWorld < (_flora.Detail ? 0.42f : 0.34f) && !(_renderer.Zoom < 1f && _renderer.AsciiAmount > 0.6f);
+        // The coarsest trees (8-face blobs) once a tile is 10 art pixels or fewer: at 8 px a tile, 25k trees in range at a low
+        // pitch were most of the GPU frame (Godot's own LOD, in iso, can't tell zooms apart). --no-coarsest compares.
+        _flora.Coarsest = Arg("--no-coarsest") == null && _renderer.TexelWorld > (_flora.Coarsest ? 0.08f : 0.1f);
         _flora.ShadowProxies = Arg("--no-shadow-proxies") == null && _renderer.TexelWorld > (_flora.ShadowProxies ? 0.17f : 0.2f);
         _flora.TreeShadows = _renderer.TexelWorld < (_flora.TreeShadows ? 0.42f : 0.34f);
         // Once an art pixel covers more than a tile, coarse far blocks (cells of 2 tiles) draw the terrain and water instead
         // of ten thousand sections. On from 1.5 tiles a pixel, off below 1.2, so a zoom near the edge doesn't flip it.
         _world.FarView = _renderer.TexelWorld > (_world.FarView ? 1.2f : 1.5f);
+        // From half a tile an art pixel (iso), the far blocks cast the terrain's shadows: 64 draws a cascade instead of
+        // thousands of sections, for shadow edges a pixel or two coarser. --no-far-shadows compares.
+        _world.FarShadows = look.Orthographic && Arg("--no-far-shadows") == null && _renderer.TexelWorld > (_world.FarShadows ? 0.42f : 0.49f);
         // Perspective sees to the horizon: blocks beyond the distance where an art pixel covers 1.5 tiles draw coarse (plus
         // half a block's diagonal, so a block's near edge is never coarse). Iso has one scale: the switch above does it.
         _world.FarRange = look.Orthographic ? 1e9f

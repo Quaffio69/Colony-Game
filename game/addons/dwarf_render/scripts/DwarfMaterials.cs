@@ -15,11 +15,13 @@ public static class DwarfMaterials
 {
 	public const string ShaderDir = "res://addons/dwarf_render/shaders/";
 
-	static ShaderMaterial _terrain, _foliage;
+	static ShaderMaterial _terrain, _foliage, _foliageCore;
 	static readonly List<WeakReference<ShaderMaterial>> _objects = new();
 
 	public static ShaderMaterial Terrain => _terrain ??= Make("voxel_terrain.gdshader");
 	public static ShaderMaterial Foliage => _foliage ??= Make("foliage.gdshader");
+	/// <summary>The canopies' inner core: opaque, culled, no discard (TreeBuilder's coreMaterial). Same settings as Foliage.</summary>
+	public static ShaderMaterial FoliageCore => _foliageCore ??= Make("foliage_core.gdshader");
 
 	static ShaderMaterial Make(string file) => new() { Shader = GD.Load<Shader>(ShaderDir + file) };
 
@@ -68,12 +70,23 @@ public static class DwarfMaterials
 		_last = s;
 		ApplyCommon(Terrain, s);
 		ApplyCommon(Foliage, s);
+		ApplyCommon(FoliageCore, s);
 		var atlas = TextureAtlas.Get(s.TexturePack, out int tile);
 		Terrain.SetShaderParameter("dr_atlas", atlas);
 		Terrain.SetShaderParameter("dr_tile_px", (float)tile);
 		Terrain.SetShaderParameter("dr_tex_strength", s.TexturePack == TexturePackName.Off ? 0f : s.TextureStrength);
 
-		var f = Foliage;
+		foreach (var fm in new[] { Foliage, FoliageCore }) ApplyFoliage(fm, s);
+
+		foreach (var m in _terrains) ApplyTerrain(m, s);
+		for (int i = _objects.Count - 1; i >= 0; i--)
+		{
+			if (_objects[i].TryGetTarget(out var m)) ApplyCommon(m, s); else _objects.RemoveAt(i);
+		}
+	}
+
+	static void ApplyFoliage(ShaderMaterial f, DwarfRenderSettings s)
+	{
 		f.SetShaderParameter("fol_mode", (float)(int)s.FoliageTechnique);
 		f.SetShaderParameter("fol_density", s.LeafDensity);
 		f.SetShaderParameter("fol_leaf_size", s.LeafSize);
@@ -84,12 +97,6 @@ public static class DwarfMaterials
 		f.SetShaderParameter("fol_inner_dark", s.InnerShade);
 		f.SetShaderParameter("fol_hue_var", s.LeafColourVariety);
 		f.SetShaderParameter("fol_sway", s.WindSway);
-
-		foreach (var m in _terrains) ApplyTerrain(m, s);
-		for (int i = _objects.Count - 1; i >= 0; i--)
-		{
-			if (_objects[i].TryGetTarget(out var m)) ApplyCommon(m, s); else _objects.RemoveAt(i);
-		}
 	}
 
 	static void ApplyCommon(ShaderMaterial m, DwarfRenderSettings s)

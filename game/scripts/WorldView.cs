@@ -114,6 +114,7 @@ public partial class WorldView : Node3D
     {
         public required int X0, Y0;
         public MeshInstance3D? Node;
+        public MeshInstance3D? Shadow; // the same mesh, shadows only (FarShadows)
         public bool Built, Dirty = true, InFlight;
         public bool Sampled;
         public float Top; // highest sampled top (ring included): the iso camera stands back just far enough to clear it
@@ -130,6 +131,21 @@ public partial class WorldView : Node3D
     public bool FarView { get => _farShown; set => _farWanted = value; }
     /// <summary>Main-thread ms spent sampling far blocks (diagnostics).</summary>
     public double FarSampleMs;
+
+    // Zoomed out, the sun's shadows come from the far blocks (shadow-only copies: 64 draws a cascade at most) instead of the
+    // sections: every cascade draws its casters again, and at 1440p, 1 tile an art pixel, that was ~5000 of 8300 draw calls
+    // (the frame was CPU-bound). The blocks are a 2-tile heightfield of the highest tops, so a shadow's edge moves by up
+    // to a cell: a pixel or two at these zooms. Takes effect once every block is built; their edits follow within 2 s.
+    private bool _farShadowsWanted, _farShadowsOn;
+    /// <summary>Far blocks cast the terrain's shadows instead of sections (set each frame by Main).</summary>
+    public bool FarShadows { get => _farShadowsOn; set => _farShadowsWanted = value; }
+
+    private void ApplyFarShadows()
+    {
+        var cast = _farShadowsOn ? GeometryInstance3D.ShadowCastingSetting.Off : GeometryInstance3D.ShadowCastingSetting.On;
+        foreach (var s in _sections) if (s.Instance != null) s.Instance.CastShadow = cast;
+        foreach (var b in _farBlocks) if (b.Shadow != null) b.Shadow.Visible = _farShadowsOn;
+    }
 
     public VoxelWorld World => _sim.World;
     public int VisibleQuads { get; private set; }
@@ -456,6 +472,7 @@ public partial class WorldView : Node3D
         if (s.Instance == null)
         {
             s.Instance = new MeshInstance3D { MaterialOverride = _terrainMaterial };
+            if (_farShadowsOn) s.Instance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
             _nearRoot.AddChild(s.Instance);
         }
         s.Instance.Mesh = mesh;
@@ -483,6 +500,7 @@ public partial class WorldView : Node3D
             if (r.Arrays is not { Quads: > 0 } arrays)
             {
                 if (b.Node != null) b.Node.Mesh = null;
+                if (b.Shadow != null) b.Shadow.Mesh = null;
                 continue;
             }
             if (b.Node == null)
@@ -494,6 +512,16 @@ public partial class WorldView : Node3D
                 FarBlockAdded?.Invoke(b.X0, b.Y0, b.Node);
             }
             b.Node.Mesh = arrays.ToMesh();
+            if (b.Shadow == null)
+            {
+                b.Shadow = new MeshInstance3D
+                {
+                    Name = $"FarShadow_{b.X0}_{b.Y0}", MaterialOverride = _terrainMaterial,
+                    CastShadow = GeometryInstance3D.ShadowCastingSetting.ShadowsOnly, Visible = _farShadowsOn,
+                };
+                _farRoot.AddChild(b.Shadow);
+            }
+            b.Shadow.Mesh = b.Node.Mesh;
         }
         bool all = _farBuilt == _farBlocks.Count;
         bool show = _farWanted && all;
@@ -501,6 +529,11 @@ public partial class WorldView : Node3D
         {
             _farShown = show; // the sections hide by visibility parent (hiding their root upsets Godot's dependency lists)
             ApplyFarRanges();
+        }
+        if ((_farShadowsWanted && all) != _farShadowsOn)
+        {
+            _farShadowsOn = _farShadowsWanted && all;
+            ApplyFarShadows();
         }
 
         if (!_sim.WaterReady || (PendingSections > 0 && !_farWanted)) return; // the near world first
@@ -516,7 +549,7 @@ public partial class WorldView : Node3D
         foreach (var b in _farBlocks)
         {
             if (clock.Elapsed.TotalMilliseconds > budget) break;
-            if (b.InFlight || !b.Dirty || (b.Built && (!_farShown || _now - b.BuiltAt < 2.0))) continue;
+            if (b.InFlight || !b.Dirty || (b.Built && (!(_farShown || _farShadowsOn) || _now - b.BuiltAt < 2.0))) continue;
             b.Dirty = false;
             b.InFlight = true;
             _farInFlight++;

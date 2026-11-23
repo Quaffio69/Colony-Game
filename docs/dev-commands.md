@@ -24,7 +24,12 @@ Every build, run, bench, demo and debug flag.
   art size, tiles per pixel, far view, shadows; the tool for frame-rate work), `--ortho`, `--persp`, `--default-look`, `--pixel=N`,
   `--no-shadows`, `--shadow-cascades` (overrides on the loaded look, never saved), `--stutter-log`, `--orbit-check`,
   `--pitch=DEG` (bench camera pitch, e.g. -20 for low views), `--no-flora` (hide plants: what they cost), `--tree-lod=0`
-  (no coarse tree LOD), `--no-shadow-proxies` (trees cast their own shadows when zoomed out). Findings: iso
+  (no coarse tree LOD), `--no-shadow-proxies` (trees cast their own shadows when zoomed out), `--no-vsync` (real frame
+  times in the zoom sweep, which also prints world GPU and render CPU ms), `--bench-breakdown` (after each zoom, the frame
+  without each view in turn), `--tree-count` (full trees in range per zoom), `--flora-hide=Plant,Tree,Marker,Shadow`,
+  `--no-coarsest`, `--no-core-split`, `--no-far-shadows`, `--ids-viewport` / `--ids-check` / `--ids-sun` / `--no-ids` (the
+  old ids pass, a diff of both, the old pass with the sun, none), `--shadow-filter=0..5`. Godot's `--resolution WxH` and
+  `--gpu-profile` go before `--`; bench at the player's screen size (2560x1440 here), the art target scales with it. Findings: iso
   shadows must stay 4 cascades (1, or 2 split at the pivot, lost most shadows); `ShadowsUpTo` (1.5 tiles/px) turns sun shadows
   off further out; shadows are the remaining cost in iso at pixel size 1, 0.5-1 tiles/px (~11-15 ms at 1600x900).
 - **UI dev flags:** `--open=colonists,stocks,...` opens windows (ids: colonists stocks build chronicle housing work inspect

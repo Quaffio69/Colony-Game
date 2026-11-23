@@ -27,6 +27,16 @@ public partial class DwarfRenderer : Node
 	[Export] public bool DisableMain3D { get; set; } = true;        // the main window no longer renders 3D itself (saves a full render)
 	[Export(PropertyHint.Range, "1,20,1")] public int ArtLayer { get; set; } = 20;   // render layers reserved for the post quads:
 	[Export(PropertyHint.Range, "1,20,1")] public int IdsLayer { get; set; } = 19;   //   don't put your own objects on these two
+	[Export(PropertyHint.Range, "1,20,1")] public int SunLayer { get; set; } = 18;   // the sun alone, hidden from the ids pass
+	[Export] public bool IdsSkipSun { get; set; } = true;
+	/// <summary>Dev: never render the ids pass (glyphs read garbage; measures what the pass costs).</summary>
+	public bool DevNoIds { get; set; }
+	/// <summary>Ids come from the art pass's own buffers (<see cref="IdsEffect"/>), not a second render of the scene.
+	/// False (or no RenderingDevice) uses the old ids viewport.</summary>
+	[Export] public bool IdsFromArtPass { get; set; } = true;
+	/// <summary>Dev: render both and let <see cref="CompareIds"/> diff them.</summary>
+	public bool DevBothIds { get; set; }
+	IdsEffect? _idsFx;
 	[Export] public int CanvasLayerIndex { get; set; } = -100;      // present layer; your UI must be on a higher CanvasLayer
 	[Export] public bool CreateTuningPanel { get; set; } = true;    // F10 toggles the runtime slider panel
 	[Export] public bool SyncEnvironment { get; set; } = true;      // copy ambient/background/fog from your WorldEnvironment every frame
@@ -78,7 +88,13 @@ public partial class DwarfRenderer : Node
 	static uint Bit(int layer) => 1u << (layer - 1);
 
 	public override void _EnterTree() => Instance = this;
-	public override void _ExitTree() { if (Instance == this) Instance = null; }
+	public override void _ExitTree()
+	{
+		if (Instance == this) Instance = null;
+		if (_artCam != null) _artCam.Compositor = null;
+		_idsFx?.Release();
+		_idsFx = null;
+	}
 
 	public override void _Ready()
 	{
@@ -97,6 +113,9 @@ public partial class DwarfRenderer : Node
 		_artCam = new Camera3D { Name = "DR_ArtCamera", CullMask = 0xFFFFF & ~Bit(IdsLayer) };
 		_idsCam = new Camera3D { Name = "DR_IdsCamera", CullMask = 0xFFFFF & ~Bit(ArtLayer) };
 		_art.AddChild(_artCam); _ids.AddChild(_idsCam);
+		// The ids pass needs no light: the sun goes on its own layer the ids camera doesn't see, so that pass doesn't redraw
+		// the shadow cascades (each viewport renders its own) for an unshaded read of depth and roughness.
+		if (_sun != null && IdsSkipSun) { _sun.Layers = Bit(SunLayer); _idsCam.CullMask &= ~Bit(SunLayer); }
 		_artCam.Current = true; _idsCam.Current = true;
 
 		_envOverride = BuildEnvironment(world.Environment);
@@ -123,6 +142,16 @@ public partial class DwarfRenderer : Node
 		layer.AddChild(_rect);
 		_present.SetShaderParameter("color_tex", _art.GetTexture());
 		_present.SetShaderParameter("ids_tex", _ids.GetTexture());
+		if (IdsFromArtPass)
+		{
+			var fx = new IdsEffect();
+			if (fx.Ready)
+			{
+				_idsFx = fx;
+				_artCam.Compositor = new Compositor { CompositorEffects = new Godot.Collections.Array<CompositorEffect> { fx } };
+				_present.SetShaderParameter("ids_tex", fx.Texture);
+			}
+		}
 		_present.SetShaderParameter("glyph_tex", GlyphAtlas.Texture);
 
 		if (CreateTuningPanel) AddChild(new SettingsPanel { Renderer = this });
@@ -363,7 +392,13 @@ public partial class DwarfRenderer : Node
 		AsciiAmount = amt;
 		FarViewIsText = farK > 0 && amt >= 0.999f;
 		float style = ((farK > 0 ? s.ZoomedOutSymbols : s.ZoomedInSymbols) == GlyphStyle.ObjectSymbols) ? 1f : 0f;
-		_ids.RenderTargetUpdateMode = amt > 0 ? SubViewport.UpdateMode.Always : SubViewport.UpdateMode.Disabled;
+		if (_idsFx != null)
+		{
+			_idsFx.Enabled = amt > 0 && !DevNoIds;
+			_idsFx.Resize(new Vector2I(lw, lh));
+			_idsFx.SetCamera(_artCam, rt, s.ReverseZ);
+		}
+		_ids.RenderTargetUpdateMode = amt > 0 && !DevNoIds && (_idsFx == null || DevBothIds) ? SubViewport.UpdateMode.Always : SubViewport.UpdateMode.Disabled;
 
 		var u = _present;
 		u.SetShaderParameter("low_res", new Vector2(lw, lh));
@@ -405,6 +440,30 @@ public partial class DwarfRenderer : Node
 		u.SetShaderParameter("marker_count", n);
 	}
 
+
+	/// <summary>Dev (with <see cref="DevBothIds"/>): how far the art-pass ids differ from the old ids viewport's, per channel.</summary>
+	public string CompareIds()
+	{
+		if (_idsFx?.Read() is not { } a) return "no ids effect";
+		var b = _ids.GetTexture().GetImage();
+		if (b.GetSize() != a.GetSize()) return $"sizes differ: {a.GetSize()} vs {b.GetSize()}";
+		int w = a.GetWidth(), h = a.GetHeight(), idDiff = 0, hashDiff = 0, skyDiff = 0, n = 0;
+		double depthErr = 0;
+		var sample = new System.Text.StringBuilder();
+		for (int y = 1; y < h - 1; y++)
+		for (int x = 1; x < w - 1; x++)
+		{
+			Color ca = a.GetPixel(x, y), cb = b.GetPixel(x, y);
+			n++;
+			if ((ca.G <= 0) != (cb.G <= 0)) { skyDiff++; continue; }
+			if (cb.G <= 0) continue;
+			if (Mathf.RoundToInt(ca.R * 255) != Mathf.RoundToInt(cb.R * 255)) idDiff++;
+			if (Mathf.Abs(ca.B - cb.B) > 0.0015f) hashDiff++;
+			depthErr = Math.Max(depthErr, Mathf.Abs(ca.G - cb.G) / Mathf.Max(1f, cb.G));
+			if (sample.Length < 300 && (x + y * w) % 9973 == 0) sample.Append($" ({ca.R * 255:0},{ca.G:0.0},{ca.B:0.000})/({cb.R * 255:0},{cb.G:0.0},{cb.B:0.000})");
+		}
+		return $"{w}x{h}: sky differs {skyDiff * 100.0 / n:0.00}%, id {idDiff * 100.0 / n:0.00}%, tile hash {hashDiff * 100.0 / n:0.00}%, worst depth {depthErr * 100:0.00}%; new/old:{sample}";
+	}
 
 	static float Smooth(float a, float b, float x) { x = Mathf.Clamp((x - a) / (b - a), 0f, 1f); return x * x * (3 - 2 * x); }
 	static Color Hex(string h) => Color.FromHtml(h);

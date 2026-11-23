@@ -24,7 +24,7 @@ public partial class FloraView : Node3D
     private float _treeRange = NearTreeRange;
     private bool _detail = true, _shadowProxies;
     private enum Part { Plant, Tree, Marker, Shadow }
-    private readonly List<(MultiMeshInstance3D Node, Part Part)> _ranged = new();
+    private readonly List<(MultiMeshInstance3D Node, Part Part, int Kind)> _ranged = new();
     private const float NearPlantRange = 180f;
     private const double BuildBudgetMs = 4;
 
@@ -140,10 +140,25 @@ public partial class FloraView : Node3D
     }
     private bool _treeShadows = true;
 
+    /// <summary>Diagnostics: tree instances in the full-detail range of a camera position, and their LOD 0 triangles.</summary>
+    public (int Trees, long Lod0) FullTreesNear(Vector3 camera)
+    {
+        int trees = 0; long tris = 0;
+        foreach (var (node, part, _) in _ranged)
+        {
+            if (part != Part.Tree || !IsInstanceValid(node) || node.Multimesh?.Mesh is not ArrayMesh mesh) continue;
+            if (node.GlobalPosition.DistanceTo(camera) > node.VisibilityRangeEnd) continue;
+            int n = node.Multimesh.InstanceCount;
+            trees += n;
+            for (int i = 0; i < mesh.GetSurfaceCount(); i++) tris += (long)n * mesh.SurfaceGetArrayIndexLen(i) / 3;
+        }
+        return (trees, tris);
+    }
+
     private void ApplyRanges()
     {
         _ranged.RemoveAll(r => !IsInstanceValid(r.Node));
-        foreach (var (node, part) in _ranged) Apply(node, part);
+        foreach (var (node, part, _) in _ranged) Apply(node, part);
     }
 
     private void Apply(MultiMeshInstance3D node, Part part)
@@ -207,7 +222,7 @@ public partial class FloraView : Node3D
             var list = byKind[k];
             if (list.Count == 0) continue;
             bool tree = PlantInfo.IsTree((PlantKind)k);
-            var mm = NewMultiMesh(_meshes[k], list.Count);
+            var mm = NewMultiMesh(tree ? TreeMesh(k) : _meshes[k], list.Count);
             for (int i = 0; i < list.Count; i++)
             {
                 mm.SetInstanceTransform(i, InstanceTransform(list[i], origin));
@@ -220,7 +235,7 @@ public partial class FloraView : Node3D
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             };
             node.AddChild(near);
-            Track(near, tree ? Part.Tree : Part.Plant);
+            Track(near, tree ? Part.Tree : Part.Plant, k);
         }
 
         if (trees.Count > 0)
@@ -248,10 +263,13 @@ public partial class FloraView : Node3D
         _regionNodes[r] = node;
     }
 
-    private void Track(MultiMeshInstance3D node, Part part)
+    private static readonly string s_hide = Main.Arg("--flora-hide") ?? ""; // dev: Plant,Tree,Marker,Shadow (what each costs)
+
+    private void Track(MultiMeshInstance3D node, Part part, int kind = -1)
     {
+        if (s_hide.Contains(part.ToString())) node.Layers = 0;
         Apply(node, part);
-        _ranged.Add((node, part));
+        _ranged.Add((node, part, kind));
     }
 
     private static MultiMesh NewMultiMesh(Mesh mesh, int count) => new()
@@ -491,18 +509,46 @@ public partial class FloraView : Node3D
     {
         var canopy = DwarfRender.DwarfMaterials.Foliage;
         var bark = DwarfRender.DwarfMaterials.CreateObject(Colors.White, DwarfRender.GlyphAtlas.Trunk, null, useVertexColor: true);
+        // The inner core opaque, in a surface of its own (--no-core-split: the old one-material canopy, to compare).
+        var core = Main.Arg("--no-core-split") == null ? DwarfRender.DwarfMaterials.FoliageCore : null;
         _materials.Add(canopy);
         _materials.Add(bark);
-        Mesh Tree(DwarfRender.TreeSpecies species, float scale, int seed) =>
-            DwarfRender.TreeBuilder.Build(species, scale, seed, into: new ArrayMesh(), canopyMaterial: canopy, barkMaterial: bark,
-                leafCards: _sim.World != null && DwarfRender.DwarfRenderer.Instance?.Settings.FoliageTechnique == DwarfRender.FoliageMode.LeafCards,
-                lodEdge: TreeLodEdge).canopy;
-        _meshes[(int)PlantKind.Oak] = Tree(DwarfRender.TreeSpecies.Oak, 0.9f, 1);
-        _meshes[(int)PlantKind.Willow] = Tree(DwarfRender.TreeSpecies.Oak, 1.05f, 7);
-        _meshes[(int)PlantKind.Birch] = Tree(DwarfRender.TreeSpecies.Birch, 0.85f, 2);
-        _meshes[(int)PlantKind.Pine] = Tree(DwarfRender.TreeSpecies.Pine, 0.85f, 3);
-        _meshes[(int)PlantKind.Spruce] = Tree(DwarfRender.TreeSpecies.Pine, 0.75f, 5);
-        _meshes[(int)PlantKind.Shrub] = Tree(DwarfRender.TreeSpecies.Bush, 0.55f, 4);
-        _meshes[(int)PlantKind.BerryBush] = Tree(DwarfRender.TreeSpecies.Bush, 0.6f, 6);
+        if (core != null) _materials.Add(core);
+        bool cards = _sim.World != null && DwarfRender.DwarfRenderer.Instance?.Settings.FoliageTechnique == DwarfRender.FoliageMode.LeafCards;
+        void Tree(PlantKind kind, DwarfRender.TreeSpecies species, float scale, int seed)
+        {
+            _meshes[(int)kind] = DwarfRender.TreeBuilder.Build(species, scale, seed, into: new ArrayMesh(), canopyMaterial: canopy, barkMaterial: bark,
+                leafCards: cards, lodEdge: TreeLodEdge, coreMaterial: core).canopy;
+            _coarsest[(int)kind] = DwarfRender.TreeBuilder.Build(species, scale, seed, into: new ArrayMesh(), canopyMaterial: canopy, barkMaterial: bark,
+                leafCards: false, coreMaterial: core, level: DwarfRender.TreeBuilder.Coarsest).canopy;
+        }
+        Tree(PlantKind.Oak, DwarfRender.TreeSpecies.Oak, 0.9f, 1);
+        Tree(PlantKind.Willow, DwarfRender.TreeSpecies.Oak, 1.05f, 7);
+        Tree(PlantKind.Birch, DwarfRender.TreeSpecies.Birch, 0.85f, 2);
+        Tree(PlantKind.Pine, DwarfRender.TreeSpecies.Pine, 0.85f, 3);
+        Tree(PlantKind.Spruce, DwarfRender.TreeSpecies.Pine, 0.75f, 5);
+        Tree(PlantKind.Shrub, DwarfRender.TreeSpecies.Bush, 0.55f, 4);
+        Tree(PlantKind.BerryBush, DwarfRender.TreeSpecies.Bush, 0.6f, 6);
     }
+
+    // ---- The coarsest trees (8-face blobs) once a tile is a few pixels: swapped into the tree MultiMeshes by zoom, not by
+    // Godot's LOD (which in iso picks the coarsest level it has at any zoom).
+    private readonly Mesh?[] _coarsest = new Mesh?[PlantInfo.KindCount];
+    private bool _useCoarsest;
+
+    /// <summary>Trees drawn with their coarsest meshes (set each frame by Main from the pixel size).</summary>
+    public bool Coarsest
+    {
+        get => _useCoarsest;
+        set
+        {
+            if (_useCoarsest == value) return;
+            _useCoarsest = value;
+            _ranged.RemoveAll(r => !IsInstanceValid(r.Node));
+            foreach (var (node, part, kind) in _ranged)
+                if (part == Part.Tree) node.Multimesh.Mesh = TreeMesh(kind);
+        }
+    }
+
+    private Mesh TreeMesh(int kind) => _useCoarsest && _coarsest[kind] is { } m ? m : _meshes[kind];
 }

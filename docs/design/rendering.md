@@ -5,7 +5,7 @@ The Dwarf Render kit integration (pixel art, glyph ids, ASCII zoom), the graphic
 ## Look (Dwarf Render kit, `game/addons/dwarf_render`)
 
 - **What:** a port of the user's Three.js diorama (`reference/voxel-diorama.html` is the answer key): the 3D world is drawn
-  into two low-res SubViewports sharing our World3D (art + ids), post-processed (outlines, grade, palette LUT, ordered
+  into a low-res SubViewport sharing our World3D (art; the glyph ids come from the same render, see **Ids** below), post-processed (outlines, grade, palette LUT, ordered
   dither, foliage-aware silhouettes) and presented full-screen on CanvasLayer -100 under the UI; the main viewport's 3D is
   off. Zoomed right in, art pixels dissolve into glyphs; far out (all symbols past ~450 tiles) the view becomes DF-style
   object symbols with colonists always ☺ (`AsciiMarker`). F10 tunes everything (presets, Save to
@@ -46,7 +46,14 @@ The Dwarf Render kit integration (pixel art, glyph ids, ASCII zoom), the graphic
   `ReferenceDistance / rig distance` (`ZoomOverride`); the rig eases zoom so ASCII transitions glide.
 - **Glyph ids:** Godot 4.7 stores roughness as is (or 1 - r for dynamic objects): ids decode as `round(a * 127)`, groups
   0..63 only (`GlyphAtlas.MaxGroup`). The kit first assumed the older 7-bit packing and read every id doubled (grass drew
-  farm symbols). `--id-probe` on the kit demo prints the decoded ids. **Symbols (`GameLooks.RegisterSymbols`):** DF
+  farm symbols). `--id-probe` on the kit demo prints the decoded ids. **Ids (`IdsEffect`):** a compositor effect on the
+  art camera (after the opaque pass) reads the art render's own depth and normal-roughness buffers with a compute shader and
+  writes the ids image (id, linear depth, tile hash) the present shader reads. It replaced a second SubViewport that
+  rendered the whole scene again whenever any ASCII showed (every draw call twice: the prim jump at the ASCII onset), and
+  that pass also redrew the sun's four shadow cascades. Raw buffer roughness is r·127/255 (1 - that for dynamic objects),
+  so ids are `round(w·255)`; view positions come from the camera's near/far/size (Godot's projection with reversed,
+  [0, 1] depth). `--ids-check` renders both and diffs them (ids and sky identical, depth within 0.1%, tile hash differs only
+  on tile edges); `--ids-viewport` uses the old pass; the sun sits on layer 18, hidden from it (`IdsSkipSun`). **Symbols (`GameLooks.RegisterSymbols`):** DF
   world-map style: grassland ", broadleaf ♣, conifers ♠ ↑, mountains ▲ (surface stone), cut rock ▓ (the cap uses
   `dr_cap_group`), water ≈ ~, sand ░, stairs < > X, ants a, nests ∩ (nodes named `Nest_*`), beds/tables Θ Π ╥, walls #; the
   UI's bitmap glyphs are imported into the kit font. No dither on the sky (a dot grid in the far view).
@@ -58,9 +65,17 @@ The Dwarf Render kit integration (pixel art, glyph ids, ASCII zoom), the graphic
   `--tree-lod=0` turns it off. Tree shadows: full trees below 0.2 t/px, then the opaque 20-triangle markers' over the
   same range (`FloraView.ShadowProxies`, a shadows-only marker MultiMesh per region: each cascade redraws every caster, and
   the foliage's dithered cut-outs are dear per pixel there), none with the markers (`TreeShadows`). Before this, trees were
-  ~90% of the prims at every zoom; the worst frame (low pitch -20, 90 tiles, 0.25 t/px) went 20.9M / 17.2 ms -> 6.6M /
-  9.4 ms, and every zoom at pitch -35 and -50 holds vsync (120 Hz, RTX 3070). The rest at -20 is terrain over the long
-  low-angle shadow range.
+  ~90% of the prims at every zoom. **Coarsest trees** (`FloraView.Coarsest`, from 0.1 t/px: a tile 10 art pixels or
+  fewer): `TreeBuilder` level 2 (8-face blobs scaled 1.25 to keep the canopy's volume, 3-sided cones and trunk) swapped into
+  the tree MultiMeshes by zoom, since in iso Godot's own LOD picks the coarsest level it has at any zoom. Godot's primitive
+  counter undercounts MultiMeshes: at 1440p, pitch -20, 90 tiles there were 25k full trees in range (`--tree-count`).
+  **Opaque core:** the canopy's inner core is its own surface (`foliage_core.gdshader`, `DwarfMaterials.FoliageCore`: back
+  faces culled, no discard, the cut flattens it onto the cut plane in the vertex shader) so it takes early depth tests;
+  the shell keeps the dithered discard (`foliage.gdshaderinc` holds both). Measured and dropped: hard shadow filtering,
+  unshaded foliage, near-to-far instance order (none changed the GPU time). At 1440p (2560x1440, RTX 3070, vsync off)
+  every zoom at pitch -20 and -35 now runs at most 5.7 ms (90-105 tiles at -20); before this pass, 60-90 tiles took
+  8-11 ms (trees) and 150 tiles 9.6 ms (8.3k draws, see **far shadows** in performance.md). Perspective still peaks at
+  ~8 ms at 90 tiles. Measure at the player's resolution: `--resolution 2560x1440` before `--`.
 - Not ported yet: per-vertex AO / cave sky light and edge rounding (would need mesher changes), tree variants per species.
 
 
