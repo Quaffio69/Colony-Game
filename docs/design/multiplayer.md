@@ -19,7 +19,9 @@ Lockstep networking, state hashes, snapshots and saves, the command system, fact
   `HashInterval` (100) ticks, sent with the next turn. `LockstepClient`: `Connect` (waits for the welcome),
   `BuildWorld` (loads the snapshot), `Poll`, `Advance`
   (applies each command when the sim reaches its tick, never runs past `ConfirmedTick`, compares hashes:
-  `DesyncTick`), `Send`. Guests trail the host by their latency and catch up.
+  `DesyncTick`), `Send`. Guests trail the host by their latency and catch up. On a desync the client stops (no more
+  ticks) and sends `Msg.Resync`; the host answers `Msg.State` (its tick and a fresh snapshot, like a join; turns go on
+  from there), the client drops what it had queued, and the game opens it (`ResyncReady`, `TakeResync`, a scene reload).
 - **`StateHash`:** colonists, piles, designations, stockpiles, rooms, blueprints, edge/cover revisions, combined
   order-independently with a fixed 64-bit mix (never `HashCode`: seeded per process; also never enumerate
   string-keyed dictionaries in sim logic, their order differs between processes).
@@ -28,10 +30,10 @@ Lockstep networking, state hashes, snapshots and saves, the command system, fact
   `HostNewGame`, `JoinGame` (builds the world, reloads onto it), `LeaveOnline`. Host frames: `Poll`, ticks with
   `AfterTick`, `Broadcast`; the menu doesn't pause an online game. Client frames: `Poll`, `Advance` (all confirmed
   ticks, a third at a time when far behind); its tool sends commands (`DesignationTool.Remote`) and shows their results
-  when they come back (`Commands.Applied`); no pause/speed keys. HUD shows `NetStatus` (DESYNC/Disconnected in bad).
+  when they come back (`Commands.Applied`); no pause/speed keys. HUD shows `NetStatus` ("Out of step: reloading from the host"/Disconnected in bad).
   Main menu Multiplayer: name, port, Host this world, Host a new world (2-4 players), Join by address, players, Leave.
   Dev: `--host[=PORT]`, `--join=ADDR[:PORT]`, `--name=`, `--speed=0..2`, `--net-orders` (orders own colony through the
-  command path; with `--net-ants` also an angry ant nest beside it), `--net-check=TICKS` (prints the state hash at that tick; client quits, host 15 s later). End-to-end:
+  command path; with `--net-ants` also an angry ant nest beside it), `--net-check=TICKS` (prints the state hash at that tick; client quits, host 15 s later), `--net-desync=TICK` (a client puts a stone in its world alone: it must resync, and its hash line says "resynced 1x"). End-to-end:
   start a headless host with `--colonies=2 --host=7781 --net-orders --net-check=1500`, then a client with
   `--join=127.0.0.1:7781 --net-orders --net-check=1500`; the two `[net] ... hash` lines must match (they did).
 - Limits: demos edit the world outside commands, so they're off online (a world a demo changed can still be hosted:

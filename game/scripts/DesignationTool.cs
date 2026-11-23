@@ -172,6 +172,9 @@ public partial class DesignationTool : Node3D
                 string levels = h > 1 ? $"levels {Math.Min(a.Z, b.Z)}..{Math.Max(a.Z, b.Z)}" : $"level {a.Z}";
                 return $"{what}: {w}x{d}x{h} ({levels})   click to confirm, Shift/Ctrl or Z/X: change level, Esc/RMB: abort";
             }
+            if (Mode == ToolMode.Room)
+                return $"{Workshop.Name}: drag a box over floor to paint it (touching rooms of the same kind join up)   " +
+                       "Shift+drag: erase cells (shrink or split a room; parts on erased cells come down)";
             if (Mode == ToolMode.Rack)
             {
                 int planks = Constructions.Cost(StructureKind.Rack, Colony.Core.Items.Stockpiles.MaxRackLevels).Count;

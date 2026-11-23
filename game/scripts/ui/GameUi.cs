@@ -285,7 +285,7 @@ public partial class GameUi : CanvasLayer
         _speed.Index = Main.Paused ? 0 : Main.SpeedIndex + 1;
         _speed.Visible = Main.Client == null; // a guest runs at the host's pace
         _net.Text = Main.NetStatus;
-        G.Retone(_net, _net.Text.StartsWith("DESYNC") || _net.Text.StartsWith("Disconnected") ? "Bad" : "Info");
+        G.Retone(_net, _net.Text.StartsWith("Out of step") || _net.Text.StartsWith("Disconnected") ? "Bad" : "Info");
     }
 
     // ---- Status pill (when the mouse is over the world) -----------------------------------------------

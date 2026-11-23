@@ -396,6 +396,17 @@ public sealed class Rooms
     }
 
     /// <summary>Removes every part with a cell in the box. Returns how many were removed.</summary>
+    /// <summary>Built parts with a cell in the box (the room cells of its levels), each once, in cell order.</summary>
+    public List<Part> BuiltPartsIn(TilePos a, TilePos b, int faction = Owners.Any)
+    {
+        var parts = new List<Part>();
+        ForCells(a, b, c =>
+        {
+            if (_cellPart.TryGetValue(c, out var p) && p.Built && (faction == Owners.Any || p.Room.Faction == faction) && !parts.Contains(p)) parts.Add(p);
+        });
+        return parts;
+    }
+
     public int RemovePartsIn(TilePos a, TilePos b, int faction = Owners.Any, bool onlyPlanned = false)
     {
         var parts = new List<Part>();

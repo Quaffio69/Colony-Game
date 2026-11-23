@@ -48,6 +48,28 @@ public class IndustryTests
     }
 
     [Fact]
+    public void ErasingCells_ShrinksAWorkshop_AndPartsThereLeaveTheirMaterials()
+    {
+        var sim = Meadow();
+        sim.Commands.Execute(new PaintRoom("carpentry", G(2, 2), G(9, 5)));
+        var saw = sim.Rooms.Place(RoomType.Carpentry.Stations[0], new TilePos(8, 3, 4), false)!;
+        Assert.True(saw.Built);
+        int before = sim.Items.UnitsOf(saw.Cost.Material);
+
+        // Erase the east end, where the saw stands: the room shrinks, the saw comes down and leaves its materials.
+        string message = sim.Commands.Execute(new EraseRoom(G(8, 2), G(9, 5)));
+        Assert.Equal("Erased 8 room cells and took down 1 parts", message);
+        var room = Assert.Single(sim.Rooms.All);
+        Assert.Equal(24, room.Cells.Count);
+        Assert.Empty(room.Parts);
+        Assert.Equal(before + saw.Cost.Count, sim.Items.UnitsOf(saw.Cost.Material));
+
+        // Erasing a strip through the middle splits it in two.
+        sim.Commands.Execute(new EraseRoom(G(5, 2), G(5, 5)));
+        Assert.Equal(2, sim.Rooms.All.Count);
+    }
+
+    [Fact]
     public void Rooms_SpanLevels_OnlyWhereWorkersCanWalkBetweenThem()
     {
         var sim = Meadow();

@@ -30,6 +30,8 @@ internal enum Msg : byte
     Hash,        // host -> client: the state hash at a tick (desync check)
     Bye,         // either way: a reason, then the connection closes
     Players,     // host -> client: who is in the game
+    Resync,      // client -> host: my world no longer matches yours; send it again
+    State,       // host -> client: the tick and a snapshot of the game (a resync), commands after it follow in turns
 }
 
 /// <summary>
@@ -125,7 +127,7 @@ public sealed record NetPlayer(int Faction, string Name);
 /// </summary>
 public sealed class LockstepHost : IDisposable
 {
-    public const int Protocol = 6;
+    public const int Protocol = 7;
     /// <summary>Ticks between desync checks (5 s at 1x).</summary>
     public const int HashInterval = 100;
 
@@ -217,6 +219,14 @@ public sealed class LockstepHost : IDisposable
                 }));
                 Message?.Invoke($"{c.Name} joined as {_sim.Factions[free].Name}");
                 SendPlayers();
+                break;
+            case Msg.Resync when c.Faction > 0:
+                // A desynced guest gets the game again as it stands, like a joiner; turns go on from here.
+                var fresh = Snapshot.Take(_sim, _settings);
+                c.SentLog = _sim.Commands.Log.Count;
+                c.SentTick = _sim.Tick;
+                c.Peer.Send(Msg.State, Peer.Pack(w => { w.Write(_sim.Tick); w.Write(fresh.Length); w.Write(fresh); }));
+                Message?.Invoke($"{c.Name}'s world fell out of step: sent them the game again");
                 break;
             case Msg.Command when c.Faction > 0:
                 var command = CommandCodec.Read(r) with { Player = c.Faction }; // a client acts for its own colony only
@@ -320,9 +330,15 @@ public sealed class LockstepClient : IDisposable
     public IReadOnlyList<NetPlayer> Players { get; private set; } = [];
     public bool Connected => !_peer.Closed;
     public string? CloseReason => _peer.CloseReason;
-    /// <summary>Set when the sim's state hash disagreed with the host's: the tick it happened.</summary>
+    /// <summary>Set when the sim's state hash disagreed with the host's: the tick it happened. The sim stops there and
+    /// the host is asked for the game again (<see cref="ResyncReady"/>, then <see cref="TakeResync"/>).</summary>
     public long? DesyncTick { get; private set; }
     public event Action<string>? Message;
+    /// <summary>The host's fresh snapshot after a desync has arrived: load it with <see cref="TakeResync"/>.</summary>
+    public bool ResyncReady => _resync != null;
+    /// <summary>How many times this client has been sent the game again.</summary>
+    public int Resyncs { get; private set; }
+    private byte[]? _resync;
 
     private LockstepClient(Peer peer, int faction, GameSettings settings, long tick, byte[] state)
     {
@@ -389,6 +405,14 @@ public sealed class LockstepClient : IDisposable
                 case Msg.Hash:
                     _hashes[r.ReadInt64()] = r.ReadUInt64();
                     break;
+                case Msg.State:
+                    // Everything sent before this is in the snapshot: drop it and go on from the host's tick.
+                    long at = r.ReadInt64();
+                    _resync = r.ReadBytes(r.ReadInt32());
+                    _pending.Clear();
+                    _hashes.Clear();
+                    ConfirmedTick = at;
+                    break;
                 case Msg.Players:
                     int n = r.ReadInt32();
                     var list = new List<NetPlayer>();
@@ -411,6 +435,7 @@ public sealed class LockstepClient : IDisposable
     public int Advance(ColonySim sim, int maxTicks)
     {
         int ran = 0;
+        if (DesyncTick != null) return 0; // out of step: wait for the host's snapshot rather than play on a wrong world
         while (true)
         {
             while (_pending.TryPeek(out var e) && e.Tick <= sim.Tick)
@@ -424,10 +449,23 @@ public sealed class LockstepClient : IDisposable
             if (_hashes.Remove(sim.Tick, out ulong expected) && DesyncTick is null && StateHash.Compute(sim) != expected)
             {
                 DesyncTick = sim.Tick;
-                Message?.Invoke($"Desync at tick {sim.Tick}: this world no longer matches the host's");
+                Message?.Invoke($"Desync at tick {sim.Tick}: this world no longer matches the host's; reloading it from the host");
+                _peer.Send(Msg.Resync, []);
+                break;
             }
         }
         return ran;
+    }
+
+    /// <summary>Builds the world from the host's snapshot sent after a desync (the game then swaps to it) and resumes.</summary>
+    public ColonySim TakeResync()
+    {
+        var data = _resync ?? throw new InvalidOperationException("no snapshot from the host yet");
+        var sim = Snapshot.Load(data);
+        _resync = null;
+        DesyncTick = null;
+        Resyncs++;
+        return sim;
     }
 
     /// <summary>Ticks the host has confirmed that this sim hasn't run yet.</summary>

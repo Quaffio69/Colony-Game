@@ -330,6 +330,7 @@ public partial class Main : Node3D
         SaveFrame();
         SaveDevArgs();
         NetCheck();
+        NetDesyncTest();
     }
 
     /// <summary>

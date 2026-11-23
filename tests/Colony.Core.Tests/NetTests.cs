@@ -92,6 +92,42 @@ public class NetTests
     }
 
     [Fact]
+    public void ADesyncedClient_Stops_AndReloadsTheGameFromTheHost()
+    {
+        var hostSim = Small.Create();
+        using var host = new LockstepHost(hostSim, Small, port: 0);
+        using var client = Join(host);
+        var clientSim = client.BuildWorld();
+        for (int f = 0; f < 10; f++) Frame(hostSim, host, clientSim, client);
+
+        // Something only the client's world has: the next hash check catches it.
+        clientSim.Items.Drop(clientSim.Colonists[0].Position, Items.ItemType.Stone, 7);
+        for (int f = 0; f < 30 && client.DesyncTick == null; f++) Frame(hostSim, host, clientSim, client);
+        Assert.NotNull(client.DesyncTick);
+        long stoppedAt = clientSim.Tick;
+        Frame(hostSim, host, clientSim, client);
+        Assert.Equal(stoppedAt, clientSim.Tick); // it doesn't play on
+
+        // The host sends the game again; the client swaps to it and plays on in step.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (!client.ResyncReady && clock.ElapsedMilliseconds < 5000)
+        {
+            host.Poll();
+            client.Poll();
+            Thread.Sleep(1);
+        }
+        Assert.True(client.ResyncReady);
+        clientSim = client.TakeResync();
+        Assert.Null(client.DesyncTick);
+        Assert.Equal(1, client.Resyncs);
+        hostSim.Commands.Execute(new DesignateBox(hostSim.Colonists[0].Position.Offset(2, -1, -1), hostSim.Colonists[0].Position.Offset(4, 1, -1), DesignationKind.Dig));
+        for (int f = 0; f < 60; f++) Frame(hostSim, host, clientSim, client);
+        Assert.Null(client.DesyncTick);
+        Assert.Equal(hostSim.Tick, clientSim.Tick);
+        Assert.Equal(StateHash.Compute(hostSim), StateHash.Compute(clientSim));
+    }
+
+    [Fact]
     public void AClient_CanOnlyActForItsOwnColony()
     {
         var hostSim = Small.Create();

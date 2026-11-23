@@ -26,6 +26,11 @@ public abstract record Command
     protected static string Mat(ItemType t) => t.Name.ToLowerInvariant();
     /// <summary>The issuing colony's homes and housing policies.</summary>
     protected Housing Homes(ColonySim sim) => sim.Factions[Math.Clamp(Player, 0, sim.Factions.Count - 1)].Housing;
+    /// <summary>Taken-down built parts leave their materials where they stood (blueprints leave what was delivered).</summary>
+    protected static void Refund(ColonySim sim, List<Part> built)
+    {
+        foreach (var p in built) sim.Items.Drop(p.Cells[0], p.Cost.Material, p.Cost.Count);
+    }
 }
 
 // ---- Orders and zones ------------------------------------------------------------------------------------
@@ -109,7 +114,7 @@ public sealed record Demolish(TilePos A, TilePos B) : Command
         for (int x = x0; x <= x1; x++)
             if (sim.Rooms.PartAt(new TilePos(x, y, z)) is { Built: true } p && p.Room.Faction == Player && !built.Contains(p)) built.Add(p);
         int parts = sim.Rooms.RemovePartsIn(A, B, Player);
-        foreach (var p in built) sim.Items.Drop(p.Cells[0], p.Cost.Material, p.Cost.Count);
+        Refund(sim, built);
         return $"Demolished {walls} wall pieces, {covers} floors and roofs, {structures} structures, {parts} room parts; cancelled {plans} plans";
     }
 }
@@ -171,7 +176,13 @@ public sealed record PaintRoom(string RoomTypeId, TilePos A, TilePos B) : Comman
 
 public sealed record EraseRoom(TilePos A, TilePos B) : Command
 {
-    public override string Apply(ColonySim sim) => $"Erased {sim.Rooms.Erase(A, B, Player)} room cells";
+    public override string Apply(ColonySim sim)
+    {
+        var built = sim.Rooms.BuiltPartsIn(A, B, Player); // they come down with their cells, leaving their materials
+        int cells = sim.Rooms.Erase(A, B, Player);
+        Refund(sim, built);
+        return built.Count == 0 ? $"Erased {cells} room cells" : $"Erased {cells} room cells and took down {built.Count} parts";
+    }
 }
 
 /// <summary>Places a part (a blueprint unless instant build) with its origin cell, rotation and size.</summary>
@@ -192,7 +203,13 @@ public sealed record PlacePart(string PartId, TilePos Origin, bool Rotated, int 
 
 public sealed record RemoveParts(TilePos A, TilePos B) : Command
 {
-    public override string Apply(ColonySim sim) => $"Removed {sim.Rooms.RemovePartsIn(A, B, Player)} parts";
+    public override string Apply(ColonySim sim)
+    {
+        var built = sim.Rooms.BuiltPartsIn(A, B, Player);
+        int n = sim.Rooms.RemovePartsIn(A, B, Player);
+        Refund(sim, built);
+        return $"Removed {n} parts";
+    }
 }
 
 /// <summary>Switches the machine covering this cell to its next (or previous) recipe.</summary>

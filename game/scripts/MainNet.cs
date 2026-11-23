@@ -148,6 +148,16 @@ public partial class Main
     {
         if (s_client is not { } client) return false;
         client.Poll();
+        if (client.ResyncReady)
+        {
+            // Out of step with the host: open its fresh snapshot (a scene reload, like joining) instead of playing on.
+            var sim = client.TakeResync();
+            s_replayable = sim;
+            s_launch = sim;
+            s_launchResult = null;
+            GetTree().ReloadCurrentScene();
+            return true;
+        }
         if (!_sim.WaterReady) return true;
         var clock = System.Diagnostics.Stopwatch.StartNew();
         long behind = client.Behind(_sim);
@@ -166,7 +176,7 @@ public partial class Main
             if (s_client is { } client)
             {
                 if (!client.Connected) return $"Disconnected ({client.CloseReason})";
-                if (client.DesyncTick is { } t) return $"DESYNC at {t}";
+                if (client.DesyncTick is { } t) return $"Out of step at tick {t}: reloading from the host...";
                 long behind = client.Behind(_sim);
                 return $"Online · {client.Players.Count} players" + (behind > 20 ? $" · {behind} behind" : "");
             }
@@ -186,9 +196,21 @@ public partial class Main
             s_lastNetCheck = at;
             GD.Print($"[net] {(s_host != null ? "host" : s_client != null ? "client" : "solo")} tick {_sim.Tick} hash {StateHash.Compute(_sim):x16}" +
                      $" (ants slain {_sim.Wildlife.Slain}, out {_sim.Wildlife.Creatures.Count}, colonists hurt {_sim.Colonists.Count(c => c.Health < Colony.Core.Agents.Colonist.MaxHealth)}, dead {_sim.Deaths})" +
-                     (s_client?.DesyncTick is { } d ? $" DESYNC at {d}" : ""));
+                     (s_client?.DesyncTick is { } d ? $" DESYNC at {d}" : "") + (s_client is { Resyncs: > 0 } rc ? $" (resynced {rc.Resyncs}x)" : ""));
             if (s_client != null) GetTree().Quit();
         }
+    }
+
+    private static bool s_desynced;
+
+    /// <summary>--net-desync=TICK (a client): puts a stone into this world alone at that tick, so the next hash check
+    /// finds it out of step and it reloads from the host (the NetCheck line then says how many resyncs).</summary>
+    private void NetDesyncTest()
+    {
+        if (s_desynced || s_client == null || !long.TryParse(Arg("--net-desync"), out long at) || _sim.Tick < at) return;
+        s_desynced = true;
+        _sim.Items.Drop(_sim.Colonists[0].Position, Colony.Core.Items.ItemType.Stone, 7);
+        GD.Print($"[net] client dropped a stone at tick {_sim.Tick} (a deliberate desync)");
     }
 
     private long _netQuitAt = -1;
