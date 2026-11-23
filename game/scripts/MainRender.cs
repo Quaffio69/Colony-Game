@@ -109,16 +109,15 @@ public partial class Main
         _ceiling = ceiling >= _ceiling ? ceiling : Mathf.Lerp(_ceiling, ceiling, 1f - Mathf.Exp(-(float)GetProcessDeltaTime() * 2f));
         _rig.Ceiling = _ceiling;
         _flora.RangeOffset = _rig.CameraBack - _rig.Distance;            // detail ranges measure from the pivot, not the iso camera
-        // Full-detail plants only while a tile is 3+ art pixels across (a tree is ~1k triangles; in iso every tree on screen is
-        // the same size, so further out the whole map's 130k trees drew in full and again into the shadows: 570M triangles; at
-        // 2 pixels a tile, 0.5 tiles/px, a kit tree is a few pixels the 20-triangle marker matches, and the full trees cost
-        // ~20M triangles with their shadow cascades, the worst band before the far view), and not once the far view is mostly
-        // symbols. From 5 pixels a tile down, tree shadows come from the markers (each cascade redraws every caster), and from
-        // 1.3 pixels down there are none (a pixel each; the markers' shadows over the iso shadow range were ~10M triangles).
-        // Hysteresis so a zoom near an edge doesn't flip them.
+        // Full-detail plants only while a tile is 3+ art pixels across (in iso every tree on screen is the same size, so further
+        // out the whole map's 130k trees drew in full and again into the shadows; at 2 pixels a tile, 0.5 tiles/px, a kit tree is
+        // a few pixels the 20-triangle marker matches), and not once the far view is mostly symbols. From 5 pixels a tile down,
+        // tree shadows come from the opaque markers (each cascade redraws every caster, and the foliage's dithered cut-outs make
+        // its shadow passes dear per pixel); with the markers there are none (a pixel or two each over the long low-angle shadow
+        // range). Hysteresis so a zoom near an edge doesn't flip them. --no-shadow-proxies compares.
         _flora.Detail = _renderer.TexelWorld < (_flora.Detail ? 0.42f : 0.34f) && !(_renderer.Zoom < 1f && _renderer.AsciiAmount > 0.6f);
-        _flora.ShadowProxies = _renderer.TexelWorld > (_flora.ShadowProxies ? 0.17f : 0.2f);
-        _flora.TreeShadows = _renderer.TexelWorld < (_flora.TreeShadows ? 0.75f : 0.6f);
+        _flora.ShadowProxies = Arg("--no-shadow-proxies") == null && _renderer.TexelWorld > (_flora.ShadowProxies ? 0.17f : 0.2f);
+        _flora.TreeShadows = _renderer.TexelWorld < (_flora.TreeShadows ? 0.42f : 0.34f);
         // Once an art pixel covers more than a tile, coarse far blocks (cells of 2 tiles) draw the terrain and water instead
         // of ten thousand sections. On from 1.5 tiles a pixel, off below 1.2, so a zoom near the edge doesn't flip it.
         _world.FarView = _renderer.TexelWorld > (_world.FarView ? 1.2f : 1.5f);

@@ -389,7 +389,7 @@ public partial class Main : Node3D
         }
     }
 
-    private static string? Arg(string name)
+    internal static string? Arg(string name)
     {
         foreach (var arg in OS.GetCmdlineUserArgs())
         {
@@ -465,7 +465,10 @@ public partial class Main : Node3D
                 }
             }
             float benchYaw = float.TryParse(Arg("--yaw"), System.Globalization.CultureInfo.InvariantCulture, out float by) ? by : 200f; // dev: compare turns
-            if (float.TryParse(Arg("--zoom"), out float zoom)) _rig.Focus(_world.Center, zoom, yaw: benchYaw, pitch: -50f);
+            float benchPitch = float.TryParse(Arg("--pitch"), System.Globalization.CultureInfo.InvariantCulture, out float bp) ? bp : -50f; // dev: low views
+            if (float.TryParse(Arg("--zoom"), out float zoom)) _rig.Focus(_world.Center, zoom, yaw: benchYaw, pitch: benchPitch);
+            else if (Arg("--pitch") != null) _rig.Focus(_rig.Position, pitch: benchPitch);
+            if (Arg("--no-flora") != null) _flora.Visible = false; // dev: what the trees cost
             if (Arg("--look")?.Split(',') is [var lx, var ly] && int.TryParse(lx, out int lookX) && int.TryParse(ly, out int lookY))
                 _rig.Focus(SimSpace.TileCenter(new TilePos(lookX, lookY, _sim.World.SurfaceLevel(lookX, lookY))), float.TryParse(Arg("--zoom"), out float lz) ? lz : 60f, yaw: benchYaw, pitch: -55f);
             _benchActive = Arg("--screenshot") != null || Arg("--bench") != null;

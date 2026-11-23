@@ -69,6 +69,39 @@ public static class TreeBuilder
 			m.SurfaceSetMaterial(m.GetSurfaceCount() - 1, material ?? (foliage ? DwarfMaterials.Foliage : BarkMaterial));
 			return m;
 		}
+
+		/// <summary>This buffer as the detailed level and <paramref name="coarse"/> as its LOD (one vertex buffer, two index
+		/// lists); Godot draws the coarse one once <paramref name="lodEdge"/> world units are under a pixel.</summary>
+		public ArrayMesh ToMeshWithLod(MeshBuf coarse, float lodEdge, bool foliage, ArrayMesh into, Material material)
+		{
+			if (Pos.Count == 0) return into;
+			int n0 = Pos.Count, n1 = coarse.Pos.Count;
+			Pos.AddRange(coarse.Pos); Nor.AddRange(coarse.Nor); Col.AddRange(coarse.Col); Uv.AddRange(coarse.Uv);
+			C0.AddRange(coarse.C0); C1.AddRange(coarse.C1);
+			var full = new int[n0];
+			for (int i = 0; i < n0; i++) full[i] = i;
+			var low = new int[n1];
+			for (int i = 0; i < n1; i++) low[i] = n0 + i;
+			var arrays = new Godot.Collections.Array(); arrays.Resize((int)Mesh.ArrayType.Max);
+			arrays[(int)Mesh.ArrayType.Vertex] = Pos.ToArray();
+			arrays[(int)Mesh.ArrayType.Normal] = Nor.ToArray();
+			arrays[(int)Mesh.ArrayType.Color] = Col.ToArray();
+			arrays[(int)Mesh.ArrayType.TexUV] = Uv.ToArray();
+			arrays[(int)Mesh.ArrayType.Index] = full;
+			Mesh.ArrayFormat flags = 0;
+			if (foliage)
+			{
+				arrays[(int)Mesh.ArrayType.Custom0] = C0.ToArray();
+				arrays[(int)Mesh.ArrayType.Custom1] = C1.ToArray();
+				long f = (long)Mesh.ArrayCustomFormat.RgbaFloat;
+				flags = (Mesh.ArrayFormat)((f << (int)Mesh.ArrayFormat.FormatCustom0Shift) | (f << (int)Mesh.ArrayFormat.FormatCustom1Shift));
+			}
+			var lods = new Godot.Collections.Dictionary();
+			if (n1 > 0) lods[lodEdge] = low;
+			into.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, null, lods, flags);
+			into.SurfaceSetMaterial(into.GetSurfaceCount() - 1, material ?? (foliage ? DwarfMaterials.Foliage : BarkMaterial));
+			return into;
+		}
 	}
 
 	static float JHash(float x, float y, float z) { double v = Math.Sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return (float)(v - Math.Floor(v)); }
@@ -90,21 +123,34 @@ public static class TreeBuilder
 		return tris;
 	}
 	static readonly List<(Vector3, Vector3, Vector3)> Ico = Icosphere();
+	static readonly List<(Vector3, Vector3, Vector3)> Ico0 = Icosahedron();
+
+	// The plain icosahedron (20 faces): the coarse LOD's blobs (shading follows the canopy's spherical normals, not the facets).
+	static List<(Vector3, Vector3, Vector3)> Icosahedron()
+	{
+		var tris = new List<(Vector3, Vector3, Vector3)>();
+		var fine = Ico;
+		for (int i = 0; i < fine.Count; i += 4)
+		{
+			// Each fine group of four came from one face (a, b, c): its first three triangles start at a, b, c.
+			tris.Add((fine[i].Item1, fine[i + 1].Item1, fine[i + 2].Item1));
+		}
+		return tris;
+	}
 
 	static void Blob(MeshBuf mb, Vector3 c, float r, float squash, int seed, Color col,
-	                 Func<Vector3, (Vector3, float, float, float, float, float)> attr)
+	                 Func<Vector3, (Vector3, float, float, float, float, float)> attr, bool coarse = false)
 	{
 		Vector3 J(Vector3 p)
 		{
 			float k = 1 + (JHash(MathF.Round(p.X * 100) + seed, MathF.Round(p.Y * 100), MathF.Round(p.Z * 100)) - 0.5f) * 0.32f;
 			return new Vector3(p.X * k * r, p.Y * k * r * squash, p.Z * k * r) + c;
 		}
-		foreach (var (a, b, d) in Ico) { var A = J(a); var B = J(b); var D = J(d); mb.Tri(A, B, D, (A + B + D) / 3 - c, col, attr); }
+		foreach (var (a, b, d) in coarse ? Ico0 : Ico) { var A = J(a); var B = J(b); var D = J(d); mb.Tri(A, B, D, (A + B + D) / 3 - c, col, attr); }
 	}
 
-	static void Cone(MeshBuf mb, Vector3 c, float r, float h, int seed, Color col, Func<Vector3, (Vector3, float, float, float, float, float)> attr)
+	static void Cone(MeshBuf mb, Vector3 c, float r, float h, int seed, Color col, Func<Vector3, (Vector3, float, float, float, float, float)> attr, int N = 7)
 	{
-		const int N = 7;
 		Vector3 Ring(int i, float y, float rr)
 		{
 			float a = i % N * MathF.Tau / N;
@@ -124,9 +170,8 @@ public static class TreeBuilder
 		}
 	}
 
-	static void Cylinder(MeshBuf mb, Vector3 a, Vector3 b, float r0, float r1, Color col)
+	static void Cylinder(MeshBuf mb, Vector3 a, Vector3 b, float r0, float r1, Color col, int N = 6)
 	{
-		const int N = 6;
 		var axis = (b - a).Normalized();
 		var side = Mathf.Abs(axis.Y) < 0.9f ? axis.Cross(Vector3.Up).Normalized() : axis.Cross(Vector3.Right).Normalized();
 		var side2 = axis.Cross(side);
@@ -144,9 +189,28 @@ public static class TreeBuilder
 	/// <summary>Build one tree or bush. seed varies the shape; cardSize matches DwarfRenderSettings.CardSize.</summary>
 	/// <summary>Builds a tree. With <paramref name="into"/>, both parts go into that one mesh (canopy surface, then bark) with
 	/// the given materials (for MultiMesh instancing) and it is returned as both.</summary>
+	/// <para>With <paramref name="lodEdge"/> &gt; 0 (needs <paramref name="into"/>) the mesh also carries a coarse LOD (20-face
+	/// blobs, 4-sided cones and trunk, no branches or leaf cards: about a quarter of the triangles) that Godot draws, in the
+	/// view and in shadows, once that many world units fit in a pixel.</para></summary>
 	public static (ArrayMesh canopy, ArrayMesh bark) Build(TreeSpecies species, float scale = 1f, int seed = 1, float cardSize = 0.5f,
-		ArrayMesh into = null, Material canopyMaterial = null, Material barkMaterial = null, bool leafCards = true)
+		ArrayMesh into = null, Material canopyMaterial = null, Material barkMaterial = null, bool leafCards = true, float lodEdge = 0f)
 	{
+		var (canopy, bark) = Shape(species, scale, seed, cardSize, leafCards, coarse: false);
+		if (into != null && lodEdge > 0f)
+		{
+			var (canopyLow, barkLow) = Shape(species, scale, seed, cardSize, leafCards: false, coarse: true);
+			canopy.ToMeshWithLod(canopyLow, lodEdge, true, into, canopyMaterial);
+			bark.ToMeshWithLod(barkLow, lodEdge, false, into, barkMaterial);
+			return (into, into);
+		}
+		if (into != null) { canopy.ToMesh(true, into, canopyMaterial); bark.ToMesh(false, into, barkMaterial); return (into, into); }
+		return (canopy.ToMesh(true), bark.ToMesh(false));
+	}
+
+	// One level of detail; the same seed gives the same tree (blob places, colours) at either.
+	static (MeshBuf canopy, MeshBuf bark) Shape(TreeSpecies species, float scale, int seed, float cardSize, bool leafCards, bool coarse)
+	{
+		int cyl = coarse ? 4 : 6, cone = coarse ? 4 : 7;
 		var rnd = new Random(seed * 7919 + (int)species * 104729);
 		float R() => (float)rnd.NextDouble();
 		var (barkHex, leafHex) = Colours[species];
@@ -164,7 +228,7 @@ public static class TreeBuilder
 			case TreeSpecies.Oak:
 			{
 				float h = 3.0f * s; var top = baseP + new Vector3(0, h, 0);
-				Cylinder(bark, baseP, top, 0.32f * s, 0.2f * s, barkC);
+				Cylinder(bark, baseP, top, 0.32f * s, 0.2f * s, barkC, cyl);
 				var C = top + new Vector3(0, 0.8f * s, 0);
 				blobs.Add((top + new Vector3(0, 1.0f * s, 0), 1.8f * s, 0.85f, C, 0));
 				int n = 3 + (int)(R() * 2);
@@ -173,14 +237,14 @@ public static class TreeBuilder
 					float a = seed * 6.283f + i * 6.283f / n + R() * 0.6f;
 					var c = top + new Vector3(MathF.Cos(a) * 1.35f * s, (R() * 0.7f - 0.15f) * s, MathF.Sin(a) * 1.35f * s);
 					blobs.Add((c, (1.05f + R() * 0.4f) * s, 0.85f, C, 0));
-					Cylinder(bark, top + new Vector3(0, -0.7f * s, 0), c, 0.13f * s, 0.07f * s, barkC);
+					if (!coarse) Cylinder(bark, top + new Vector3(0, -0.7f * s, 0), c, 0.13f * s, 0.07f * s, barkC); // branches: hidden in the canopy far out
 				}
 				H = h + 2.8f * s; break;
 			}
 			case TreeSpecies.Birch:
 			{
 				float h = 3.8f * s; var top = baseP + new Vector3(0, h, 0);
-				Cylinder(bark, baseP, top, 0.17f * s, 0.11f * s, barkC);
+				Cylinder(bark, baseP, top, 0.17f * s, 0.11f * s, barkC, cyl);
 				var C = top + new Vector3(0, 0.5f * s, 0);
 				blobs.Add((top + new Vector3(0, 0.9f * s, 0), 1.15f * s, 1.35f, C, 0));
 				blobs.Add((top + new Vector3(0.5f * s, -0.4f * s, 0.2f * s), 0.9f * s, 1.25f, C, 0));
@@ -190,7 +254,7 @@ public static class TreeBuilder
 			case TreeSpecies.Pine:
 			{
 				float h = 4.6f * s; var top = baseP + new Vector3(0, h, 0);
-				Cylinder(bark, baseP, top, 0.24f * s, 0.1f * s, barkC);
+				Cylinder(bark, baseP, top, 0.24f * s, 0.1f * s, barkC, cyl);
 				cones = true; float y = 1.4f * s;
 				foreach (var (r, hh) in new[] { (1.75f, 2.1f), (1.35f, 1.9f), (0.95f, 1.7f), (0.55f, 1.3f) })
 				{
@@ -219,13 +283,13 @@ public static class TreeBuilder
 			};
 			if (cones)
 			{
-				Cone(canopy, bl.c, bl.r, bl.h, seed * 97, leafC, Attr(0, 0, 0));
-				Cone(canopy, bl.c, bl.r * 0.62f, bl.h * 0.8f, seed * 53, leafC, Attr(1, 0, 1));
+				Cone(canopy, bl.c, bl.r, bl.h, seed * 97, leafC, Attr(0, 0, 0), cone);
+				Cone(canopy, bl.c, bl.r * 0.62f, bl.h * 0.8f, seed * 53, leafC, Attr(1, 0, 1), cone);
 			}
 			else
 			{
-				Blob(canopy, bl.c, bl.r, bl.sq, seed * 97, leafC, Attr(0, 0, 0));
-				Blob(canopy, bl.c, bl.r * 0.66f, bl.sq, seed * 53, leafC, Attr(1, 0, 1));
+				Blob(canopy, bl.c, bl.r, bl.sq, seed * 97, leafC, Attr(0, 0, 0), coarse);
+				Blob(canopy, bl.c, bl.r * 0.66f, bl.sq, seed * 53, leafC, Attr(1, 0, 1), coarse);
 			}
 			// Leaf cards scattered over the blob surface, facing roughly outward.
 			var cc = cones ? bl.c + new Vector3(0, -bl.h * 0.15f, 0) : bl.c;
@@ -247,7 +311,6 @@ public static class TreeBuilder
 				canopy.Tri(p00, p11, p01, nrm, leafC, cardAttr, new Vector2(0, 0), new Vector2(1, 1), new Vector2(0, 1));
 			}
 		}
-		if (into != null) { canopy.ToMesh(true, into, canopyMaterial); bark.ToMesh(false, into, barkMaterial); return (into, into); }
-		return (canopy.ToMesh(true), bark.ToMesh(false));
+		return (canopy, bark);
 	}
 }

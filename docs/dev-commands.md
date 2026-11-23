@@ -22,7 +22,9 @@ Every build, run, bench, demo and debug flag.
 - VS Code: F5 "Play Game" or "Open Godot Editor" (see `.vscode/launch.json`).
 - **Render perf flags:** `--bench-zooms=4,60,450,...` (after the world is built, per rig distance: avg/p95/max ms, draws, primitives,
   art size, tiles per pixel, far view, shadows; the tool for frame-rate work), `--ortho`, `--persp`, `--default-look`, `--pixel=N`,
-  `--no-shadows`, `--shadow-cascades` (overrides on the loaded look, never saved), `--stutter-log`, `--orbit-check`. Findings: iso
+  `--no-shadows`, `--shadow-cascades` (overrides on the loaded look, never saved), `--stutter-log`, `--orbit-check`,
+  `--pitch=DEG` (bench camera pitch, e.g. -20 for low views), `--no-flora` (hide plants: what they cost), `--tree-lod=0`
+  (no coarse tree LOD), `--no-shadow-proxies` (trees cast their own shadows when zoomed out). Findings: iso
   shadows must stay 4 cascades (1, or 2 split at the pivot, lost most shadows); `ShadowsUpTo` (1.5 tiles/px) turns sun shadows
   off further out; shadows are the remaining cost in iso at pixel size 1, 0.5-1 tiles/px (~11-15 ms at 1600x900).
 - **UI dev flags:** `--open=colonists,stocks,...` opens windows (ids: colonists stocks build chronicle housing work inspect

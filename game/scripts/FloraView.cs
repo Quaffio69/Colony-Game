@@ -112,9 +112,9 @@ public partial class FloraView : Node3D
     }
 
     /// <summary>
-    /// Tree shadows come from the 20-triangle markers (a shadows-only copy, every tree in shadow range) instead of the
-    /// ~1k-triangle trees. Each shadow cascade draws the casters again, so zoomed out, full trees' shadows were most of the
-    /// frame (~20M triangles) for shadows a few pixels across that the markers' look the same as.
+    /// Tree shadows come from the 20-triangle markers (a shadows-only copy, over the full trees' range) instead of the trees.
+    /// Each shadow cascade draws the casters again, and the foliage shader's dithered cut-outs make that dear per pixel, so
+    /// zoomed out the trees' shadows were most of the frame, for shadows a few pixels across that the markers' look the same as.
     /// </summary>
     public bool ShadowProxies
     {
@@ -156,7 +156,10 @@ public partial class FloraView : Node3D
                 node.CastShadow = _treeShadows && !_shadowProxies ? GeometryInstance3D.ShadowCastingSetting.On : GeometryInstance3D.ShadowCastingSetting.Off;
                 break;
             case Part.Marker: node.VisibilityRangeBegin = TreeEnd; break;
-            case Part.Shadow: node.Visible = _treeShadows && _shadowProxies; break;
+            case Part.Shadow: // for the trees drawn in full only (the markers beyond cast none)
+                node.Visible = _treeShadows && _shadowProxies;
+                node.VisibilityRangeEnd = TreeEnd;
+                break;
         }
     }
 
@@ -236,7 +239,7 @@ public partial class FloraView : Node3D
             };
             node.AddChild(markers);
             Track(markers, Part.Marker);
-            var shadows = new MultiMeshInstance3D { Multimesh = far, CastShadow = GeometryInstance3D.ShadowCastingSetting.ShadowsOnly };
+            var shadows = new MultiMeshInstance3D { Multimesh = far, CastShadow = GeometryInstance3D.ShadowCastingSetting.ShadowsOnly, VisibilityRangeEndMargin = 16 };
             node.AddChild(shadows);
             Track(shadows, Part.Shadow);
         }
@@ -476,6 +479,14 @@ public partial class FloraView : Node3D
     /// The Dwarf Render look: trees and bushes from the kit's TreeBuilder (dithered canopy shells, bark with branches),
     /// canopy and bark as two surfaces of one mesh so the MultiMesh instancing stays as it is. Sliced like the rest.
     /// </summary>
+    /// <summary>
+    /// The kit trees' coarse LOD (a quarter to a sixth of the triangles): Godot picks it per MultiMesh, in view and shadows. In
+    /// practice it is drawn at every zoom, and with the dithered shell and spherical normals it looks the same even zoomed right
+    /// in (compared at 7 and 20 tiles); iso at 7 tiles: 23.8M -> 0.58M prims, 70 -> 98 fps. --tree-lod=0 turns it off.
+    /// </summary>
+    private static float TreeLodEdge => float.TryParse(Main.Arg("--tree-lod"), System.Globalization.NumberStyles.Float,
+        System.Globalization.CultureInfo.InvariantCulture, out float e) ? e : 0.2f;
+
     private void KitTrees()
     {
         var canopy = DwarfRender.DwarfMaterials.Foliage;
@@ -484,7 +495,8 @@ public partial class FloraView : Node3D
         _materials.Add(bark);
         Mesh Tree(DwarfRender.TreeSpecies species, float scale, int seed) =>
             DwarfRender.TreeBuilder.Build(species, scale, seed, into: new ArrayMesh(), canopyMaterial: canopy, barkMaterial: bark,
-                leafCards: _sim.World != null && DwarfRender.DwarfRenderer.Instance?.Settings.FoliageTechnique == DwarfRender.FoliageMode.LeafCards).canopy;
+                leafCards: _sim.World != null && DwarfRender.DwarfRenderer.Instance?.Settings.FoliageTechnique == DwarfRender.FoliageMode.LeafCards,
+                lodEdge: TreeLodEdge).canopy;
         _meshes[(int)PlantKind.Oak] = Tree(DwarfRender.TreeSpecies.Oak, 0.9f, 1);
         _meshes[(int)PlantKind.Willow] = Tree(DwarfRender.TreeSpecies.Oak, 1.05f, 7);
         _meshes[(int)PlantKind.Birch] = Tree(DwarfRender.TreeSpecies.Birch, 0.85f, 2);
