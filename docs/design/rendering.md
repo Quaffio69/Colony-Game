@@ -50,8 +50,11 @@ The Dwarf Render kit integration (pixel art, glyph ids, ASCII zoom), the graphic
   world-map style: grassland ", broadleaf ♣, conifers ♠ ↑, mountains ▲ (surface stone), cut rock ▓ (the cap uses
   `dr_cap_group`), water ≈ ~, sand ░, stairs < > X, ants a, nests ∩ (nodes named `Nest_*`), beds/tables Θ Π ╥, walls #; the
   UI's bitmap glyphs are imported into the kit font. No dither on the sky (a dot grid in the far view).
-- **Cost:** kit trees are ~1k triangles (no leaf cards unless that technique is on at load); full detail only below 0.6 tiles per art pixel (`MainRender`: in iso the range offset otherwise made all 130k trees full detail and shadowed, 570M triangles) and within 200 (measured from the pivot: `FloraView.RangeOffset` adds the iso camera's extra distance)
-  tiles, and `FloraView.Detail` drops to the distant markers once the far view is mostly symbols.
+- **Cost:** kit trees are ~1k triangles (no leaf cards unless that technique is on at load); full detail only below 0.34 tiles per art pixel (off above 0.42; `MainRender`: in iso the range offset otherwise made all 130k trees full detail and shadowed, 570M triangles) and within 200 (measured from the pivot: `FloraView.RangeOffset` adds the iso camera's extra distance)
+  tiles, and `FloraView.Detail` drops to the distant markers once the far view is mostly symbols. Tree shadows: full trees
+  below 0.2 t/px, then the 20-triangle markers' (`FloraView.ShadowProxies`, a shadows-only marker MultiMesh per region:
+  each cascade redraws every caster), none past 0.75 (`TreeShadows`). The band just before the far view (0.25-0.5 t/px)
+  was the worst frame: iso 120 tiles 27.6M prims / 15.7 ms -> 7.3M / vsync; 90 tiles 19.3M / 12.5 ms -> 12.6M / 9.5 ms.
 - Not ported yet: per-vertex AO / cave sky light and edge rounding (would need mesher changes), tree variants per species.
 
 

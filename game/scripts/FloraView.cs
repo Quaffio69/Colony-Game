@@ -11,7 +11,8 @@ namespace ColonyGame;
 /// Draws trees and surface plants as instanced low-poly stand-ins. Per <see cref="Flora"/> region:
 /// <list type="bullet">
 /// <item>one MultiMesh per plant kind with a detailed mesh, shown only near the camera;</item>
-/// <item>one MultiMesh of simple coloured markers for all of the region's trees, shown at a distance.</item>
+/// <item>one MultiMesh of simple coloured markers for all of the region's trees, shown at a distance;</item>
+/// <item>the same markers again, shadows only, casting for every tree once zoomed out (<see cref="ShadowProxies"/>).</item>
 /// </list>
 /// Regions rebuild only when their flora version changes, within a per-frame time budget. The view-level
 /// slice is a shader cut (no rebuild on level change).
@@ -21,8 +22,9 @@ public partial class FloraView : Node3D
     private const float NearTreeRange = 320f, StyledTreeRange = 200f;
     /// <summary>Full-detail trees within this distance of the camera, markers beyond (the styled look's trees are heavier).</summary>
     private float _treeRange = NearTreeRange;
-    private bool _detail = true;
-    private readonly List<(MultiMeshInstance3D Node, bool Tree, bool Marker)> _ranged = new();
+    private bool _detail = true, _shadowProxies;
+    private enum Part { Plant, Tree, Marker, Shadow }
+    private readonly List<(MultiMeshInstance3D Node, Part Part)> _ranged = new();
     private const float NearPlantRange = 180f;
     private const double BuildBudgetMs = 4;
 
@@ -109,13 +111,52 @@ public partial class FloraView : Node3D
         }
     }
 
+    /// <summary>
+    /// Tree shadows come from the 20-triangle markers (a shadows-only copy, every tree in shadow range) instead of the
+    /// ~1k-triangle trees. Each shadow cascade draws the casters again, so zoomed out, full trees' shadows were most of the
+    /// frame (~20M triangles) for shadows a few pixels across that the markers' look the same as.
+    /// </summary>
+    public bool ShadowProxies
+    {
+        get => _shadowProxies;
+        set
+        {
+            if (_shadowProxies == value) return;
+            _shadowProxies = value;
+            ApplyRanges();
+        }
+    }
+
+    /// <summary>Trees cast shadows at all (off when a tree's shadow would be about a pixel).</summary>
+    public bool TreeShadows
+    {
+        get => _treeShadows;
+        set
+        {
+            if (_treeShadows == value) return;
+            _treeShadows = value;
+            ApplyRanges();
+        }
+    }
+    private bool _treeShadows = true;
+
     private void ApplyRanges()
     {
         _ranged.RemoveAll(r => !IsInstanceValid(r.Node));
-        foreach (var (node, tree, marker) in _ranged)
+        foreach (var (node, part) in _ranged) Apply(node, part);
+    }
+
+    private void Apply(MultiMeshInstance3D node, Part part)
+    {
+        switch (part)
         {
-            if (marker) node.VisibilityRangeBegin = TreeEnd;
-            else node.VisibilityRangeEnd = tree ? TreeEnd : PlantEnd;
+            case Part.Plant: node.VisibilityRangeEnd = PlantEnd; break;
+            case Part.Tree:
+                node.VisibilityRangeEnd = TreeEnd;
+                node.CastShadow = _treeShadows && !_shadowProxies ? GeometryInstance3D.ShadowCastingSetting.On : GeometryInstance3D.ShadowCastingSetting.Off;
+                break;
+            case Part.Marker: node.VisibilityRangeBegin = TreeEnd; break;
+            case Part.Shadow: node.Visible = _treeShadows && _shadowProxies; break;
         }
     }
 
@@ -172,12 +213,11 @@ public partial class FloraView : Node3D
             var near = new MultiMeshInstance3D
             {
                 Multimesh = mm,
-                VisibilityRangeEnd = tree ? TreeEnd : PlantEnd,
                 VisibilityRangeEndMargin = 16,
-                CastShadow = tree ? GeometryInstance3D.ShadowCastingSetting.On : GeometryInstance3D.ShadowCastingSetting.Off,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             };
             node.AddChild(near);
-            _ranged.Add((near, tree, false));
+            Track(near, tree ? Part.Tree : Part.Plant);
         }
 
         if (trees.Count > 0)
@@ -191,16 +231,24 @@ public partial class FloraView : Node3D
             var markers = new MultiMeshInstance3D
             {
                 Multimesh = far,
-                VisibilityRangeBegin = TreeEnd,
                 VisibilityRangeBeginMargin = 16,
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             };
             node.AddChild(markers);
-            _ranged.Add((markers, true, true));
+            Track(markers, Part.Marker);
+            var shadows = new MultiMeshInstance3D { Multimesh = far, CastShadow = GeometryInstance3D.ShadowCastingSetting.ShadowsOnly };
+            node.AddChild(shadows);
+            Track(shadows, Part.Shadow);
         }
 
         AddChild(node);
         _regionNodes[r] = node;
+    }
+
+    private void Track(MultiMeshInstance3D node, Part part)
+    {
+        Apply(node, part);
+        _ranged.Add((node, part));
     }
 
     private static MultiMesh NewMultiMesh(Mesh mesh, int count) => new()
