@@ -34,15 +34,23 @@ public enum TileType : byte
     Aetherite,
     /// <summary>Built stone wall (dams, canal sides): solid, carries load, digs back out as stone.</summary>
     Wall,
+    /// <summary>
+    /// An open cell with a built floor of its own (a house's upper storey, DF's constructed floor): stood on whatever is
+    /// below, like a stair; its floor's material is the cell's floor cover. Not solid, carries no rock.
+    /// </summary>
+    Deck,
 }
 
 public static class TileInfo
 {
     /// <summary>Number of <see cref="TileType"/> values (for palettes and lookup tables).</summary>
-    public const int Count = 18;
+    public const int Count = 19;
 
-    /// <summary>Blocks movement: natural rock and earth. Stairs are walk-in cells, not solid.</summary>
-    public static bool IsSolid(TileType t) => t != TileType.Air && !IsStair(t);
+    /// <summary>Blocks movement: natural rock and earth. Stairs and decks are walk-in cells, not solid.</summary>
+    public static bool IsSolid(TileType t) => t != TileType.Air && t != TileType.Deck && !IsStair(t);
+
+    /// <summary>A walk-in cell that is its own footing: a stair or a deck.</summary>
+    public static bool IsFooting(TileType t) => t == TileType.Deck || IsStair(t);
 
     /// <summary>Any stair cell. An agent can stand in one regardless of what is below (the stair is its footing).</summary>
     public static bool IsStair(TileType t) => t is TileType.UpStair or TileType.DownStair or TileType.UpDownStair;
@@ -51,7 +59,7 @@ public static class TileInfo
     public static bool GoesDown(TileType t) => t is TileType.DownStair or TileType.UpDownStair;
 
     /// <summary>Carries structural load for cave-ins: everything but air (stairs are carved rock).</summary>
-    public static bool IsStructural(TileType t) => t != TileType.Air;
+    public static bool IsStructural(TileType t) => t != TileType.Air && t != TileType.Deck;
 
     /// <summary>A full opaque cube that hides its neighbours' touching faces.</summary>
     public static bool Occludes(TileType t) => IsSolid(t);
@@ -73,6 +81,7 @@ public static class TileInfo
         TileType.UpStair => "Up stair",
         TileType.DownStair => "Down stair",
         TileType.UpDownStair => "Up/down stair",
+        TileType.Deck => "Upper floor",
         _ => t.ToString(),
     };
 }

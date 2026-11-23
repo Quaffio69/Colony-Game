@@ -19,7 +19,7 @@ public class CommandTests
         new PlaceWalls(A, B), new CancelWalls(A, B), new DebugCompleteAll(), new PaintRoom("carpentry", A, B), new EraseRoom(A, B),
         new PlacePart("carpentry.saw", A, true, 3), new RemoveParts(A, B), new CycleRecipe(A, true), new PlaceStructure(StructureKind.Pump, A, 3),
         new RemoveStructures(A, B), new PlaceEdge(StructureKind.Door, A, EdgeInfo.North, 2), new RemoveEdge(A, EdgeInfo.East),
-        new EdgeLine(StructureKind.Window, A, EdgeInfo.East, 12, 4, true), new PlaceOutline(A, B, 3), new ClearWalls(A, B),
+        new EdgeLine(StructureKind.Window, A, EdgeInfo.East, 12, 4, true), new PlaceOutline(A, B, 3), new PlaceHouse(A, B, 3, 2, 1, 4), new ClearWalls(A, B),
         new Covers(StructureKind.Roof, A, B, 2, false), new SetWorkPriority(7, Work.Hauling, 1) { Player = 3 }, new SetHomePolicy(A, 2),
         new SetPolicyTier(1, 4, 3), new SetPolicyPerResident(0, 2, 1.25f), new SetPolicyShared(3, true), new AddPolicy(),
         new PlaceRacks(A, B, 2), new Demolish(A, B), new AddTradeDepot(A, B) { Player = 1 },

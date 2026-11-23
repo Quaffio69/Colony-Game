@@ -66,11 +66,13 @@ public sealed class VoxelWorld : ITileReader
         Changed(x, y, z);
         if (_coverCells > 0)
         {
-            // A cell filled in loses its coverings; a floor whose ground is dug away goes with it.
+            // A cell filled in loses its coverings; a floor whose ground is dug away goes with it, unless it is a deck (a
+            // built floor of its own), and a deck taken down takes its floor with it.
             var p = new TilePos(x, y, z);
             if (TileInfo.IsSolid(type) && CoverAt(p) != 0) SetCover(p, 0);
             var above = new TilePos(x, y, z + 1);
-            if (!TileInfo.IsSolid(type) && InBounds(above) && FloorAt(above) != 0) SetFloor(above, 0);
+            if (!TileInfo.IsSolid(type) && InBounds(above) && FloorAt(above) != 0 && Get(above) != TileType.Deck) SetFloor(above, 0);
+            if (type == TileType.Air && FloorAt(p) != 0 && (z == 0 || !TileInfo.IsSolid(Get(x, y, z - 1)))) SetFloor(p, 0);
         }
     }
 
@@ -196,6 +198,23 @@ public sealed class VoxelWorld : ITileReader
             for (int i = 0; i < covers.Length; i++)
                 if (covers[i] != 0)
                     yield return (new TilePos(o.X + (i & Chunk.Mask), o.Y + ((i >> Chunk.Shift) & Chunk.Mask), o.Z + (i >> (2 * Chunk.Shift))), covers[i]);
+        }
+    }
+
+    /// <summary>Every stair cell and its type. Scans only chunks that have stairs (views: built flights of steps).</summary>
+    public IEnumerable<(TilePos Cell, TileType Type)> AllStairs()
+    {
+        foreach (var chunk in _chunks)
+        {
+            if (chunk.StairCount == 0) continue;
+            var o = chunk.Origin;
+            for (int lz = 0; lz < Chunk.Size; lz++)
+            for (int ly = 0; ly < Chunk.Size; ly++)
+            for (int lx = 0; lx < Chunk.Size; lx++)
+            {
+                var t = chunk.Get(lx, ly, lz);
+                if (TileInfo.IsStair(t)) yield return (new TilePos(o.X + lx, o.Y + ly, o.Z + lz), t);
+            }
         }
     }
 

@@ -26,12 +26,24 @@ public enum StructureKind : byte
     Roof,
     /// <summary>Warehouse shelving on a stockpile cell, rising up to three levels: holds several stacks (see <see cref="Stockpiles.Racks"/>).</summary>
     Rack,
+    /// <summary>A built floor over open air (an upper storey): the cell becomes a <see cref="TileType.Deck"/> with a floor of
+    /// <see cref="Blueprint.Material"/>. Built from the cell below.</summary>
+    Deck,
+    /// <summary>A built stair (<see cref="Blueprint.Material"/> = its <see cref="TileType"/>): from its own floor, or from the
+    /// stair below it.</summary>
+    Stair,
 }
 
 /// <summary>A structure waiting for its material and a builder.</summary>
 public sealed class Blueprint
 {
+    /// <summary>Where its materials are brought and the builder works from (for most kinds, the cell it is built in).</summary>
     public required TilePos Cell { get; init; }
+    /// <summary>The cell it is built in: <see cref="Cell"/>, except for decks and stairs built from the cell below.</summary>
+    public TilePos Target { get => _target ?? Cell; init => _target = value; }
+    private readonly TilePos? _target;
+    /// <summary>Built somewhere other than where its materials go.</summary>
+    public bool Remote => _target is { } t && t != Cell;
     public required StructureKind Kind { get; init; }
     /// <summary>The colony that planned it: its haulers supply it, its builders build it.</summary>
     public int Faction { get; init; }
@@ -83,6 +95,8 @@ public sealed class Constructions
         StructureKind.Window => new BuildCost(Catalog.Item("glass"), 1),
         StructureKind.Floor => new BuildCost(Catalog.Item(FloorMaterials.All[Math.Clamp(material, 1, FloorMaterials.Count - 1)].Item), 1),
         StructureKind.Rack => new BuildCost(ItemType.Plank, RackPlanksPerLevel * Math.Clamp(material, 1, Stockpiles.MaxRackLevels)), // material = its levels
+        StructureKind.Deck => new BuildCost(Catalog.Item(FloorMaterials.All[Math.Clamp(material, 1, FloorMaterials.Count - 1)].Item), DeckCost),
+        StructureKind.Stair => new BuildCost(ItemType.Plank, StairPlanks),
         _ => new BuildCost(Catalog.Item(RoofMaterials.All[Math.Clamp(material, 1, RoofMaterials.Count - 1)].Item), 1),
     };
 
@@ -94,11 +108,17 @@ public sealed class Constructions
         StructureKind.Roof => 45,
         StructureKind.Door or StructureKind.Window => 80,
         StructureKind.Rack => 90,
+        StructureKind.Deck => 50,
+        StructureKind.Stair => 90,
         _ => 120,
     });
 
     /// <summary>Planks a storage rack costs per level it rises.</summary>
     public const int RackPlanksPerLevel = 3;
+    /// <summary>Items of its floor material a deck costs (it needs joists under the boards, so more than a laid floor).</summary>
+    public const int DeckCost = 2;
+    /// <summary>Planks a built stair costs per level.</summary>
+    public const int StairPlanks = 3;
 
     /// <summary>Stockpile cells (set by <see cref="ColonySim"/>): racks only go on them.</summary>
     public Func<TilePos, bool>? IsStorage { get; set; }
@@ -113,8 +133,17 @@ public sealed class Constructions
         StructureKind.Floor => "Floor",
         StructureKind.Roof => "Roof",
         StructureKind.Rack => "Storage rack",
+        StructureKind.Deck => "Upper floor",
+        StructureKind.Stair => "Stairs",
         _ => "Window",
     };
+
+    /// <summary>
+    /// Someone can stand here now, or will once a planned deck or stair in it is built: upper walls, roofs and the decks
+    /// above are planned on it, and their materials wait until it is built (haulers only deliver to cells they can reach).
+    /// </summary>
+    public bool WillStand(TilePos cell) =>
+        Navigation.Movement.IsStandable(_world, cell) || At(cell) is { Kind: StructureKind.Deck or StructureKind.Stair };
 
     public static bool IsEdgeKind(StructureKind kind) => kind is StructureKind.EdgeWall or StructureKind.Door or StructureKind.Window;
 
@@ -135,8 +164,8 @@ public sealed class Constructions
     public TilePos? SiteOf(TilePos cell, int side)
     {
         var other = side == EdgeInfo.East ? cell.Offset(1, 0, 0) : cell.Offset(0, 1, 0);
-        if (Navigation.Movement.IsStandable(_world, cell)) return cell;
-        if (_world.InBounds(other) && Navigation.Movement.IsStandable(_world, other)) return other;
+        if (WillStand(cell)) return cell;
+        if (_world.InBounds(other) && WillStand(other)) return other;
         return null;
     }
 
@@ -210,8 +239,9 @@ public sealed class Constructions
         if (kind is not (StructureKind.Floor or StructureKind.Roof)) return "not a floor or roof";
         if (material < 1 || material >= (roof ? RoofMaterials.Count : FloorMaterials.Count)) return "no such material";
         if (!_world.InBounds(cell) || cell.Z <= 0) return "outside the world";
-        if (!Movement.IsStandable(_world, cell)) return "needs floor to stand on";
-        if (!roof && TileInfo.IsStair(_world.Get(cell))) return "there are stairs here";
+        if (!WillStand(cell)) return "needs floor to stand on";
+        if (!roof && (TileInfo.IsStair(_world.Get(cell)) || At(cell)?.Kind == StructureKind.Stair)) return "there are stairs here";
+        if (!roof && At(cell)?.Kind == StructureKind.Deck) return "an upper floor is planned here";
         if (roof && (!_world.InBounds(cell.Offset(0, 0, 1)) || TileInfo.IsSolid(_world.Get(cell.Offset(0, 0, 1))))) return "already under rock";
         if (_byCover.ContainsKey((cell, roof))) return "already planned";
         if ((roof ? _world.RoofAt(cell) : _world.FloorAt(cell)) == material) return roof ? "already roofed so" : "already floored so";
@@ -256,7 +286,7 @@ public sealed class Constructions
                 n++;
             }
             int built = roof ? _world.RoofAt(c) : _world.FloorAt(c);
-            if (built == 0) continue;
+            if (built == 0 || !roof && _world.Get(c) == TileType.Deck) continue; // a deck's floor comes down with the deck (Demolish)
             if (roof) _world.SetRoof(c, 0);
             else _world.SetFloor(c, 0);
             var (mat, count) = Cost(kind, built);
@@ -330,6 +360,64 @@ public sealed class Constructions
         return bp;
     }
 
+    // ---- Decks and built stairs (multi-storey buildings) --------------------------------------------------
+
+    /// <summary>Why a deck (built floor over open air) can't go in this cell, or null if it can.</summary>
+    public string? CanPlaceDeck(TilePos cell, int material)
+    {
+        if (material < 1 || material >= FloorMaterials.Count) return "no such material";
+        if (!_world.InBounds(cell) || cell.Z <= 1) return "outside the world";
+        if (_world.Get(cell) != TileType.Air) return TileInfo.IsSolid(_world.Get(cell)) ? "the cell is solid" : "there is a floor or stairs here already";
+        if (_byCell.ContainsKey(cell) || IsOccupied?.Invoke(cell) == true) return "something is already planned or built here";
+        var below = cell.Offset(0, 0, -1);
+        if (TileInfo.IsSolid(_world.Get(below))) return "on the ground: lay a floor instead";
+        if (!WillStand(below)) return "nothing to build it from below";
+        return null;
+    }
+
+    /// <summary>Plans a deck, built by someone standing on the floor below (its materials go there).</summary>
+    public Blueprint? PlaceDeck(TilePos cell, int material, int faction = 0)
+    {
+        if (CanPlaceDeck(cell, material) is not null) return null;
+        return AddRemote(new Blueprint { Cell = cell.Offset(0, 0, -1), Target = cell, Kind = StructureKind.Deck, Material = material, Faction = faction });
+    }
+
+    /// <summary>Why a built stair of this type can't go in this cell, or null if it can.</summary>
+    public string? CanPlaceStair(TilePos cell, TileType type)
+    {
+        if (!TileInfo.IsStair(type)) return "not a stair";
+        if (!_world.InBounds(cell) || cell.Z <= 0) return "outside the world";
+        if (_world.Get(cell) != TileType.Air) return TileInfo.IsSolid(_world.Get(cell)) ? "the cell is solid" : "there is a floor or stairs here already";
+        if (_byCell.ContainsKey(cell) || IsOccupied?.Invoke(cell) == true) return "something is already planned or built here";
+        var below = cell.Offset(0, 0, -1);
+        bool grounded = TileInfo.IsSolid(_world.Get(below));
+        if (TileInfo.GoesDown(type) && !grounded)
+        {
+            // Leading down: onto a stair (built or planned) that leads up.
+            bool upBelow = TileInfo.GoesUp(_world.Get(below)) || At(below) is { Kind: StructureKind.Stair } s && TileInfo.GoesUp((TileType)s.Material);
+            if (!upBelow) return "no stair below leading up to it";
+        }
+        else if (!grounded) return "needs ground below";
+        return null;
+    }
+
+    /// <summary>Plans a built stair: on the ground it is built where it stands; above, from the stair below it.</summary>
+    public Blueprint? PlaceStair(TilePos cell, TileType type, int faction = 0)
+    {
+        if (CanPlaceStair(cell, type) is not null) return null;
+        var site = TileInfo.IsSolid(_world.Get(cell.Offset(0, 0, -1))) ? cell : cell.Offset(0, 0, -1);
+        return AddRemote(new Blueprint { Cell = site, Target = cell, Kind = StructureKind.Stair, Material = (int)type, Faction = faction });
+    }
+
+    private Blueprint AddRemote(Blueprint bp)
+    {
+        _byCell[bp.Target] = bp;
+        if (bp.Remote) AddSite(bp);
+        _order.Add(bp);
+        Version++;
+        return bp;
+    }
+
     /// <summary>
     /// Walls in every open cell of the box between two ground tiles, from the level above the lower corner up
     /// to the level above the upper one (so a box spanning levels raises a dam that high). Returns how many.
@@ -347,10 +435,9 @@ public sealed class Constructions
     /// <summary>Cancels blueprints in the box (and the level above it). Delivered materials stay as loose piles.</summary>
     public int CancelBox(TilePos a, TilePos b, int faction = Owners.Any)
     {
-        var hits = _order.Where(bp => (faction == Owners.Any || bp.Faction == faction) &&
-            bp.Cell.X >= Math.Min(a.X, b.X) && bp.Cell.X <= Math.Max(a.X, b.X) &&
-            bp.Cell.Y >= Math.Min(a.Y, b.Y) && bp.Cell.Y <= Math.Max(a.Y, b.Y) &&
-            bp.Cell.Z >= Math.Min(a.Z, b.Z) && bp.Cell.Z <= Math.Max(a.Z, b.Z) + 1).ToList();
+        bool In(TilePos c) => c.X >= Math.Min(a.X, b.X) && c.X <= Math.Max(a.X, b.X) && c.Y >= Math.Min(a.Y, b.Y) && c.Y <= Math.Max(a.Y, b.Y) &&
+            c.Z >= Math.Min(a.Z, b.Z) && c.Z <= Math.Max(a.Z, b.Z) + 1;
+        var hits = _order.Where(bp => (faction == Owners.Any || bp.Faction == faction) && (In(bp.Cell) || In(bp.Target))).ToList();
         foreach (var bp in hits) Remove(bp);
         return hits.Count;
     }
@@ -362,7 +449,7 @@ public sealed class Constructions
         bp.BuilderId = -1;
         if (bp.IsEdge) _byEdge.Remove((bp.EdgeCell, bp.Side));
         else if (bp.IsCover) _byCover.Remove((bp.Cell, bp.Kind == StructureKind.Roof));
-        else _byCell.Remove(bp.Cell);
+        else _byCell.Remove(bp.Target);
         if (_bySite.TryGetValue(bp.Cell, out var site))
         {
             site.Remove(bp);
@@ -395,8 +482,8 @@ public sealed class Constructions
         {
             if (bp.IsEdge) _byEdge[(bp.EdgeCell, bp.Side)] = bp;
             else if (bp.IsCover) _byCover[(bp.Cell, bp.Kind == StructureKind.Roof)] = bp;
-            else _byCell[bp.Cell] = bp;
-            if (bp.IsEdge || bp.IsCover) AddSite(bp);
+            else _byCell[bp.Target] = bp;
+            if (bp.IsEdge || bp.IsCover || bp.Remote) AddSite(bp);
         }
     }
 
@@ -407,6 +494,7 @@ public sealed class Constructions
         {
             Net.SnapIO.Write(w, bp.Cell); w.Write((byte)bp.Kind); w.Write(bp.Faction); w.Write(bp.Facing);
             Net.SnapIO.Write(w, bp.EdgeCell); w.Write(bp.Side); w.Write(bp.Material); w.Write(bp.BuilderId); w.Write(bp.Removed);
+            Net.SnapIO.Write(w, bp.Target);
         }
         w.Write(Version);
     }
@@ -416,13 +504,19 @@ public sealed class Constructions
         int n = r.ReadInt32();
         for (int i = 0; i < n; i++)
         {
+            var cell = Net.SnapIO.ReadPos(r);
+            var kind = (StructureKind)r.ReadByte();
+            int faction = r.ReadInt32(), facing = r.ReadInt32();
+            var edgeCell = Net.SnapIO.ReadPos(r);
+            int side = r.ReadInt32(), material = r.ReadInt32(), builder = r.ReadInt32();
+            bool removed = r.ReadBoolean();
+            var target = Net.SnapIO.Before(6) ? cell : Net.SnapIO.ReadPos(r); // 6: decks and stairs built from below
             var bp = new Blueprint
             {
-                Cell = Net.SnapIO.ReadPos(r), Kind = (StructureKind)r.ReadByte(), Faction = r.ReadInt32(), Facing = r.ReadInt32(),
-                EdgeCell = Net.SnapIO.ReadPos(r), Side = r.ReadInt32(), Material = r.ReadInt32(),
+                Cell = cell, Target = target, Kind = kind, Faction = faction, Facing = facing, EdgeCell = edgeCell, Side = side, Material = material,
             };
-            bp.BuilderId = r.ReadInt32();
-            bp.Removed = r.ReadBoolean();
+            bp.BuilderId = builder;
+            bp.Removed = removed;
             _order.Add(bp);
         }
         Version = r.ReadInt32();

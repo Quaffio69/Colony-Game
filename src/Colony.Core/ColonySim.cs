@@ -198,9 +198,17 @@ public sealed partial class ColonySim
             World.SetEdge(bp.EdgeCell, bp.Side, EdgeInfo.Make(Constructions.EdgeKindOf(bp.Kind), bp.Material));
             return;
         }
-        var cell = bp.Cell;
+        var cell = bp.Target;
         switch (bp.Kind)
         {
+            case StructureKind.Deck:
+                World.Set(cell, TileType.Deck);
+                World.SetFloor(cell, bp.Material);
+                break;
+            case StructureKind.Stair:
+                World.Set(cell, (TileType)bp.Material);
+                Flora.Remove(cell, out _);
+                break;
             case StructureKind.Wall:
                 World.Set(cell, TileType.Wall);
                 Flora.Remove(cell, out _);
@@ -223,6 +231,14 @@ public sealed partial class ColonySim
     /// <summary>Takes down the wheel or pump in a cell, leaving its materials behind. False if there is none.</summary>
     public bool RemoveStructure(TilePos cell)
     {
+        if (World.Get(cell) == TileType.Deck)
+        {
+            // A deck comes down with its floor; its boards are left on whatever is below it.
+            var (mat, n) = Constructions.Cost(StructureKind.Deck, World.FloorAt(cell));
+            World.Set(cell, TileType.Air);
+            Items.Drop(cell, mat, n);
+            return true;
+        }
         if (Stockpiles.RemoveRack(cell)) return true; // its planks are dropped (RackLost)
         var thing = Waterworks.Remove(cell);
         if (thing is null) return false;

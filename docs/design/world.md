@@ -3,7 +3,7 @@
 Movement rules, stairs, designations, the water simulation and terrain hydrology, thin walls, floors and roofs, waterworks and cave-ins.
 
 - **Movement:** agents are 1 tile tall and occupy an open cell; standable = solid floor below, or the cell is
-  itself a stair. Walk 8-way (no corner cutting); climb/drop exactly one level onto an orthogonal neighbour
+  itself a stair or a deck (a built upper floor, see Upper storeys). Walk 8-way (no corner cutting); climb/drop exactly one level onto an orthogonal neighbour
   through plain air above the lower end (raw climbs slow, cheap if either end is a stair cell). Legality
   must stay symmetric (connectivity needs an undirected graph); costs may differ (up vs down).
 - **Stairs (DF-style):** `UpStair`, `DownStair`, `UpDownStair` are carved, non-solid, structural cells.
@@ -94,9 +94,29 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   the build menu (box), and Line (click an edge, drag along it: walls, doors or windows). `CoverView`: patterned floor
   plates; roofs a height field per level (vertex height = pitch x distance in from the roof's edge: hip roofs and
   ridges for any outline), drawn above their cell with `roof.gdshader` (sliced exactly at the cut, courses and
-  staggered joints from world position) so a home's own level shows its interior. Furniture stays under one level.
+  staggered joints from world position) so a home's own level shows its interior; floor plates and stair flights are
+  sliced at the view level itself (an upper storey's floor, at the top of the viewed level, would lid it). Furniture stays under one level.
   Home shell = walls .45 + floor .25 + roof .2 + windows .1 (`HomeShell.Score`); bare rock underfoot or overhead is
   humble, bare earth and open sky nothing.
+- **Upper storeys (`TileType.Deck`, `StructureKind.Deck` / `Stair`):** a deck is an open cell with a built floor of its
+  own (DF's constructed floor): standable whatever is below (`TileInfo.IsFooting`, like a stair), not solid, carries no
+  rock (`IsStructural` false), not diggable (Demolish takes it down, leaving its boards below); its look is its floor cover
+  (kept when the ground under it goes; taken with the deck). You can climb onto a deck's edge from the ground beside it
+  unless an upper wall stands there. Decks cost `DeckCost` (2) of their floor material; built stairs `StairPlanks` (3).
+  **Built from below:** `Blueprint.Target` is the cell built, `Cell` the site where materials go and the builder works
+  (equal for every other kind): a deck is sited on the cell below it, a stair above the ground on the stair below it;
+  builders stand round the target (`ReachableAround(Target)`, never in it). Upper walls, roofs and decks above may be planned
+  on a cell whose deck or stair is only planned (`Constructions.WillStand`): their materials wait, since haulers only
+  deliver to cells they can reach. `Blueprint.Target` is in snapshots from version 6 and in `StateHash`. **Houses
+  (`Orders.Houses`, command `PlaceHouse`):** a box between ground tiles plus a storey count (1-6, sides up to 40):
+  `Survey` lists every cell in the way (rock or earth, uneven ground, existing stairs or decks, a tree, a station, a
+  structure or plan, no ground) and nothing is placed while anything is; `Place` plans, bottom up, per storey the stair
+  (up / up-down / down, in the corner away from the door), the floor (laid on the ground floor, decks above), the door
+  (middle of the first side with ground outside, skipped if the outline already has one; placed before the walls so they
+  leave its edge) and the walls (`PlaceOutline`, existing walls kept); then the roof over the top storey wherever no rock
+  is overhead. Homes count a deck overhead as a roof of its floor's tier. Water still passes through decks.
+  `Chunk.StairCount` lets `VoxelWorld.AllStairs` skip chunks without stairs (`CoverView` draws a flight of steps in each
+  stair that leads up).
 - **Waterworks:** `Orders.Constructions` holds single-cell blueprints (walls from 1 stone; water wheels and
   pumps from planks) built like room parts (haulers deliver, Designations-labor builders build;
   `ColonySim.CompleteConstruction`). Walls stack on wall blueprints, so dams rise level by level; a wall is

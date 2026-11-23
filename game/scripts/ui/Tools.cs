@@ -48,6 +48,8 @@ public static class Tools
         StructureKind.Floor => FloorName(material),
         StructureKind.Roof => RoofName(material),
         StructureKind.Wall => "Stone block",
+        StructureKind.Deck => FloorName(material) + " (upper storey)",
+        StructureKind.Stair => "Stairs",
         _ => Constructions.Name(kind),
     };
 
@@ -98,7 +100,9 @@ public static class Tools
     public static ToolInfo Current(DesignationTool t)
     {
         var info = Of(t, t.Mode);
-        if (t.Selecting && t.Mode != ToolMode.Edge)
+        if (t.Selecting && t.Mode == ToolMode.House)
+            info = info with { How = [("Click", "confirm"), ("[ ] or Z/X", "storeys"), ("RMB", "abort")] };
+        else if (t.Selecting && t.Mode != ToolMode.Edge)
             info = info with { How = [("Click", "confirm"), ("RMB", "abort")] };
         else if (t.Selecting)
             info = info with { How = [("Release", "confirm"), ("RMB", "abort")] };
@@ -146,6 +150,11 @@ public static class Tools
         ToolMode.Rack => new("╥", Tok("wood"), "Storage rack", "Rack",
             $"Shelving over stockpile cells, up to {Stockpiles.MaxRackLevels} levels: {Stockpiles.Capacity(Stockpiles.MaxRackLevels)} stacks a cell ({Constructions.RackPlanksPerLevel} planks a level)",
             [("Drag", "a box"), ("R", "turn"), ("Shift", "remove"), ("RMB", "done")]),
+        ToolMode.House => new("Π", WallColor(t.WallMaterial), t.Storeys == 1 ? "House" : $"House, {t.Storeys} storeys", "House",
+            $"A whole building over a box: {WallName(t.WallMaterial).ToLowerInvariant()}s and a door, {FloorName(t.FloorMaterial).ToLowerInvariant()}" +
+            $"{(t.Storeys > 1 ? ", stairs up through the storeys" : "")}, a {RoofName(t.RoofMaterial).ToLowerInvariant()} unless rock is overhead. " +
+            "Materials: the last wall, floor and roof picked. Nothing is planned if anything is in the way (shown red)",
+            [("Drag", "a box"), ("[ ]", "storeys"), ("Shift", "remove"), ("RMB", "done")]),
         ToolMode.TradeDepot => new("$", Tok("accent"), "Trade depot", "Depot", "Where other colonies' traders deliver what you buy; haulers carry it on to your stockpiles", BoxKeys),
         _ => new("?", Tok("dim"), m.ToString(), m.ToString(), "", BoxKeys),
     };

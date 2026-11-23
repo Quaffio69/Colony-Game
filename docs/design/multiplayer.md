@@ -38,7 +38,7 @@ Lockstep networking, state hashes, snapshots and saves, the command system, fact
   `--join=127.0.0.1:7781 --net-orders --net-check=1500`; the two `[net] ... hash` lines must match (they did).
 - Limits: demos edit the world outside commands, so they're off online (a world a demo changed can still be hosted:
   snapshots hold its edits).
-- **Snapshots (`Net.Snapshot`, version 4: trade depots, deals, seventh work type; 3: racks and regrowth; versions 2-3 still load, `SnapIO.Before(v)` skips newer sections):** the whole state in a gzip blob: the `GameSettings` (the terrain is regenerated, a
+- **Snapshots (`Net.Snapshot`, version 6: blueprints built from another cell (`Blueprint.Target`: decks, stairs); 5: machine limits; 4: trade depots, deals, seventh work type; 3: racks and regrowth; versions 2-3 still load, `SnapIO.Before(v)` skips newer sections):** the whole state in a gzip blob: the `GameSettings` (the terrain is regenerated, a
   second at 2048), the chunks changed since generation (`VoxelWorld.Seal` after generation starts tracking them), then
   flora, piles, orders, stockpiles, farms, rooms and parts, blueprints, waterworks, water (spans, volumes, flow
   momentum, sleep state, springs; natural levels from the terrain; pipes rebuilt), colonists, colonies (society,

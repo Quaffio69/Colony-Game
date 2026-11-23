@@ -75,7 +75,7 @@ public sealed class Designations
         else
         {
             var tile = _world.Get(p);
-            if (tile == TileType.Air) return false;
+            if (tile is TileType.Air or TileType.Deck) return false; // a built floor is taken down (Demolish), not dug
             if (Result(kind, tile) == tile) return false; // nothing would change
         }
         bool exists = _orders.TryGetValue(p, out var existing);

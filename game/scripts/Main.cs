@@ -427,7 +427,7 @@ public partial class Main : Node3D
             {
                 s_devArgsDone = true;
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--falls-demo", "--ticks" }.Any(a => Arg(a) != null))
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--house-demo", "--falls-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
                 if (Arg("--dig-demo") is { } digDemo) DigDemo(digDemo);
                 if (Arg("--stairs-demo") != null) StairsDemo();
@@ -439,6 +439,7 @@ public partial class Main : Node3D
                 if (Arg("--water-demo") != null) WaterDemo();
                 if (Arg("--homes-demo") != null) HomesDemo();
                 if (Arg("--storage-demo") is { } storageDemo) StorageDemo(storageDemo);
+                if (Arg("--house-demo") is { } houseDemo) HouseDemo(houseDemo);
                 if (Arg("--falls-demo") != null) FallsDemo();
                 if (Arg("--ants-demo") is { } antsDemo) AntsDemo(antsDemo);
                 if (Arg("--trade-demo") != null) TradeDemo();
@@ -1003,6 +1004,46 @@ public partial class Main : Node3D
         _sim.Commands.Execute(new Colony.Core.Commands.AcceptTrade(_sim.Trades.All[^1].Id) { Player = other });
         _sim.Commands.Execute(new Colony.Core.Commands.ProposeTrade(Player, new([T(other, "bread", 12), T(Player, "logs", 6), T(Player, "stone", 10)])) { Player = other });
         _ui.OpenWindow("trade");
+    }
+
+    /// <summary>
+    /// --house-demo[=STOREYS]: levels ground beside the colony, plans a house (2 storeys by default) with the House tool's
+    /// command, drops the planks and thatch it needs and plays until it is built (or 60k ticks); a second house beside it
+    /// stays planned, to show its blueprints. The camera frames both.
+    /// </summary>
+    private void HouseDemo(string storeysArg)
+    {
+        int storeys = int.TryParse(storeysArg, out int s) ? Math.Clamp(s, 1, Colony.Core.Orders.Houses.MaxStoreys) : 2;
+        var c = _sim.Colonists.First(k => k.Faction == Player).Position;
+        int g = _sim.World.SurfaceLevel(c.X, c.Y);
+        int x0 = c.X + 3, y0 = c.Y - 2;
+        for (int y = y0 - 2; y <= y0 + 8; y++)
+        for (int x = x0 - 2; x <= x0 + 14; x++)
+        {
+            for (int z = g - 3; z < g; z++) _sim.World.Set(new TilePos(x, y, z), TileType.Soil);
+            _sim.World.Set(new TilePos(x, y, g), TileType.Grass);
+            for (int z = g + 1; z <= g + storeys + 3; z++)
+            {
+                _sim.World.Set(new TilePos(x, y, z), TileType.Air);
+                _sim.Flora.Validate(new TilePos(x, y, z));
+            }
+            _sim.Flora.Remove(new TilePos(x, y, g + 1), out _);
+        }
+        _sim.Items.Drop(new TilePos(x0 - 2, y0 - 2, g + 1), Colony.Core.Items.ItemType.Plank, 150);
+        _sim.Items.Drop(new TilePos(x0 - 1, y0 - 2, g + 1), Colony.Core.Items.ItemType.Plank, 150);
+        _sim.Items.Drop(new TilePos(x0, y0 - 2, g + 1), Colony.Core.Items.ItemType.Fiber, 60);
+        string built = _sim.Commands.Execute(new Colony.Core.Commands.PlaceHouse(new TilePos(x0, y0, g), new TilePos(x0 + 4, y0 + 3, g), storeys, 2, 1, 1) { Player = Player });
+        GD.Print($"[house-demo] {built}");
+        int t = 0;
+        for (; t < 60_000 && _sim.Constructions.Count > 0; t++) _sim.Step();
+        GD.Print($"[house-demo] built in {t} ticks; {_sim.Constructions.Count} pieces left; ground at {g}");
+        for (int z = g; z <= g + storeys + 1; z++)
+        {
+            var mid = new TilePos(x0 + 1, y0 + 1, z);
+            GD.Print($"[house-demo]   level {z}: {_sim.World.Get(mid)}, floor {_sim.World.FloorAt(mid)}, roof {_sim.World.RoofAt(mid)}, stair corner {_sim.World.Get(new TilePos(x0 + 4, y0 + 3, z))}");
+        }
+        GD.Print("[house-demo] " + _sim.Commands.Execute(new Colony.Core.Commands.PlaceHouse(new TilePos(x0 + 7, y0, g), new TilePos(x0 + 11, y0 + 3, g), storeys, 3, 2, 3) { Player = Player }));
+        _rig.Focus(SimSpace.TileCenter(new TilePos(x0 + 6, y0 + 2, g + 1)), float.TryParse(Arg("--house-zoom"), out float zd) ? zd : 14f, yaw: 205f, pitch: -38f);
     }
 
     /// --storage-demo: a stockpile with storage racks planned on it (planks and loose stone to fill it), and beside it a

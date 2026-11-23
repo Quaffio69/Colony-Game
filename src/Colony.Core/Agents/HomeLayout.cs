@@ -345,7 +345,11 @@ public static class HomeLayout
                 : TileInfo.IsEarth(world.Get(c.X, c.Y, c.Z - 1)) || !world.IsSolid(c.X, c.Y, c.Z - 1) ? 0 : 1;
             if (ft > 0) { floored++; floorTiers += ft; }
             int roof = world.RoofAt(c);
-            int rt = roof > 0 ? RoofMaterials.All[Math.Min(roof, RoofMaterials.Count - 1)].Tier : world.IsSolid(c.X, c.Y, c.Z + 1) ? 1 : 0;
+            var up = new TilePos(c.X, c.Y, c.Z + 1);
+            // A roof, an upper storey's floor overhead (a deck: as good as its boards), or rock.
+            int rt = roof > 0 ? RoofMaterials.All[Math.Min(roof, RoofMaterials.Count - 1)].Tier
+                : world.InBounds(up) && world.Get(up) == TileType.Deck ? FloorMaterials.All[Math.Clamp(world.FloorAt(up), 1, FloorMaterials.Count - 1)].Tier
+                : world.IsSolid(c.X, c.Y, c.Z + 1) ? 1 : 0;
             if (rt > 0) { covered++; roofTiers += rt; }
             if (floor > 0) materials.Add(FloorMaterials.All[Math.Min(floor, FloorMaterials.Count - 1)].Item == "planks" ? "wood" : "stone");
         }

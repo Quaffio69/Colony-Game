@@ -100,7 +100,7 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [x] Instead of a tutorial: small tooltips on everything (Build items, tabs, ribbon, dock, buttons), at the cursor after a moment. A guided tutorial can come later if still needed.
 
 ### Building
-- [ ] A building tool: place a whole building (walls, floor, roof) in one go, several storeys high.
+- [x] A building tool: the House tool plans a whole building in one go: walls round each storey and a door, floors (decks above the ground floor), stairs between storeys, a roof unless rock is overhead; nothing is planned if anything is in the way.
 - [ ] General improvements to buildings.
 
 ### Mining and orders

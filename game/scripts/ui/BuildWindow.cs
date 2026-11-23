@@ -61,7 +61,7 @@ public partial class BuildWindow : GlyphWindow
         Header.AddChild(new GlyphSegmented(Tabs, _tab, i => { _tab = i; _cat = 0; _drawn = ""; Tick(); })
         {
             Tips = ["Orders: dig, stairs, chop, gather, cancel, demolish", "Zones: stockpiles, racks, trade depot, farms, homes",
-                "Structures: walls, doors, windows, floors, roofs, stone blocks, waterworks", "Workshops: mark out a workshop, then place its stations"],
+                "Structures: whole houses, walls, doors, windows, floors, roofs, stone blocks, waterworks", "Workshops: mark out a workshop, then place its stations"],
         });
         Header.AddChild(G.Gap(0.25f));
         Footer.AddChild(G.Gap(0.25f));
@@ -226,6 +226,7 @@ public partial class BuildWindow : GlyphWindow
         ],
         2 =>
         [
+            new("Buildings", () => [Mode(ToolMode.House, Tool.SelectHouse)]),
             new("Walls", () => Enumerable.Range(0, WallMaterials.Count).Select(m =>
             {
                 var cost = Constructions.Cost(StructureKind.EdgeWall, m);

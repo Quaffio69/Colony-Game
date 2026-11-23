@@ -64,7 +64,7 @@ public sealed partial class Colonist
         public bool Removed => Part?.Removed ?? Site!.Removed;
         public BuildCost Cost => Part?.Cost ?? Site!.Cost;
         public int Ticks => Part is { } p ? PartInfo.BuildTicks(p.Type, p.Size) : Constructions.BuildTicks(Site!.Kind);
-        public bool InReach(TilePos at) => Part is { } p ? p.Cells.Any(c => Colonist.InReach(at, c)) : Colonist.InReach(at, Site!.Cell);
+        public bool InReach(TilePos at) => Part is { } p ? p.Cells.Any(c => Colonist.InReach(at, c)) : Colonist.InReach(at, Site!.Target);
         public void ReleaseBuilder(int id)
         {
             if (Part is { } p && p.BuilderId == id) p.BuilderId = -1;
@@ -1039,16 +1039,17 @@ public sealed partial class Colonist
             if (site.BuilderId >= 0) continue;
             var (_, cost) = site.Cost;
             if (Constructions.MaterialsOnSite(site, sim.Items, available: true) < cost) continue;
-            // Never stand in the cell being built (a wall would entomb the builder).
-            var spots = ReachableAround(sim, site.Cell, component);
-            spots.Remove(site.Cell);
+            // Never stand in the cell being built (a wall would entomb the builder). A deck or upper stair is built from
+            // below (its materials are there): around the cell it goes in, never in it.
+            var spots = ReachableAround(sim, site.Target, component);
+            spots.Remove(site.Target);
             if (spots.Count == 0) continue;
             if (sim.PathBudgetExhausted)
             {
                 _deferred = true;
                 return false;
             }
-            var path = Route(sim, spots, site.Cell);
+            var path = Route(sim, spots, site.Target);
             if (path is null)
             {
                 _pathFailed.Add(site.Cell);
@@ -1057,7 +1058,7 @@ public sealed partial class Colonist
             if (!sim.Items.Reserve(site.Cell, cost)) continue;
             site.BuilderId = Id;
             _build = new BuildPlan(null, site, [(site.Cell, cost)]);
-            Begin(ColonistTask.Build, site.Cell, path);
+            Begin(ColonistTask.Build, site.Target, path);
             return true;
         }
         return false;

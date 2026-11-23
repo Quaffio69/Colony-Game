@@ -54,6 +54,8 @@ public partial class EdgeView : Node3D
         m.SetShaderParameter("albedo", albedo);
         m.SetShaderParameter("tint_mix", 0.0f);
         m.SetShaderParameter("emission", emission);
+        // Made after the level was set (the first wall of a material built later): sliced like the rest from the start.
+        if (_drawnLevel != int.MinValue) m.SetShaderParameter("cut_height", (float)(_drawnLevel + 1));
         _materials.Add(m);
         return m;
     }

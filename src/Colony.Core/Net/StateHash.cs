@@ -47,7 +47,7 @@ public static class StateHash
         foreach (var r in sim.Rooms.All)
             sum += Of(5, r.Id, r.Cells.Count, r.Parts.Count, r.Faction, r.Parts.Sum(p => p.Limit));
         foreach (var bp in sim.Constructions.All)
-            sum += Of(6, Pos(bp.Cell), (long)bp.Kind, bp.Faction);
+            sum += Of(6, Pos(bp.Cell), (long)bp.Kind, bp.Faction, Pos(bp.Target));
         sum += Of(7, sim.World.EdgeRevision, sim.World.CoverRevision, sim.Deaths, sim.Wildlife.Slain);
         foreach (var n in sim.Wildlife.Nests)
             sum += Of(8, n.Id, Pos(n.Entrance), n.Population, n.Out, n.Health, n.Crowded, n.Awake ? 1 : 0);

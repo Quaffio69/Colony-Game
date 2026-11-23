@@ -42,7 +42,7 @@ public partial class DesignationTool : Node3D
         // Orders
         None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, FarmFlax, Block, Demolish, Cancel,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
-        Room, Part, Structure, Edge, Floor, Roof, Rack, TradeDepot,
+        Room, Part, Structure, Edge, Floor, Roof, Rack, TradeDepot, House,
     }
 
     private const ToolMode LastOrder = ToolMode.Cancel;
@@ -247,6 +247,22 @@ public partial class DesignationTool : Node3D
         EndSelection();
     }
 
+    /// <summary>Storeys of the house the House tool plans ([ and ], or Z/X while dragging).</summary>
+    public int Storeys { get; private set; } = 1;
+
+    /// <summary>The House tool: a whole building over a box, in the wall, floor and roof materials last picked.</summary>
+    public void SelectHouse()
+    {
+        Mode = ToolMode.House;
+        EndSelection();
+    }
+
+    private void ChangeStoreys(int step)
+    {
+        Storeys = Math.Clamp(Storeys + step, 1, Houses.MaxStoreys);
+        if (_selection != Selection.None) UpdateBox();
+    }
+
     /// <summary>R: rotates the part (or turns the waterworks) being placed.</summary>
     public void Rotate()
     {
@@ -259,6 +275,7 @@ public partial class DesignationTool : Node3D
     /// <summary>[ and ]: the size of the part being placed.</summary>
     public void ChangeSize(int step)
     {
+        if (Mode == ToolMode.House) { ChangeStoreys(step); return; }
         if (PartFor(Mode) is { } part && PartInfo.Sizes(part) > 1)
             _sizes[part] = PartInfo.ClampSize(part, SizeFor(part) + step);
     }
@@ -301,7 +318,7 @@ public partial class DesignationTool : Node3D
         {
             if (_selection == Selection.None || Mode == ToolMode.Edge) return null;
             var (a, b) = Corners();
-            return (Math.Abs(a.X - b.X) + 1, Math.Abs(a.Y - b.Y) + 1, IsAreaTool(Mode) ? 1 : Math.Abs(a.Z - b.Z) + 1);
+            return (Math.Abs(a.X - b.X) + 1, Math.Abs(a.Y - b.Y) + 1, IsAreaTool(Mode) ? 1 : Mode == ToolMode.House ? Storeys : Math.Abs(a.Z - b.Z) + 1);
         }
     }
 
@@ -343,6 +360,11 @@ public partial class DesignationTool : Node3D
     public void StepLevel(int step)
     {
         if (_sim == null) return;
+        if (_selection != Selection.None && Mode == ToolMode.House)
+        {
+            ChangeStoreys(step); // a house rises by storeys from its ground floor
+            return;
+        }
         if (_selection != Selection.None && !IsAreaTool(Mode) && Mode != ToolMode.Edge)
         {
             _cornerZ = Math.Clamp(_cornerZ + step, 1, _sim.World.Height - 1);
@@ -716,7 +738,7 @@ public partial class DesignationTool : Node3D
                 break;
 
             case InputEventKey { Pressed: true, Keycode: Key.Bracketleft or Key.Bracketright } sk
-                when PartFor(Mode) is { } sized && PartInfo.Sizes(sized) > 1:
+                when PartFor(Mode) is { } sized && PartInfo.Sizes(sized) > 1 || Mode == ToolMode.House:
                 ChangeSize(sk.Keycode == Key.Bracketright ? 1 : -1);
                 Handled();
                 break;
@@ -804,6 +826,9 @@ public partial class DesignationTool : Node3D
         {
             ToolMode.Floor => new Covers(StructureKind.Floor, a, b, FloorMaterial, cancel),
             ToolMode.Roof => new Covers(StructureKind.Roof, a, b, RoofMaterial, cancel),
+            ToolMode.House => cancel
+                ? new CancelOrders(a, new TilePos(b.X, b.Y, Math.Max(a.Z, b.Z) + Storeys - 1))
+                : new PlaceHouse(a, b with { Z = a.Z }, Storeys, WallMaterial, FloorMaterial, RoofMaterial),
             ToolMode.Room => cancel ? new EraseRoom(a, b) : new PaintRoom(Workshop.Id, a, b),
             ToolMode.Block => cancel ? new CancelWalls(a, b) : new PlaceWalls(a, b),
             ToolMode.Structure => new RemoveStructures(a, b),
@@ -861,6 +886,8 @@ public partial class DesignationTool : Node3D
         _selection = Selection.None;
         _box.Visible = false;
         _drape.Visible = false;
+        if (_conflicts != null) _conflicts.Visible = false;
+        _housePlan = null;
     }
 
     private void UpdateGhost(bool placing)
@@ -905,6 +932,11 @@ public partial class DesignationTool : Node3D
             UpdateDrape();
             return;
         }
+        if (Mode == ToolMode.House)
+        {
+            UpdateHouse();
+            return;
+        }
         var (a, b) = Corners();
         int x0 = Math.Min(a.X, b.X), x1 = Math.Max(a.X, b.X) + 1;
         int y0 = Math.Min(a.Y, b.Y), y1 = Math.Max(a.Y, b.Y) + 1;
@@ -916,6 +948,63 @@ public partial class DesignationTool : Node3D
         _box.Scale = size + Vector3.One * pad;
         _box.MaterialOverride = _selection == Selection.Cancel ? _cancelMat : _modeMats[Mode];
         _box.Visible = true;
+    }
+
+    // ---- The House tool's preview: the storeys as a box, green if it fits, red with every cell in the way marked ---------
+
+    private MultiMeshInstance3D? _conflicts;
+    private (TilePos A, TilePos B, int Storeys, long Revision, int Sites) _surveyed;
+    private Houses.Plan? _housePlan;
+
+    /// <summary>The house being dragged out: its plan (conflicts included), null when not dragging one.</summary>
+    public Houses.Plan? HousePlan => _selection != Selection.None && Mode == ToolMode.House ? _housePlan : null;
+
+    private void UpdateHouse()
+    {
+        var (a, b) = Corners();
+        b = b with { Z = a.Z }; // the ground floor is the level above where the drag began
+        var key = (a, b, Storeys, _sim.World.Revision, _sim.Constructions.Version);
+        if (key != _surveyed || _housePlan is null)
+        {
+            _surveyed = key;
+            _housePlan = Houses.Survey(_sim, a, b, Storeys);
+            ShowConflicts(_housePlan);
+        }
+        var plan = _housePlan;
+        bool remove = _selection == Selection.Cancel;
+        PlacementProblem = remove ? null : plan.Problem;
+        var size = new Vector3(plan.Width, plan.Storeys, plan.Depth);
+        _box.Position = new Vector3(plan.X0, plan.Z0, plan.Y0) + size / 2f;
+        _box.Scale = size + Vector3.One * 0.08f;
+        _box.MaterialOverride = remove ? _cancelMat : plan.Conflicts.Count == 0 ? _ghostOk : _ghostBad;
+        _box.Visible = true;
+        if (_conflicts != null) _conflicts.Visible = !remove;
+    }
+
+    private void ShowConflicts(Houses.Plan plan)
+    {
+        if (_conflicts == null)
+        {
+            _conflicts = new MultiMeshInstance3D
+            {
+                Multimesh = new MultiMesh
+                {
+                    TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,
+                    Mesh = new BoxMesh { Size = Vector3.One * 1.02f, Material = Overlay.Material(new Color(1f, 0.2f, 0.15f, 0.55f)) },
+                },
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            };
+            AddChild(_conflicts);
+        }
+        var mm = _conflicts.Multimesh;
+        int n = Math.Min(plan.Conflicts.Count, 4000);
+        mm.InstanceCount = n;
+        for (int i = 0; i < n; i++)
+        {
+            var c = plan.Conflicts[i].Cell;
+            mm.SetInstanceTransform(i, new Transform3D(Basis.Identity, new Vector3(c.X + 0.5f, c.Z + 0.5f, c.Y + 0.5f)));
+        }
+        _conflicts.Visible = true;
     }
 
     /// <summary>The selected area as one plate per column on top of the ground (only rebuilt when the area changes).</summary>

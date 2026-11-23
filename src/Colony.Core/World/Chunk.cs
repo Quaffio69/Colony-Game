@@ -32,6 +32,9 @@ public sealed class Chunk
     /// <summary>Number of movement-blocking tiles (<see cref="TileInfo.IsSolid"/>; stairs excluded).</summary>
     public int SolidCount { get; private set; }
 
+    /// <summary>Number of stair cells (views find stairs without scanning every chunk).</summary>
+    public int StairCount { get; private set; }
+
     /// <summary>World-space tile position of this chunk's (0,0,0) corner.</summary>
     public TilePos Origin => new(Coord.X << Shift, Coord.Y << Shift, Coord.Z << Shift);
 
@@ -61,6 +64,8 @@ public sealed class Chunk
         else if (type == TileType.Air) NonAirCount--;
         if (TileInfo.IsSolid(old)) SolidCount--;
         if (TileInfo.IsSolid(type)) SolidCount++;
+        if (TileInfo.IsStair(old)) StairCount--;
+        if (TileInfo.IsStair(type)) StairCount++;
 
         _tiles[i] = type;
         Version++;
@@ -109,18 +114,20 @@ public sealed class Chunk
         _fill = type;
         NonAirCount = type == TileType.Air ? 0 : Volume;
         SolidCount = TileInfo.IsSolid(type) ? Volume : 0;
+        StairCount = TileInfo.IsStair(type) ? Volume : 0;
     }
 
     /// <summary>World generation: adopt a filled tile array (kept only if the tiles actually vary).</summary>
     internal void InitTiles(TileType[] tiles)
     {
-        int nonAir = 0, solid = 0;
+        int nonAir = 0, solid = 0, stairs = 0;
         var first = tiles[0];
         bool uniform = true;
         foreach (var t in tiles)
         {
             if (t != TileType.Air) nonAir++;
             if (TileInfo.IsSolid(t)) solid++;
+            if (TileInfo.IsStair(t)) stairs++;
             uniform &= t == first;
         }
         if (uniform)
@@ -131,6 +138,7 @@ public sealed class Chunk
         _tiles = tiles;
         NonAirCount = nonAir;
         SolidCount = solid;
+        StairCount = stairs;
     }
 
     /// <summary>Drops the tile array if every tile is the same (after generation passes that add variety).</summary>
@@ -175,6 +183,9 @@ public sealed class Chunk
             _tiles = new TileType[Volume];
             r.BaseStream.ReadExactly(System.Runtime.InteropServices.MemoryMarshal.AsBytes(_tiles.AsSpan()));
         }
+        StairCount = 0; // derived (not saved)
+        if (_tiles is null) StairCount = TileInfo.IsStair(_fill) ? Volume : 0;
+        else foreach (var t in _tiles) if (TileInfo.IsStair(t)) StairCount++;
         Edges = null;
         if (r.ReadBoolean())
         {

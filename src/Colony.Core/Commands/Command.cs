@@ -342,6 +342,26 @@ public sealed record PlaceOutline(TilePos A, TilePos B, int Material) : Command
     }
 }
 
+/// <summary>
+/// A whole house over a box between ground tiles (<see cref="Houses"/>): walls round each of its storeys, a door, floors,
+/// stairs between storeys and a roof unless rock roofs it. Nothing is planned if anything is in the way.
+/// </summary>
+public sealed record PlaceHouse(TilePos A, TilePos B, int Storeys, int Wall, int Floor, int Roof) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        var plan = Houses.Survey(sim, A, B, Storeys);
+        if (plan.Problem is { } why) return $"Can't plan the house: {why}";
+        int floor = Math.Clamp(Floor, 1, FloorMaterials.Count - 1), roof = Math.Clamp(Roof, 1, RoofMaterials.Count - 1);
+        var p = Houses.Place(sim, plan, WallMaterials.Clamp(Wall), floor, roof, Player);
+        string storeys = plan.Storeys == 1 ? "one storey" : $"{plan.Storeys} storeys";
+        string needs = string.Join(", ", p.Cost.Select(kv => $"{kv.Value} {Mat(kv.Key)}"));
+        string roofed = p.Roofs == 0 ? "rock overhead for a roof" : p.Roofs < plan.Width * plan.Depth ? $"a roof of {p.Roofs} cells (rock covers the rest)" : "a roof";
+        return $"House planned, {plan.Width}x{plan.Depth}, {storeys}: {p.Walls} wall pieces, {(p.Door ? "a door, " : "")}" +
+               $"{p.Floors + p.Decks} floor cells{(p.Stairs > 0 ? $", {p.Stairs} stairs" : "")}, {roofed}. Needs {needs}";
+    }
+}
+
 /// <summary>Cancels planned and takes down built walls, doors and windows on every edge in or round a box.</summary>
 public sealed record ClearWalls(TilePos A, TilePos B) : Command
 {

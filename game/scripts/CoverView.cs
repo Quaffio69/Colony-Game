@@ -21,7 +21,10 @@ public partial class CoverView : Node3D
     private ColonySim _sim = null!;
     private WorldView _world = null!;
     private Shader _shader = null!;
+    // Floor plates and stair flights: sliced at the view level itself, so an upper storey's floor (at the top of the viewed
+    // level) doesn't lid the storey being looked into. Roofs: at the level above (they sit over their cell).
     private readonly List<ShaderMaterial> _materials = new();
+    private readonly List<ShaderMaterial> _roofMaterials = new();
     private readonly Dictionary<int, MultiMeshInstance3D> _floors = new();
     private MeshInstance3D _roofs = null!;
     private MultiMeshInstance3D _ghosts = null!;
@@ -45,6 +48,57 @@ public partial class CoverView : Node3D
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
         AddChild(_ghosts);
+        var ghostMat = Overlay.Material(new Color(0.75f, 0.85f, 1f, 0.35f));
+        _stairGhosts = new MultiMeshInstance3D
+        {
+            Multimesh = new MultiMesh { TransformFormat = MultiMesh.TransformFormatEnum.Transform3D, Mesh = Flight(ghostMat, ghostMat) },
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+        };
+        AddChild(_stairGhosts);
+        _stairs = new MultiMeshInstance3D
+        {
+            Multimesh = new MultiMesh { TransformFormat = MultiMesh.TransformFormatEnum.Transform3D, UseCustomData = true },
+        };
+        AddChild(_stairs);
+    }
+
+    // ---- Stairs: a flight of steps in every stair cell that leads up (a down stair is the top of the flight below) ----
+
+    private MultiMeshInstance3D _stairs = null!, _stairGhosts = null!;
+    private long _drawnStairs = -1;
+    private double _stairsCheckedAt = -1e9, _now;
+
+    /// <summary>Four treads rising across the cell from its floor to the next level, on two stringers.</summary>
+    private static Mesh Flight(Material tread, Material side)
+    {
+        var p = new Parts();
+        for (int i = 0; i < 4; i++)
+            p.Add(Box(0.8f, 0.1f, 0.25f), 0, 0.2f + i * 0.25f, -0.375f + i * 0.25f, tread);
+        var slope = new Basis(Vector3.Right, -Mathf.Pi / 4); // rising to the far side (+z)
+        p.Add(Box(0.08f, 0.1f, 1.38f), new Transform3D(slope, new Vector3(-0.42f, 0.5f, 0)), side);
+        p.Add(Box(0.08f, 0.1f, 1.38f), new Transform3D(slope, new Vector3(0.42f, 0.5f, 0)), side);
+        return Compose(p);
+    }
+
+    private void RedrawStairs()
+    {
+        _drawnStairs = _sim.World.Revision;
+        var mm = _stairs.Multimesh;
+        if (mm.Mesh == null)
+        {
+            var wood = new Color(0.62f, 0.46f, 0.3f);
+            mm.Mesh = Flight(Mat(wood), Mat(wood.Darkened(0.25f)));
+        }
+        var list = new List<Transform3D>();
+        foreach (var (cell, type) in _sim.World.AllStairs())
+            if (TileInfo.GoesUp(type))
+                list.Add(new Transform3D(Basis.Identity, new Vector3(cell.X + 0.5f, cell.Z, cell.Y + 0.5f)));
+        mm.InstanceCount = list.Count;
+        for (int i = 0; i < list.Count; i++)
+        {
+            mm.SetInstanceTransform(i, list[i]);
+            mm.SetInstanceCustomData(i, new Color(1, 1, 1));
+        }
     }
 
     private ShaderMaterial Mat(Color albedo, bool instanced = true)
@@ -55,7 +109,7 @@ public partial class CoverView : Node3D
         m.SetShaderParameter("instanced", instanced);
         m.SetShaderParameter("object_id", (float)GameLooks.Construction);
         GameLooks.Styled(m);
-        m.SetShaderParameter("cut_height", (float)(_drawnLevel + 1));
+        m.SetShaderParameter("cut_height", (float)_drawnLevel);
         _materials.Add(m);
         return m;
     }
@@ -67,10 +121,18 @@ public partial class CoverView : Node3D
         if (level != _drawnLevel)
         {
             _drawnLevel = level;
-            foreach (var m in _materials) m.SetShaderParameter("cut_height", (float)(level + 1));
+            foreach (var m in _materials) m.SetShaderParameter("cut_height", (float)level);
+            foreach (var m in _roofMaterials) m.SetShaderParameter("cut_height", (float)(level + 1));
         }
         if (_sim.World.CoverRevision != _drawnCovers) Redraw();
         if (_sim.Constructions.Version != _drawnSites) RedrawGhosts();
+        // Stairs follow tile changes, checked twice a second (only chunks with stairs are read).
+        _now += delta;
+        if (_sim.World.Revision != _drawnStairs && _now - _stairsCheckedAt > 0.5)
+        {
+            _stairsCheckedAt = _now;
+            RedrawStairs();
+        }
     }
 
     private void Redraw()
@@ -117,12 +179,20 @@ public partial class CoverView : Node3D
     {
         _drawnSites = _sim.Constructions.Version;
         var list = new List<Transform3D>();
+        var stairs = new List<Transform3D>();
         foreach (var bp in _sim.Constructions.All)
-            if (bp.IsCover)
-                list.Add(new Transform3D(Basis.Identity, new Vector3(bp.Cell.X + 0.5f, bp.Cell.Z + (bp.Kind == Colony.Core.Orders.StructureKind.Roof ? 1.03f : 0.03f), bp.Cell.Y + 0.5f)));
+        {
+            if (bp.IsCover || bp.Kind == Colony.Core.Orders.StructureKind.Deck) // a deck: a plate at its own level
+                list.Add(new Transform3D(Basis.Identity, new Vector3(bp.Target.X + 0.5f, bp.Target.Z + (bp.Kind == Colony.Core.Orders.StructureKind.Roof ? 1.03f : 0.03f), bp.Target.Y + 0.5f)));
+            else if (bp.Kind == Colony.Core.Orders.StructureKind.Stair && TileInfo.GoesUp((TileType)bp.Material))
+                stairs.Add(new Transform3D(Basis.Identity, new Vector3(bp.Target.X + 0.5f, bp.Target.Z, bp.Target.Y + 0.5f)));
+        }
         var mm = _ghosts.Multimesh;
         mm.InstanceCount = list.Count;
         for (int i = 0; i < list.Count; i++) mm.SetInstanceTransform(i, list[i]);
+        var sm = _stairGhosts.Multimesh;
+        sm.InstanceCount = stairs.Count;
+        for (int i = 0; i < stairs.Count; i++) sm.SetInstanceTransform(i, stairs[i]);
     }
 
     // ---- Floors ---------------------------------------------------------------------------------------------
@@ -257,7 +327,7 @@ public partial class CoverView : Node3D
         mat.SetShaderParameter("joints", roof switch { 1 => 9f, 3 => 2.5f, 4 => 3.5f, _ => 3f });
         mat.SetShaderParameter("cut_height", (float)(_drawnLevel + 1));
         GameLooks.Styled(mat);
-        _materials.Add(mat);
+        _roofMaterials.Add(mat);
         _roofMats[roof] = mat;
         return mat;
     }

@@ -35,13 +35,13 @@ public static class Movement
     public static bool IsOpen<T>(in T w, int x, int y, int z) where T : ITileReader =>
         w.InBounds(x, y, z) && !TileInfo.IsSolid(w.Get(x, y, z));
 
-    /// <summary>An agent can stand here: an open cell that is a stair or has a solid floor.</summary>
+    /// <summary>An agent can stand here: an open cell that is a stair or a deck (a built upper floor), or has a solid floor.</summary>
     public static bool IsStandable<T>(in T w, TilePos p) where T : ITileReader
     {
         if (p.Z <= 0 || !w.InBounds(p.X, p.Y, p.Z)) return false;
         var t = w.Get(p.X, p.Y, p.Z);
         if (TileInfo.IsSolid(t)) return false;
-        return TileInfo.IsStair(t) || TileInfo.IsSolid(w.Get(p.X, p.Y, p.Z - 1));
+        return TileInfo.IsFooting(t) || TileInfo.IsSolid(w.Get(p.X, p.Y, p.Z - 1));
     }
 
     /// <summary>Fills <paramref name="output"/> with every legal move from <paramref name="p"/> and its cost.</summary>
