@@ -92,7 +92,7 @@ public static class Catalog
                 Model = Opt(e, "model") ?? "crates",
                 Color = Opt(e, "color") is { } hex ? ParseColor(hex, id) : 0xff00ff,
                 StackLimit = Int(e, "stack") ?? (isRaw ? 25 : 40),
-                CarryLimit = Int(e, "carry") ?? 10,
+                Weight = e.TryGetProperty("weight", out var kg) ? (float)kg.GetDouble() : DefaultWeight(category),
                 Source = Opt(e, "source"),
                 Uses = e.TryGetProperty("uses", out var uses) ? uses.EnumerateArray().Select(u => u.GetString()!).ToList() : [],
                 Need = NeedOf(e),
@@ -263,6 +263,17 @@ public static class Catalog
         e.TryGetProperty(name, out var v) && v.GetString() is { } s ? s : throw Bad($"missing '{name}' in {e}");
     private static string? Opt(JsonElement e, string name) => e.TryGetProperty(name, out var v) ? v.GetString() : null;
     private static int? Int(JsonElement e, string name) => e.TryGetProperty(name, out var v) ? v.GetInt32() : null;
+
+    /// <summary>Kg a unit for items the catalog gives no weight: by category (furniture heavy, food and cloth light).</summary>
+    private static float DefaultWeight(string category) => category switch
+    {
+        "raw" or "metal" or "military" => 3,
+        "material" or "mechanism" => 2,
+        "home" => 5,
+        "wonder" => 30,
+        "arcane" or "provision" or "textile" or "knowledge" => 0.5f,
+        _ => 1, // components, culture
+    };
 
     /// <summary>"need: household goods (high society)" -> "household goods".</summary>
     private static string? NeedOf(JsonElement e)

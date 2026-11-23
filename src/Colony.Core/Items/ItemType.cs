@@ -80,7 +80,10 @@ public sealed class ItemDef
     /// <summary>sRGB colour as 0xRRGGBB.</summary>
     public uint Color { get; init; } = 0xff00ff;
     public int StackLimit { get; init; } = 40;
-    public int CarryLimit { get; init; } = 6;
+    /// <summary>Kg a unit (catalog "weight", else by category).</summary>
+    public float Weight { get; init; } = 1;
+    /// <summary>Units one colonist carries a trip: <see cref="Balance.CarryKg"/> over the weight, at least one.</summary>
+    public int CarryLimit => Math.Max(1, (int)(Balance.CarryKg / Weight + 0.001f));
     public string? Source { get; init; }
     public IReadOnlyList<string> Uses { get; init; } = [];
     /// <summary>The colonists' need this item meets (a "need: X" use): "food", "dress", "comfort"...; null if none.</summary>

@@ -82,11 +82,12 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 `docs/playtest/reports/`.
 
 ### Bugs
-- [ ] Designating the whole world to dig hangs the game (too many orders at once).
-- [ ] Joining a game that has hung hangs the joining player too (the snapshot or the catch-up never finishes).
+- [x] Designating the whole world to dig hangs the game: orders are capped at 100k per colony, and marks redraw cheaply.
+- [x] Joining a game that has hung hangs the joining player too (it was the 24 MB snapshot of 10M orders; the cap keeps it small).
 - [ ] A desynced game keeps playing; it should stop and force a resync/reload from the host.
-- [ ] Enter completes every order instantly in release builds (`DebugCompleteAll`, a leftover from M2): move it to dev mode.
-- [ ] Tests in the game seemed broken (check the Tests window/`--ui-selftest`; the window is now dev builds only).
+- [x] Enter completed every order instantly in release builds: now Ctrl+Enter, developer builds only.
+- [ ] Tests in the game seemed broken. `--ui-selftest` fails 4 checks on main (since before 2026-11-22's fixes): simulated keys and
+      clicks never reach the world tools (n picks Dig, Shift+P, Ctrl tap, click to select). The Tests window is dev builds only now.
 - [ ] Rooms cannot be shrunk once painted.
 
 ### Controls and clarity
@@ -120,7 +121,7 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 ### Balance
 - [x] Grass regrows more slowly (2-4 days instead of 0.5-1.5).
 - [x] Happiness lasts longer (mood moves 35% a day toward the day's, instead of resetting daily).
-- [x] Haulers carry more per trip (loads of 10, logs 6; topped up from small piles beside) and trees give fewer logs.
+- [x] Haulers carry more per trip: items have weights and a colonist lifts 30 kg (6 logs, 10 stone, 60 herbs), topped up from small piles beside; trees give fewer logs. Carts and heavy machinery are the way to carry more later.
 
 ### New features
 - [ ] Heavy machinery for digging, hauling etc., built in a workshop.

@@ -66,8 +66,10 @@ public static class Balance
     public const float LogsPerLevel = 0.4f;
     /// <summary>Share of dug stone tiles that leave a usable stone (the rest is rubble that vanishes).</summary>
     public const float StoneYield = 0.5f;
-    // How much a hauler carries per trip is per item in data/tech-tree.json ("carry", default 10; logs 6); a hauler
-    // also tops a load up from loose piles of the same item beside it (Colonist.TopUp).
+    /// <summary>Kg a colonist carries a trip. A load is this over the item's weight (data/tech-tree.json "weight"): 6 logs,
+    /// 10 stone or ore, 15 planks, 60 herbs or grain, 3 beds. A hauler also tops a load up from loose piles of the same
+    /// item beside it (Colonist.TopUp). Heavy machinery and carts are the planned way to carry more.</summary>
+    public const float CarryKg = 30;
 
     // ---- Grass and mood -------------------------------------------------------------------------------------------
 
@@ -77,6 +79,12 @@ public static class Balance
     /// <summary>Share of the way a colonist's happiness moves each day toward that day's mood (home, food, living
     /// standard, likes), so good days build up and one bad day only dents it. Was 1 (mood reset daily).</summary>
     public const float MoodChange = 0.35f;
+
+    // ---- Orders ----------------------------------------------------------------------------------------------------
+
+    /// <summary>Most work orders (dig, carve, chop, gather) one colony may have at once; farm sowing is not counted.
+    /// A box over a whole map at forty levels (10 million orders) hung the game, and joining players with it.</summary>
+    public const int MaxOrders = 100_000;
 
     // ---- Work (ticks) --------------------------------------------------------------------------------------------
 

@@ -30,11 +30,9 @@ public class SnapshotTests
         q.Execute(new DesignatePlants(DesignationKind.Chop, b.X - 15, b.Y - 15, b.X + 15, b.Y + 15) { Player = 1 });
         q.Execute(new DesignateBox(b.Offset(-4, -2, -1), b.Offset(-2, 2, -1), DesignationKind.Dig) { Player = 1 });
         q.Execute(new AddStockpile(new TilePos(b.X + 3, b.Y + 3, gb - 3), new TilePos(b.X + 6, b.Y + 6, gb + 3)) { Player = 1 });
-        // A trade under way: depots on both sides, berries one way and bread the other (from the colonies' provisions).
+        // Trade depots on both sides (the deal comes last, so the snapshot catches its deliveries under way).
         q.Execute(new AddTradeDepot(new TilePos(a.X + 3, a.Y - 7, ga - 3), new TilePos(a.X + 5, a.Y - 5, ga + 3)));
         q.Execute(new AddTradeDepot(new TilePos(b.X - 6, b.Y + 3, gb - 3), new TilePos(b.X - 4, b.Y + 5, gb + 3)) { Player = 1 });
-        q.Execute(new ProposeTrade(1, new Trade.TradeTerms([new Trade.TradeTerm(0, "berries", 80), new Trade.TradeTerm(1, "bread", 40)])));
-        q.Execute(new AcceptTrade(sim.Trades.All[0].Id) { Player = 1 });
         for (int i = 0; i < 400; i++) sim.Step();
         // Parts in the workshop (blueprints: haulers bring logs, builders build).
         if (sim.Rooms.All.FirstOrDefault(r => r.Type.Id == "carpentry") is { } shop)
@@ -44,7 +42,10 @@ public class SnapshotTests
                 foreach (var c in cells)
                     if (q.Execute(new PlacePart(part.Id, c, false, 1)).StartsWith("Placed")) break;
         }
-        for (int i = 0; i < 500; i++) sim.Step();
+        for (int i = 0; i < 400; i++) sim.Step();
+        q.Execute(new ProposeTrade(1, new Trade.TradeTerms([new Trade.TradeTerm(0, "berries", 80), new Trade.TradeTerm(1, "bread", 40)])));
+        q.Execute(new AcceptTrade(sim.Trades.All[0].Id) { Player = 1 });
+        for (int i = 0; i < 150; i++) sim.Step();
         return sim;
     }
 

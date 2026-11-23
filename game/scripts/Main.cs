@@ -238,7 +238,7 @@ public partial class Main : Node3D
         _stairsDemoAt = null;
         switch (id)
         {
-            case "dig": DigDemo(); break;
+            case "dig": DigDemo(""); break;
             case "stairs": StairsDemo(); break;
             case "haul": HaulDemo(); break;
             case "factory": FactoryDemo(); break;
@@ -419,7 +419,7 @@ public partial class Main : Node3D
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
                 if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--falls-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
-                if (Arg("--dig-demo") != null) DigDemo();
+                if (Arg("--dig-demo") is { } digDemo) DigDemo(digDemo);
                 if (Arg("--stairs-demo") != null) StairsDemo();
                 if (Arg("--haul-demo") != null) HaulDemo();
                 if (Arg("--factory-demo") != null) FactoryDemo();
@@ -608,10 +608,15 @@ public partial class Main : Node3D
     }
 
     /// <summary>Designates a room into the mountain's flank at the current level.</summary>
-    private void DigDemo()
+    private void DigDemo(string mode)
     {
         int z = _world.ViewLevel, cx = _sim.World.Width / 2, cy = _sim.World.Depth / 2;
-        _sim.Designations.DesignateBox(new TilePos(cx - 6, cy - 4, z), new TilePos(cx + 6, cy + 4, z));
+        if (mode == "huge") // a huge box: stops at the order limit (a whole-map box once hung the game)
+        {
+            var c = _sim.Colonists[0].Position; // 240x240 round the colony, every level below it: past the limit
+            GD.Print(_sim.Commands.Execute(new Colony.Core.Commands.DesignateBox(new TilePos(c.X - 120, c.Y - 120, 0), new TilePos(c.X + 120, c.Y + 120, c.Z - 1), Colony.Core.Orders.DesignationKind.Dig)));
+        }
+        else _sim.Designations.DesignateBox(new TilePos(cx - 6, cy - 4, z), new TilePos(cx + 6, cy + 4, z));
     }
 
     /// <summary>

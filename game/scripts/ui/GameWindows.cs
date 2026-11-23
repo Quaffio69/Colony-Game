@@ -241,7 +241,8 @@ public partial class StocksWindow : GlyphWindow
     }
 
     private void Add(ItemType t, int[] totals) =>
-        Content.AddChild(new GlyphKV(ItemLook.Glyph(t), ItemLook.Color(t), t.Name, totals[t.Index].ToString()));
+        Content.AddChild(new GlyphKV(ItemLook.Glyph(t), ItemLook.Color(t), t.Name, totals[t.Index].ToString()) { MouseFilter = MouseFilterEnum.Pass }
+            .WithBanner(() => $"{t.Name}: {t.Def.Weight:0.#} kg each, {t.Def.CarryLimit} a load{(t.Def.Source is { } s ? $" · from {s}" : "")}"));
 }
 
 // ---- Chronicle (L) ----------------------------------------------------------------------------------------
@@ -672,7 +673,7 @@ public partial class HelpWindow : GlyphWindow
         ("LMB, Shift+LMB", "start/confirm a box or place; removal box"), ("RMB click", "abort the box, then put the tool down"),
         ("Shift/Ctrl, Z X while boxing", "stretch the box over levels"),
         ("R, [ ]", "rotate, size of the part being placed"), ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor"),
-        ("Esc", "cancel placing, close the window, main menu"), ("Ctrl+Tab", "next window"), ("Enter", "debug: finish all orders"),
+        ("Esc", "cancel placing, close the window, main menu"), ("Ctrl+Tab", "next window"),
         ("F5 / F9", "quicksave / load the newest save"), ("F10", "tune the pixel-art look (Save keeps it)"), ("F4", "play the next colony (hot-seat, several colonies)"),
         ("G", "draft everyone, then click ground to march or a nest to attack (G again: done)"), ("Shift+G", "stand everyone down"),
         ("C I B L", "colonists, stocks, build, chronicle"), ("H J V M", "housing, work, inspect, military"), ("F1 F2 F3", "tests, appearance, this help"), ("F6", "trade with other colonies (offers, counters, deals)"),

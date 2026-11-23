@@ -696,23 +696,48 @@ public partial class WorldView : Node3D
 
     // ---- Designations --------------------------------------------------------------------------------
 
+    /// <summary>Per kind: instance buffer (12 floats a mark, reused; grown by doubling) and marks in it.</summary>
+    private readonly Dictionary<DesignationKind, (float[] Buffer, int Count)> _designationBuffers = new();
+    private double _designationsDrawnAt = -1;
+    /// <summary>Order changes redraw the marks at most this often (each finished dig changes them).</summary>
+    private const double DesignationRedrawSeconds = 0.25;
+
+    /// <summary>
+    /// Redraws the order marks in one pass over the orders, writing each kind's instance buffer in place (one
+    /// <c>SetInstanceTransform</c> call a mark made a box of 100k orders take seconds per finished dig). Level
+    /// changes redraw at once; order changes at most every <see cref="DesignationRedrawSeconds"/>.
+    /// </summary>
     private void RedrawDesignations()
     {
+        double now = Time.GetTicksMsec() / 1000.0;
+        if (_viewLevel == _designationsDrawnLevel && now - _designationsDrawnAt < DesignationRedrawSeconds) return;
+        _designationsDrawnAt = now;
         _designationsDrawnVersion = _sim.Designations.Version;
         _designationsDrawnLevel = _viewLevel;
 
+        foreach (var kind in _designationMarks.Keys)
+            _designationBuffers[kind] = (_designationBuffers.TryGetValue(kind, out var b) ? b.Buffer : new float[12 * 64], 0);
+        foreach (var (p, k) in _sim.Designations.All)
+        {
+            // Plant orders always show: that work happens on the surface whatever level is in view. Farms place
+            // their own sow and harvest orders; those stay unmarked (the plot overlay already shows the farm).
+            if (!(Designations.IsPlantOrder(k) || p.Z <= _viewLevel) || _sim.Farms.Contains(p)) continue;
+            var (buffer, count) = _designationBuffers[k];
+            if ((count + 1) * 12 > buffer.Length) Array.Resize(ref buffer, buffer.Length * 2);
+            var c = SimSpace.TileCenter(p);
+            int i = count * 12;
+            buffer[i] = 1; buffer[i + 1] = 0; buffer[i + 2] = 0; buffer[i + 3] = c.X;
+            buffer[i + 4] = 0; buffer[i + 5] = 1; buffer[i + 6] = 0; buffer[i + 7] = c.Y;
+            buffer[i + 8] = 0; buffer[i + 9] = 0; buffer[i + 10] = 1; buffer[i + 11] = c.Z;
+            _designationBuffers[k] = (buffer, count + 1);
+        }
         foreach (var (kind, marks) in _designationMarks)
         {
-            var visible = new List<TilePos>();
-            foreach (var (p, k) in _sim.Designations.All)
-                // Plant orders always show: that work happens on the surface whatever level is in view. Farms place
-                // their own sow and harvest orders; those stay unmarked (the plot overlay already shows the farm).
-                if (k == kind && (Designations.IsPlantOrder(k) || p.Z <= _viewLevel) && !_sim.Farms.Contains(p)) visible.Add(p);
-
+            var (buffer, count) = _designationBuffers[kind];
             var mm = marks.Multimesh;
-            mm.InstanceCount = visible.Count;
-            for (int i = 0; i < visible.Count; i++)
-                mm.SetInstanceTransform(i, new Transform3D(Basis.Identity, SimSpace.TileCenter(visible[i])));
+            if (mm.InstanceCount != buffer.Length / 12) mm.InstanceCount = buffer.Length / 12;
+            mm.VisibleInstanceCount = count;
+            if (count > 0) mm.Buffer = buffer;
         }
     }
 }

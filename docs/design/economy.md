@@ -37,7 +37,7 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   ones as `ItemType.Log` etc.). Digging stone leaves stone 50% of the time, clay/sand/minerals always; felling
   leaves logs scaled by tree size (`ColonySim.MiningYield`/`LogYield`). Piles re-settle when their ground changes (digs,
   cave-ins). `Stockpiles` are zoned floor cells (all types for now); `Hauling.Plans` pairs the nearest loose
-  piles with the nearest stockpile cell with room (linear scans; spatial index is the scale-up path). A load is the item's `carry` (default 10, logs 6); picking up, a
+  piles with the nearest stockpile cell with room (linear scans; spatial index is the scale-up path). A load is `Balance.CarryKg` (30) over the item's `weight` in kg (default by category: 6 logs, 10 stone, 60 herbs); picking up, a
   hauler tops it up from loose piles of the same item within 2 tiles (`Colonist.TopUp`: gathering leaves many small piles).
   Who hauls is set by work priorities (see Work priorities). `ItemPiles.UnitsOf(type)` is a running per-type tally
   (no scan). **Storage racks** (`Stockpiles.Racks`, `StructureKind.Rack`): warehouse shelving built on a stockpile cell
@@ -56,7 +56,7 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   and leaves it as a pile (haulers return it). Abandoned at any point, the scaffold stays where it stood. Designations
   only (dig and stairs) for now. `ColonistView` raises the colonist on a pole-and-deck scaffold as it goes up.
 - **Production tree is data (`data/tech-tree.json`, embedded in Core, loaded by `Industry.Catalog`):** items
-  (stack/carry sizes, pile model, colour), 12 broad DF-style workshops (`RoomType`), their 32 stations
+  (stack size, weight, pile model, colour), 12 broad DF-style workshops (`RoomType`), their 32 stations
   (`PartType`s with role Machine; build material by size) and 79 recipes (multi-input `Ingredient`s, output
   count, labour ticks, education). Adding a product is one item + one recipe line; tiers are computed. Load
   errors throw naming the entry. Tests check the tree bootstraps from raw resources and batches fit crates.

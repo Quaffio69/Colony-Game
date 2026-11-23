@@ -30,6 +30,19 @@ public sealed class Designations
     private readonly Dictionary<TilePos, DesignationKind> _orders = new();
     private readonly Dictionary<TilePos, int> _claims = new();
     private readonly Owners _owners = new();
+    private readonly Dictionary<int, int> _counts = new(); // orders per colony (never enumerated)
+
+    /// <summary>How many orders a colony has (capped at <see cref="Balance.MaxOrders"/>; farm sowing excepted).</summary>
+    public int OrdersOf(int faction) => _counts.GetValueOrDefault(faction);
+
+    /// <summary>Set when an order was refused for the cap; box commands read and reset it to say so.</summary>
+    public bool LimitReached { get; set; }
+
+    private void Uncount(TilePos p)
+    {
+        int f = _owners.Of(p);
+        _counts[f] = Math.Max(0, OrdersOf(f) - 1);
+    }
 
     /// <summary>The faction whose order this is (0 when unowned or the first colony).</summary>
     public int OwnerOf(TilePos p) => _owners.Of(p);
@@ -65,7 +78,14 @@ public sealed class Designations
             if (tile == TileType.Air) return false;
             if (Result(kind, tile) == tile) return false; // nothing would change
         }
-        if (_orders.TryGetValue(p, out var existing) && (existing == kind || _owners.Of(p) != faction)) return false; // already so, or another colony's order
+        bool exists = _orders.TryGetValue(p, out var existing);
+        if (exists && (existing == kind || _owners.Of(p) != faction)) return false; // already so, or another colony's order
+        if (!exists && kind != DesignationKind.Sow && OrdersOf(faction) >= Balance.MaxOrders)
+        {
+            LimitReached = true; // a colony's orders are capped (a box over the whole map hung the game)
+            return false;
+        }
+        if (!exists) _counts[faction] = OrdersOf(faction) + 1;
         _owners.Set(p, faction);
 
         _orders[p] = kind;
@@ -78,15 +98,23 @@ public sealed class Designations
     {
         if (!_orders.ContainsKey(p) || !_owners.Matches(p, faction)) return false;
         _orders.Remove(p);
+        Uncount(p);
         _owners.Clear(p);
         _claims.Remove(p);
         Version++;
         return true;
     }
 
-    /// <summary>Designates every solid tile in the inclusive box between two corners; returns how many were added.</summary>
-    public int DesignateBox(TilePos a, TilePos b, DesignationKind kind = DesignationKind.Dig, int faction = 0) =>
-        ForBox(a, b, p => Designate(p, kind, faction));
+    /// <summary>Designates every solid tile in the inclusive box between two corners, top level first, until the
+    /// colony reaches <see cref="Balance.MaxOrders"/>; returns how many were added.</summary>
+    public int DesignateBox(TilePos a, TilePos b, DesignationKind kind = DesignationKind.Dig, int faction = 0)
+    {
+        LimitReached = false;
+        return ForBox(a, b, p => Designate(p, kind, faction), stopAtLimit: true);
+    }
+
+    /// <summary>What a box command adds to its message when the cap cut it short.</summary>
+    public string LimitNote => LimitReached ? $" (order limit reached: a colony has at most {Balance.MaxOrders} orders)" : "";
 
     /// <summary>Cancels every designation in the inclusive box between two corners; returns how many were removed.</summary>
     public int CancelBox(TilePos a, TilePos b, int faction = Owners.Any) => ForBox(a, b, p => Cancel(p, faction));
@@ -194,6 +222,7 @@ public sealed class Designations
     public bool Complete(TilePos p)
     {
         if (!_orders.Remove(p, out var kind)) return false;
+        Uncount(p);
         _claims.Remove(p);
         _owners.Clear(p);
         if (!IsPlantOrder(kind)) _world.Set(p, Result(kind, _world.Get(p)));
@@ -217,12 +246,15 @@ public sealed class Designations
         return IsStair(kind) ? dig + Balance.StairCarveTicks : dig;
     }
 
-    private static int ForBox(TilePos a, TilePos b, Func<TilePos, bool> action)
+    /// <summary>Runs over the box clipped to the world, top level first (so a capped box takes the top levels).</summary>
+    private int ForBox(TilePos a, TilePos b, Func<TilePos, bool> action, bool stopAtLimit = false)
     {
         int n = 0;
-        for (int z = Math.Min(a.Z, b.Z); z <= Math.Max(a.Z, b.Z); z++)
-        for (int y = Math.Min(a.Y, b.Y); y <= Math.Max(a.Y, b.Y); y++)
-        for (int x = Math.Min(a.X, b.X); x <= Math.Max(a.X, b.X); x++)
+        int x0 = Math.Max(0, Math.Min(a.X, b.X)), x1 = Math.Min(_world.Width - 1, Math.Max(a.X, b.X));
+        int y0 = Math.Max(0, Math.Min(a.Y, b.Y)), y1 = Math.Min(_world.Depth - 1, Math.Max(a.Y, b.Y));
+        for (int z = Math.Min(_world.Height - 1, Math.Max(a.Z, b.Z)); z >= Math.Max(0, Math.Min(a.Z, b.Z)); z--)
+        for (int y = y0; y <= y1 && !(stopAtLimit && LimitReached); y++)
+        for (int x = x0; x <= x1; x++)
             if (action(new TilePos(x, y, z))) n++;
         return n;
     }
@@ -253,6 +285,8 @@ public sealed class Designations
         int nc = r.ReadInt32();
         for (int i = 0; i < nc; i++) _claims[Net.SnapIO.ReadPos(r)] = r.ReadInt32();
         _owners.SnapLoad(r);
+        _counts.Clear();
+        foreach (var p in _orders.Keys) _counts[_owners.Of(p)] = OrdersOf(_owners.Of(p)) + 1;
         Version = r.ReadInt32();
     }
 }

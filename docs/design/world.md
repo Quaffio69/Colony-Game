@@ -19,7 +19,9 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   touching it, so a box over a home's floor clears its walls all round; floors, roofs, racks, waterworks, room parts).
   Shift+click starts a removal box; a right click aborts the box, then puts the tool down. Hovering a blueprint says
   what it waits for (materials and where they come from, or a builder). Founders bring `StartingLogs` (20): enough for
-  a size-1 saw horse and joinery bench (2 logs each) and a scaffold.
+  a size-1 saw horse and joinery bench (2 logs each) and a scaffold. A colony has at most `Balance.MaxOrders` (100k)
+  orders (farm sowing aside; counted per colony in `Designations.OrdersOf`): a box fills top level first and stops there,
+  saying so (a whole-map box made 10M orders and hung the game and joiners). Boxes clip to the world.
   Exception: plant orders (Chop, Gather; `Designations.IsPlantOrder`) are 2D areas draped on the surface
   (`DesignatePlantArea`, any level, ignores the view level), since that work always happens on the surface;
   their marks are drawn whatever level is viewed. Dig/stairs/stockpiles/rooms stay level-based boxes.

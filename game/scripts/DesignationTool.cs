@@ -765,7 +765,8 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
-            case InputEventKey { Pressed: true, Echo: false, Keycode: Key.Enter or Key.KpEnter }:
+            // Developer builds only (released games have no cheats): finish every order at once.
+            case InputEventKey { Pressed: true, Echo: false, CtrlPressed: true, Keycode: Key.Enter or Key.KpEnter } when GameInfo.DevBuild:
                 Issue(new DebugCompleteAll());
                 break;
         }

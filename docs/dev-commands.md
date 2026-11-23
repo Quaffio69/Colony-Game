@@ -4,9 +4,12 @@ Every build, run, bench, demo and debug flag.
 
 - Build all: `dotnet build ColonyGame.sln`
 - Test: `dotnet test ColonyGame.sln`
+- In-game cheats (developer builds only, i.e. run from the editor or a debug export): Ctrl+Enter finishes every order at
+  once (`DebugCompleteAll`); F1 opens Tests & demos. Released builds have neither.
 - Headless smoke run: `<godot_console.exe> --headless --path game --quit-after 60`
 - Visual check / render benchmark: `<godot_console.exe> --path game -- --screenshot=out.png` (or `--bench`)
-  plus optional `--size=WxDxH --seed=N --level=N --zoom=DIST --dig-demo --stairs-demo --ticks=N`, and
+  plus optional `--size=WxDxH --seed=N --level=N --zoom=DIST --dig-demo[=huge] --stairs-demo --ticks=N`, and
+  (`--dig-demo=huge`: 240x240 round the colony at every level below it, stopped by the order limit)
   `--look=X,Y` (camera on a column), `--water-demo` (terrace spring, waterfall wheel, pond, pump, irrigated field), `--showroom[=WORKSHOP_ID]` (every workshop with every station in sizes 1-5, stocked raw goods, farms;
   the id focuses one) with `--build-menu=WORKSHOP_ID` to open the build menu, `--storage-demo[=racks]` (a racked stockpile and a ceiling dug from a scaffold; =racks frames the racks), `--ants-demo[=calm]` (a full ant nest
   beside the colony; everyone armed, drafted and sent against it; =calm: just the nest).

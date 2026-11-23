@@ -34,13 +34,13 @@ public abstract record Command
 public sealed record DesignateBox(TilePos A, TilePos B, DesignationKind Kind) : Command
 {
     public override string Apply(ColonySim sim) =>
-        $"{Kind}: designated {sim.Designations.DesignateBox(A, B, Kind, Player)} tiles";
+        $"{Kind}: designated {sim.Designations.DesignateBox(A, B, Kind, Player)} tiles{sim.Designations.LimitNote}";
 }
 
 /// <summary>Stairs through a box of levels: down on top, up/down between, up at the bottom.</summary>
 public sealed record DesignateStairs(TilePos A, TilePos B) : Command
 {
-    public override string Apply(ColonySim sim) => $"Stairs: designated {sim.Designations.DesignateStairs(A, B, Player)} tiles";
+    public override string Apply(ColonySim sim) => $"Stairs: designated {sim.Designations.DesignateStairs(A, B, Player)} tiles{sim.Designations.LimitNote}";
 }
 
 /// <summary>Chop or gather every suitable plant in a 2D area, on the surface whatever the level.</summary>
@@ -48,8 +48,9 @@ public sealed record DesignatePlants(DesignationKind Kind, int X0, int Y0, int X
 {
     public override string Apply(ColonySim sim)
     {
+        sim.Designations.LimitReached = false;
         int n = sim.Designations.DesignatePlantArea(Kind, X0, Y0, X1, Y1, Player);
-        return Kind == DesignationKind.Chop ? $"Chop trees: marked {n} trees" : $"Gather plants: marked {n} ripe plants";
+        return Kind == DesignationKind.Chop ? $"Chop trees: marked {n} trees{sim.Designations.LimitNote}" : $"Gather plants: marked {n} ripe plants{sim.Designations.LimitNote}";
     }
 }
 

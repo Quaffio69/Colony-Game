@@ -47,6 +47,31 @@ public class DesignationTests
     }
 
     [Fact]
+    public void AHugeBox_StopsAtTheOrderLimit_TopLevelsFirst_PerColony()
+    {
+        var w = Block(256, 6, 2); // 196,608 solid tiles, more than the cap
+        var d = new Designations(w);
+        int n = d.DesignateBox(new TilePos(-50, -50, -10), new TilePos(999, 999, 99)); // corners far outside the world
+        Assert.Equal(Balance.MaxOrders, n);
+        Assert.True(d.LimitReached);
+        Assert.Contains("order limit", d.LimitNote);
+        for (int y = 0; y < 256; y += 37)
+        for (int x = 0; x < 256; x += 41)
+            Assert.True(d.Contains(new TilePos(x, y, 2)), "the top level is designated first");
+        Assert.False(d.Contains(new TilePos(255, 255, 0)));
+
+        Assert.False(d.Designate(new TilePos(255, 255, 0))); // full
+        Assert.True(d.Complete(new TilePos(0, 0, 2)));
+        Assert.True(d.Designate(new TilePos(255, 255, 0))); // room again
+        Assert.True(d.Designate(new TilePos(254, 255, 0), DesignationKind.Dig, faction: 1)); // another colony has its own limit
+        Assert.Equal(Balance.MaxOrders, d.OrdersOf(0));
+        Assert.Equal(1, d.OrdersOf(1));
+
+        Assert.Equal(1, d.DesignateBox(new TilePos(0, 0, 0), new TilePos(0, 0, 0), DesignationKind.Dig, 1)); // a fresh box resets the flag
+        Assert.False(d.LimitReached);
+    }
+
+    [Fact]
     public void Complete_DigsOrCarves_AndRemovesDesignation()
     {
         var (w, d) = Setup();

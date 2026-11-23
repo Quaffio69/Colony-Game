@@ -8,6 +8,38 @@ namespace Colony.Core.Tests;
 
 public class ItemTests
 {
+    [Fact]
+    public void ALoad_IsWhatAColonistCanLift_ByWeight()
+    {
+        static int Load(string id) => ItemInfo.CarryLimit(Industry.Catalog.Item(id));
+        Assert.Equal(6, Load("logs"));     // 5 kg
+        Assert.Equal(10, Load("stone"));   // 3 kg
+        Assert.Equal(15, Load("planks"));  // 2 kg
+        Assert.Equal(60, Load("herbs"));   // 0.5 kg: light goods go by the armful
+        Assert.Equal(3, Load("wooden_bed"));
+        Assert.Equal(1, Load("scaffold")); // heavier than a load still goes one at a time
+        foreach (var t in Industry.Catalog.Items) Assert.True(t.Weight > 0, t.Id);
+    }
+
+    [Fact]
+    public void AHauler_CarriesAWholeStackOfLightGoods_InOneTrip()
+    {
+        var sim = Meadow();
+        var store = new TilePos(4, 4, 4);
+        sim.Stockpiles.AddFloorBox(store.Offset(0, 0, -1), store.Offset(0, 0, -1));
+        int stack = ItemInfo.StackLimit(ItemType.Herbs);
+        sim.Items.Drop(new TilePos(20, 20, 4), ItemType.Herbs, stack);
+        var hauler = sim.AddColonist("H", new TilePos(6, 6, 4));
+        int most = 0;
+        for (int t = 0; t < 3000 && !(sim.Items.TryGet(store, out var p) && p.Count == stack); t++)
+        {
+            sim.Step();
+            most = Math.Max(most, hauler.CarryingCount);
+        }
+        Assert.Equal(stack, most);
+        Assert.True(sim.Items.TryGet(store, out var stored) && stored.Count == stack);
+    }
+
     /// <summary>Stone up to z=2, grass at z=3: colonists walk at z=4.</summary>
     private static ColonySim Meadow(int size = 32, int height = 12)
     {
