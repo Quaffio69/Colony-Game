@@ -75,3 +75,64 @@ What is done and what is next, milestone by milestone.
       proficiency once skills exist), title art behind the main menu, NAT/relay for internet play without port forwarding.
 - Later: revelry and culture (taverns, temples consuming wine and fine goods), skills, factions,
       procedural narrative/history.
+
+## Player feedback (2026-11-22, the user and friends)
+
+Sorted by kind; within each list roughly by how much it hurts play. Agent playtest findings are in
+`docs/playtest/reports/`.
+
+### Bugs
+- [ ] Designating the whole world to dig hangs the game (too many orders at once).
+- [ ] Joining a game that has hung hangs the joining player too (the snapshot or the catch-up never finishes).
+- [ ] A desynced game keeps playing; it should stop and force a resync/reload from the host.
+- [ ] Enter completes every order instantly in release builds (`DebugCompleteAll`, a leftover from M2): move it to dev mode.
+- [ ] Tests in the game seemed broken (check the Tests window/`--ui-selftest`; the window is now dev builds only).
+- [ ] Rooms cannot be shrunk once painted.
+
+### Controls and clarity
+- [ ] One wall tool for everything: click-drag a line or a box in the same tool.
+- [ ] Clearer names for the wall, floor and roof tools.
+- [ ] Show more clearly what material each item is made of.
+- [ ] Call rooms "workshops" where they are production rooms.
+- [ ] Inspect on hover, not on click; make the bottom-right inspect banner bigger.
+- [ ] Simpler, clearer controls overall.
+- [ ] A tutorial, at least for the basics.
+
+### Building
+- [ ] A building tool: place a whole building (walls, floor, roof) in one go, several storeys high.
+- [ ] General improvements to buildings.
+
+### Mining and orders
+- [ ] Dig the highest blocks of a designation first.
+- [ ] Dig priority setting (per designation).
+- [ ] Mining gets harder deeper down, with better ores and gems as the reward.
+
+### Multiplayer
+- [ ] Saved multiplayer sessions that players can rejoin.
+- [ ] Option to see other colonies' work orders.
+
+### World
+- [ ] Randomly generated caverns.
+- [ ] Depths below zero, down to a random bottom within a range.
+- [ ] Fog of war: dark tiles where no one can see or has been.
+- [ ] Bigger maps, pushing how large a world can be (needs the optimisation below).
+
+### Balance
+- [ ] Grass regrows more slowly.
+- [ ] Happiness lasts longer.
+- [ ] Haulers carry more per trip (also the agent playtests: hauling took ~45% of colony time).
+
+### New features
+- [ ] Heavy machinery for digging, hauling etc., built in a workshop.
+- [ ] Nobility: managers over aspects of production and people.
+- [ ] Colonist inventory: pack meals to eat away from stores.
+- [ ] Pollution.
+- [ ] Simple people models with simple animations per action.
+- [ ] Dev mode as a dedicated mode with cheat tools (takes over Enter-completes-all and the debug spawns).
+
+### Direction
+- [ ] Tone down the colony-sim side, lean more toward an automation game (affects needs, moods and families versus
+      machines, conveyors and production chains; to decide before big work on either).
+
+### Performance
+- [ ] Optimise much further overall (frame time on big maps, sim cost with many orders).
