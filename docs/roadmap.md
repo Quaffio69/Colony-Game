@@ -91,13 +91,13 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [x] Rooms cannot be shrunk: they could (Shift+drag with the room tool), but nothing said so; the tool hint does now, and parts taken down leave their materials.
 
 ### Controls and clarity
-- [ ] One wall tool for everything: click-drag a line or a box in the same tool.
-- [ ] Clearer names for the wall, floor and roof tools.
-- [ ] Show more clearly what material each item is made of.
-- [ ] Call rooms "workshops" where they are production rooms.
-- [ ] Inspect on hover, not on click; make the bottom-right inspect banner bigger.
-- [ ] Simpler, clearer controls overall.
-- [ ] A tutorial, at least for the basics.
+- [x] One wall tool for everything: click an edge for one piece, drag along it for a line, drag away from it to wall round a box (walls, doors and windows share it).
+- [x] Clearer names: every tool is named in one place (`UI.Tools`), materials first ("Plank wall", "Flagstone floor", "Thatch roof"); the dam wall is the "Stone block"; Build has four tabs (Orders, Zones, Structures, Workshops).
+- [x] Materials shown: built walls, floors, roofs, plans and workshop parts are named with what they are made of (hover card, Inspect, Build tooltips).
+- [x] Production rooms are called workshops (Build tab, tool, hover card, Inspect, messages).
+- [x] Inspect on hover: a hover card at the bottom right says what is under the cursor (click still keeps it in Inspect).
+- [x] Simpler controls: boxes work by drag-and-release (or two clicks), every tool shows its controls as key hints in the same way (tool card, Build footer), Help is grouped by topic.
+- [x] Instead of a tutorial: small tooltips on everything (Build items, tabs, ribbon, dock, buttons), at the cursor after a moment. A guided tutorial can come later if still needed.
 
 ### Building
 - [ ] A building tool: place a whole building (walls, floor, roof) in one go, several storeys high.

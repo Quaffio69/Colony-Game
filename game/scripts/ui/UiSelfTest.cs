@@ -171,7 +171,7 @@ public partial class UiSelfTest : Node
             // "Orders" (6+2) + "Zones" (5+2) cells: the third segment starts at 15 cells.
             await Click(tabs.GlobalPosition + new Vector2(16 * cw, ch / 2));
             await Frames(3);
-            Check($"clicking the third tab selects Rooms (index {tabs.Index})", tabs.Index == 2);
+            Check($"clicking the third tab selects Structures (index {tabs.Index})", tabs.Index == 2);
         }
 
         // A build tool, then Esc order: cancel placement, then close the active window, then the menu.
@@ -206,6 +206,13 @@ public partial class UiSelfTest : Node
             Check("clicking it in the dock opens it", stocks.IsShown && m.Active == stocks);
             await Click(dockItem.GlobalPosition + dockItem.Size / 2);
             Check("clicking it again minimises it", stocks.State.Min);
+            // Resting the mouse on it brings up its tooltip (after a short delay, not at once).
+            var over = dockItem.GlobalPosition + dockItem.Size / 2 + new Vector2(1, 0);
+            Move(over - Vector2.One, over, false);
+            await Frames(2);
+            bool early = m.TipShowing;
+            for (int i = 0; i < 120 && !m.TipShowing; i++) await Frames(1);
+            Check($"resting on it shows its tooltip after a delay (at once: {early})", !early && m.TipShowing);
         }
 
         // Ctrl+Tab cycles focus.
@@ -275,6 +282,56 @@ public partial class UiSelfTest : Node
         await Frames();
         Check("the Orders pill pins the ribbon open with no tool", _ui.Ribbon.Open && tool.Mode == DesignationTool.ToolMode.None);
         _ui.Ribbon.Pinned = false;
+
+        // Boxes: drag and let go applies the box; a click in place leaves it open for the second corner.
+        foreach (var w in m.Windows.Where(w => w.IsShown).ToList()) w.Close();
+        await Frames();
+        tool.SelectOrder(DesignationTool.ToolMode.Dig);
+        int serial = tool.ActionSerial;
+        Move(mid - Vector2.One, mid, false);
+        await Frames(2);
+        Mouse(mid, true);
+        await Frames(1);
+        var drag = mid + new Vector2(80, 40);
+        Move(mid, drag, true);
+        await Frames(2);
+        Mouse(drag, false);
+        await Frames(2);
+        Check("dragging a dig box and letting go applies it", tool.ActionSerial == serial + 1 && !tool.Selecting);
+        Mouse(mid, true);
+        Mouse(mid, false);
+        await Frames(2);
+        Check("a click in place starts a box and waits for the second corner", tool.Selecting && tool.ActionSerial == serial + 1);
+        Mouse(mid + new Vector2(40, 0), true);
+        Mouse(mid + new Vector2(40, 0), false);
+        await Frames(2);
+        Check("the second click applies it", !tool.Selecting && tool.ActionSerial == serial + 2);
+
+        // The wall tool: one click places a single piece at once (no second click).
+        tool.SelectWall(Colony.Core.Orders.StructureKind.EdgeWall, 2);
+        Move(mid - Vector2.One, mid, false);
+        await Frames(3);
+        serial = tool.ActionSerial;
+        Mouse(mid, true);
+        await Frames(1);
+        Mouse(mid, false);
+        await Frames(2);
+        Check($"a click with the wall tool plans a piece at once ({tool.LastAction})", tool.ActionSerial == serial + 1 && !tool.Selecting);
+        // Dragging well away from the edge walls round a box.
+        var from = mid + new Vector2(-150, -90);
+        Move(from - Vector2.One, from, false);
+        await Frames(3);
+        Mouse(from, true);
+        await Frames(1);
+        var away = from + new Vector2(140, 110);
+        Move(from, away, true);
+        await Frames(2);
+        int pieces = tool.EdgePieces ?? 0;
+        Mouse(away, false);
+        await Frames(2);
+        Check($"dragging the wall tool away from its edge walls round a box ({pieces} pieces: {tool.LastAction})",
+            pieces > 4 && tool.LastAction?.StartsWith("Walls:") == true);
+        while (tool.CancelPlacement()) { }
     }
 
     private static T? FindFirst<T>(Node root) where T : class

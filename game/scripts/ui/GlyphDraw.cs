@@ -95,6 +95,46 @@ public static class GlyphDraw
         Glyph(ci, glyph, new Rect2(at, new Vector2(cw, ch)), color);
     }
 
+    /// <summary>Cells a keycap takes: the label plus a half cell of padding each side, rounded up.</summary>
+    public static int KeycapCells(string label) => label.Length + 1;
+
+    /// <summary>
+    /// A keycap: the key's name in small bold text on a rounded plate (text @ 10%) with a hairline underside, at x on a
+    /// row. Returns its width in cells (<see cref="KeycapCells"/>).
+    /// </summary>
+    public static int Keycap(CanvasItem ci, string label, float x, Color? tone = null)
+    {
+        float cw = GlyphTheme.Cw, ch = GlyphTheme.Ch;
+        int cells = KeycapCells(label);
+        var plate = new Rect2(x, ch * 0.16f, cells * cw, ch * 0.68f);
+        Round(ci, plate, GlyphTheme.Tok("text", 0.10f, 0.12f), 4);
+        ci.DrawRect(new Rect2(plate.Position.X + 3, plate.End.Y - 1, plate.Size.X - 6, 1), GlyphTheme.Tok("text", 0.18f));
+        Text(ci, label, new Vector2(x + cw * 0.5f, 0), label.Length * cw + 2, tone ?? GlyphTheme.Tok("hi"), true);
+        return cells;
+    }
+
+    /// <summary>Word-wraps text to lines of at most <paramref name="cols"/> characters ('\n' forces a break).</summary>
+    public static List<string> Wrap(string text, int cols)
+    {
+        var lines = new List<string>();
+        foreach (var para in text.Split('\n'))
+        {
+            var line = new System.Text.StringBuilder();
+            foreach (var word in para.Split(' '))
+            {
+                if (line.Length > 0 && line.Length + 1 + word.Length > cols)
+                {
+                    lines.Add(line.ToString());
+                    line.Clear();
+                }
+                if (line.Length > 0) line.Append(' ');
+                line.Append(word.Length > cols ? word[..(cols - 1)] + "…" : word);
+            }
+            lines.Add(line.ToString());
+        }
+        return lines;
+    }
+
     /// <summary>A thin rounded progress bar across a rect of one row (auto tone when tone is null).</summary>
     public static void Bar(CanvasItem ci, Rect2 row, float value, Color? tone = null)
     {

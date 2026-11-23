@@ -411,6 +411,15 @@ public partial class Main : Node3D
             if (Arg("--open") is { Length: > 0 } open) foreach (var id in open.Split(',')) _ui.OpenWindow(id);
             if (Arg("--main-menu") is { } menuPage) _ui.ShowMenu(true, menuPage);
             if (Arg("--orders") != null) _ui.Ribbon.Pinned = true; // the orders ribbon open
+            // UI checks: a tool in hand (--tool=Dig, --tool=Edge, ...) and the mouse parked on the screen (for the hover card).
+            if (Arg("--tool") is { Length: > 0 } toolName && Enum.TryParse<DesignationTool.ToolMode>(toolName, true, out var toolMode))
+            {
+                if (toolMode == DesignationTool.ToolMode.Edge) Tool.SelectWall(Colony.Core.Orders.StructureKind.EdgeWall, 2);
+                else Tool.SelectOrder(toolMode);
+            }
+            if (Arg("--mouse")?.Split(',') is [var mx, var my] && float.TryParse(mx, out float mouseX) && float.TryParse(my, out float mouseY))
+                GetViewport().WarpMouse(new Vector2(mouseX, mouseY));
+            if (Arg("--tip") is { Length: > 0 } tip) UI.GlyphStatus.Tip = tip.Replace("\\n", "\n"); // the tooltip box, at the mouse
             if (int.TryParse(Arg("--play-as"), out int playAs)) PlayAs(playAs);
             if (Arg("--ui-selftest") != null) AddChild(new UiSelfTest(_ui));
             // World-editing flags apply once, to the first world (not again when the test menu reloads the scene).

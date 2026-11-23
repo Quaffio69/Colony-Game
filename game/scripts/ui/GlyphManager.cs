@@ -25,7 +25,9 @@ public partial class GlyphManager : Control
     private readonly GlyphPanel _status = new() { Pill = true };
     private readonly Label _statusText = new();
     private readonly GlyphPanel _banner = new() { Pill = true };
-    private readonly Label _bannerText = new();
+    private readonly TipText _bannerText = new();
+    private string? _tipSeen, _bannerShown;
+    private double _tipSince;
     private readonly Control _overlay = new() { MouseFilter = MouseFilterEnum.Ignore };
     private readonly Dictionary<Key, GlyphWindow> _hotkeys = new();
 
@@ -67,8 +69,6 @@ public partial class GlyphManager : Control
         _status.AddChild(_statusText);
         _status.MouseFilter = MouseFilterEnum.Ignore;
         AddChild(_status);
-        _bannerText.VerticalAlignment = VerticalAlignment.Center;
-        _bannerText.MouseFilter = MouseFilterEnum.Ignore;
         _banner.AddChild(_bannerText);
         _banner.MouseFilter = MouseFilterEnum.Ignore;
         _banner.Visible = false;
@@ -221,6 +221,9 @@ public partial class GlyphManager : Control
     /// <summary>Other panels the world shouldn't see clicks through (the orders ribbon and its pill).</summary>
     public readonly List<Control> Blockers = new();
 
+    /// <summary>A tooltip or banner is up at the cursor.</summary>
+    public bool TipShowing => _banner.Visible;
+
     /// <summary>The bottom row's dock pill, for panels laid out beside or above it.</summary>
     public Rect2 DockRect => new(_dock.Position, _dock.Size);
 
@@ -336,35 +339,55 @@ public partial class GlyphManager : Control
     }
 
 
-    /// <summary>The cursor banner: <see cref="GlyphStatus.Banner"/> in a pill just below and right of the mouse, at once.</summary>
+    /// <summary>Seconds the mouse rests on a control before its tip shows at the cursor.</summary>
+    private const double TipDelay = 0.35;
+    /// <summary>Widest a tooltip grows before it wraps (columns).</summary>
+    private const int TipCols = 46;
+
+    /// <summary>
+    /// The cursor banner and tooltips, in one glass box just below and right of the mouse: <see cref="GlyphStatus.Banner"/>
+    /// at once (HUD pills, the box size while dragging), else the hovered control's <see cref="GlyphStatus.Tip"/> once the
+    /// mouse has rested on it. Wrapped to <see cref="TipCols"/>; a first line followed by '\n' is a bold title.
+    /// </summary>
     private void UpdateBanner()
     {
+        double now = Time.GetTicksMsec() / 1000.0;
         string? text = GlyphStatus.Banner;
-        _banner.Visible = !string.IsNullOrEmpty(text);
-        if (!_banner.Visible) return;
+        if (string.IsNullOrEmpty(text) && GlyphStatus.Tip is { Length: > 0 } tip)
+        {
+            if (tip != _tipSeen) { _tipSeen = tip; _tipSince = now; }
+            if (now - _tipSince >= TipDelay) text = tip;
+        }
+        else if (GlyphStatus.Tip == null) _tipSeen = null;
+        _banner.Visible = !string.IsNullOrEmpty(text) && Cols > 0;
+        if (!_banner.Visible) { _bannerShown = null; return; }
         float cw = GlyphTheme.Cw, ch = GlyphTheme.Ch;
-        int maxCols = Math.Max(12, Cols / 2);
-        if (text!.Length > maxCols) text = text[..(maxCols - 1)] + "…";
-        _bannerText.Text = text;
-        G.Retone(_bannerText, "Hi");
-        float w = (text.Length + 2) * cw;
+        if (text != _bannerShown)
+        {
+            _bannerShown = text;
+            _bannerText.Set(text!, Math.Clamp(Cols / 2, 12, TipCols));
+        }
+        int rows = Math.Max(1, _bannerText.Rows);
+        float w = (_bannerText.Cols + 2) * cw, h = rows == 1 ? ch : (rows + 0.6f) * ch;
         var mouse = GetViewport().GetMousePosition();
         var size = GetViewportRect().Size;
         var at = mouse + new Vector2(cw, ch * 1.1f);
         at.X = Math.Clamp(at.X, 0, Math.Max(0, size.X - w));
-        if (at.Y + ch > size.Y) at.Y = mouse.Y - ch * 1.6f;
-        _banner.Size = new Vector2(w, ch);
+        if (at.Y + h > size.Y) at.Y = Math.Max(0, mouse.Y - h - ch * 0.6f);
+        _banner.Pill = rows == 1;
+        _banner.Size = new Vector2(w, h);
         _banner.Position = at;
-        _bannerText.Position = new Vector2(cw, 0);
-        _bannerText.Size = new Vector2(w - 2 * cw, ch);
+        _bannerText.Position = new Vector2(cw, rows == 1 ? 0 : ch * 0.3f);
+        _bannerText.Size = new Vector2(w - 2 * cw, rows * ch);
     }
+
+    /// <summary>The status pill (bottom right): what the last order did and other messages, for a few seconds.</summary>
     private void UpdateStatus()
     {
         string text;
         bool prompt;
         double now = Time.GetTicksMsec() / 1000.0;
         if (GlyphStatus.Message != null && now < GlyphStatus.MessageUntil) (text, prompt) = (GlyphStatus.Message, true);
-        else if (GlyphStatus.Tip != null) (text, prompt) = (GlyphStatus.Tip, false);
         else if (WorldStatus?.Invoke() is { } ws) (text, prompt) = ws;
         else (text, prompt) = ("", false);
 

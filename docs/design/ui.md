@@ -19,15 +19,16 @@ The window system, controls, game windows, hotkeys, mouse, selection, notices an
   on tick; the body clips), hotkeys, Esc order: placement, active window, main menu;
   Ctrl+Tab; dock; status pill; layout saved), `GlyphChip`, `GlyphBar`, `GlyphSwitch`, `GlyphSegmented`, `GlyphSection`,
   `GlyphKV`, `GlyphSparkline`, `GlyphRow`, `VRule`, factory `G` (labels in cell widths, pill buttons that never take
-  keyboard focus, so Space keeps pausing). Hover hints go to the status pill (`WithTip`), not tooltips; HUD items also show
-  an instant themed banner at the cursor (`GlyphStatus.Banner`, `WithBanner`, `GlyphSegmented.BannerTips`).
+  keyboard focus, so Space keeps pausing). **Tooltips:** `WithTip` (or `GlyphStatus.Tip`) shows a wrapped glass box at the cursor once the mouse rests 0.35 s (`GlyphManager.UpdateBanner`, `TipText`; at most 46 columns; a first line ended by `
+` is a bold title); HUD items show
+  the same box at once (`GlyphStatus.Banner`, `WithBanner`, `GlyphSegmented.BannerTips`). `KeyHints` draws controls as keycaps ("[Drag] a box  [Shift] remove"; `GlyphDraw.Keycap`).
   A click that rebuilds its own window must `AcceptEvent()` first (the control may be freed); theme changes rebuild
   deferred. Default window rects: negative X counts from the right edge, resolved on first layout.
 - **Game windows (`GameUi`):** HUD pill (colony, date, people, food days, logs, planks, stone, mood, beds/homeless with
-  daily ↑↓ from 8 samples a day, alert pill, view level, speed ‖ ► ►► ►►►), dock, status pill (hover hint, else the tool
-  and what is under the cursor; `LastAction` shows as a message). Windows and hotkeys: Colonists C (Overview/Needs/Family,
-  click to find), Stocks I, Build B (tabs Orders/Zones/Rooms/Walls/Floors/Water, category | items with costs, footer
-  with size/rotate/cancel; drives `DesignationTool`'s public selection API; closing it drops build tools), Chronicle L
+  daily ↑↓ from 8 samples a day, alert pill, view level, speed ‖ ► ►► ►►►), dock, status pill (what the last order did and other messages, for a few seconds).
+  **One source for tools:** `UI.Tools` names every tool (icon, colour, name, short name, one line on what it does, key hints, DF hotkeys) and names built things with their material first ("Plank wall", "Flagstone floor", "Thatch roof"); the Build window, ribbon, tool card and help all read it. Windows and hotkeys: Colonists C (Overview/Needs/Family,
+  click to find), Stocks I, Build B (tabs Orders (digging, plants, remove) / Zones (storage, farms, homes) / Structures (walls by material, doors & windows, floors, roofs, stone blocks, waterworks) / Workshops (mark out, then stations); category | items with hotkey and cost, a tooltip each; footer
+  with the tool's name, what it does, its key hints and size/Turn/Done; drives `DesignationTool`'s public selection API; closing it drops build tools), Chronicle L
   (events + cave-ins, sticks to the bottom), Housing H, Work J, Inspect V (home/workshop under the cursor), Military M
   (fighters: health, gear, draft switches; nearby nests with Look/Attack), Trade F6 (`UI.TradeWindow`: offers and deals
   with Accept/Counter/Decline/Withdraw and delivery progress; an offer composer: give from your stores, ask from
@@ -36,15 +37,15 @@ The window system, controls, game windows, hotkeys, mouse, selection, notices an
   Home key looks at the colony; G drafts everyone and turns on squad orders (`DesignationTool.SquadOrders`: click ground
   to march, a nest to attack; G/RMB/Esc: done), Shift+G stands everyone down. **Orders ribbon** (`UI.OrdersRibbon`): a
   pill row above the dock with every order's icon, name and hotkey (DF-style display: lowercase = the key, uppercase =
-  Shift+key): n dig, y stairs, u up, k down, o up/down, t chop, p gather, P stockpile, F farm plot (again: next crop),
-  B dam wall, O demolish box (DF o: remove construction), X (or Del) cancel box. DF letters where free (d/j/i are pan right, Work, Stocks). It shows while an order
+  Shift+key; `Tools.Hotkeys`): n dig, y stairway, u up, k down, o up/down, t chop, p gather, P stockpile, F farm (again: next crop),
+  B stone block (dams), O demolish box (DF o: remove construction), X (or Del) cancel box. DF letters where free (d/j/i are pan right, Work, Stocks). It shows while an order
   is in hand (any order hotkey brings it up) or while pinned by its own "Orders" pill (bottom left); clicking picks.
   Window hotkeys ignore Shift (shifted letters are orders). Ribbon and pill are `GlyphManager.Blockers` (no clicks
   through to the world). **Mouse:** no tool by default (`ToolMode.None`): LMB drag moves the view level (14 px a level,
   up = up), RMB drag pans (`CameraRig.Pan`: the ground follows the mouse), tapping Shift / Ctrl alone goes a level up /
   down (`DesignationTool._Input`; any key or click while held cancels the tap; while boxing it moves the box's corner),
   RMB click (≤ 6 px) steps back: aborts the box, then drops the tool (`CancelPlacement`, also Esc). Shift+LMB starts
-  the removal box (or removes an edge piece) for any tool. `--orders` opens the ribbon pinned. **Selection (`SelectionView`, `Main.Selection`):** a click (≤ 6 px, level
+  the removal box for any tool. **Boxes** apply on drag-and-release, or click one corner and then the other (`_pressAt`). **One wall tool** (`ToolMode.Edge`, for walls, doors and windows): click an edge for one piece; drag along it for a line (`EdgeLine`); drag more than half a cell away from it (walls only) to wall round the box between the edge and the mouse (`PlaceOutline`; Shift: `ClearWalls`); it ends on release. `--orders` opens the ribbon pinned. **Selection (`SelectionView`, `Main.Selection`):** a click (≤ 6 px, level
   unchanged) with no tool picks what is under it (`Pick` records: colonist in the cell, nest, room, stockpile or farm
   field (`ZoneCells`: zoned cells joined 8-way or a level up/down), blueprint, pile, a colonist beside it, else the tile)
   and opens Inspect; accent plates over a room/zone, a ring under a colonist, a box otherwise; with no tool the room or
@@ -53,7 +54,7 @@ The window system, controls, game windows, hotkeys, mouse, selection, notices an
   whatever is under the cursor: colonists (doing, health/food/rest/mood bars, home, gear, work priorities, likes),
   homes and workshops as before, stockpiles (cells, racks, stacks used/capacity, contents), farm fields (crops sown,
   ripe), piles (role), blueprints (what they wait for), nests, tiles; Go to, Follow (camera tracks the colonist until
-  WASD/RMB), clear. **Notices** (`UI.Notices`): the tool card (bottom centre, accent pill: the tool in hand, what to do,
+  WASD/RMB), clear; a tile lists what is built and lying there with materials. **Hover card** (`UI.HoverCard`, `UI.WorldInfo`): inspect on hover, a glass card at the bottom right describing what is under the cursor (what a click would select, its subtitle, the tile's facts: ground and level, floor, roof, walls/doors/windows by side with materials, plants, water, parts "of logs", plans and what they wait for, piles, ants; a hint for click and F); hidden over the UI and while boxing. **Notices** (`UI.Notices`): the tool card (bottom centre, accent pill: the tool's icon and name from `Tools`, its key hints as keycaps, the box size or wall piece count,
   the box size or why it can't be placed), the box size at the cursor while dragging, a Paused pill, and toasts for the
   colony's events (alerts red; click: Chronicle). Window shadows are a tight contact shadow (the old 34 px one smeared
   a dark band under windows). **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,

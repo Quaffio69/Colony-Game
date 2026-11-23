@@ -17,29 +17,32 @@ namespace ColonyGame;
 /// Mouse picking, DF-style box orders, zones, and the factory builder.
 /// <para>
 /// No tool by default (<see cref="ToolMode.None"/>): left-drag moves the view up and down levels, right-drag pans (the
-/// camera rig), tapping Shift / Ctrl goes a level up / down. Box tools: click once to anchor a corner, move the mouse
-/// (Z/X or the Shift/Ctrl taps extend the box across levels; the view follows), click again to apply; Shift+click
-/// starts a removal box instead. A right click (not a drag) steps back: aborts the box, then drops the tool. Esc too.
+/// camera rig), tapping Shift / Ctrl goes a level up / down. Box tools: drag a box and let go, or click one corner and
+/// then the other (Z/X or the Shift/Ctrl taps extend the box across levels; the view follows); Shift starts a removal
+/// box instead. A right click (not a drag) steps back: aborts the box, then drops the tool. Esc too.
 /// </para>
 /// <list type="bullet">
-/// <item>Orders (their DF-style hotkeys, see <see cref="UI.OrdersRibbon"/>; Tab / Shift+Tab cycle): dig, stairs
-/// (auto / up / down / up-down), chop trees and gather plants (2D areas draped on the surface), stockpile zones, farm
-/// plots (grain, herbs, glowcaps), dam walls, and the cancel box (designations and zone cells).</item>
-/// <item>Build (B opens the build menu): pick a workshop to paint its room (a box over the floor, any number
+/// <item>Orders (their DF-style hotkeys, see <see cref="UI.Tools.Hotkeys"/>; Tab / Shift+Tab cycle): dig, stairs
+/// (auto / up / down / up-down), chop trees and gather plants (2D areas draped on the surface), stockpile zones, farms
+/// (grain, herbs, flax, glowcaps), stone blocks, and the cancel and demolish boxes.</item>
+/// <item>Build (B opens the build menu): pick a workshop to mark out its room (a box over the floor, any number
 /// of levels; it must stay one walkable piece, which the core enforces), then pick one of its stations, tools,
 /// lanterns or crates and click to place. R rotates, [ ] change size, F (Shift+F) changes what the machine
 /// under the cursor makes. A ghost shows the footprint in green or red with the reason. Removal boxes erase
-/// room cells (room tool) or remove parts (part tools).</item>
+/// workshop cells (room tool) or remove parts (part tools).</item>
+/// <item>One wall tool (<see cref="ToolMode.Edge"/>) for walls, doors and windows: click an edge for one piece, drag
+/// along it for a line, or drag away from it to wall round a box (walls only).</item>
 /// </list>
+/// Names, icons and hints for every mode live in <see cref="UI.Tools"/>.
 /// </summary>
 public partial class DesignationTool : Node3D
 {
     public enum ToolMode
     {
         // Orders
-        None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, FarmFlax, Wall, Demolish, Cancel,
+        None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, FarmFlax, Block, Demolish, Cancel,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
-        Room, Part, Structure, Outline, Edge, WallLine, Floor, Roof, Rack, TradeDepot,
+        Room, Part, Structure, Edge, Floor, Roof, Rack, TradeDepot,
     }
 
     private const ToolMode LastOrder = ToolMode.Cancel;
@@ -88,11 +91,15 @@ public partial class DesignationTool : Node3D
     /// <summary>The structure placed by <see cref="ToolMode.Structure"/> (water wheel or pump).</summary>
     public StructureKind Structure { get; private set; } = StructureKind.WaterWheel;
     private int _facing;
-    /// <summary>The edge piece placed by <see cref="ToolMode.Edge"/> (thin wall, door or window) and the wall material for both edge tools.</summary>
+    /// <summary>The edge piece placed by <see cref="ToolMode.Edge"/> (wall, door or window) and the wall material.</summary>
     public StructureKind EdgePiece { get; private set; } = StructureKind.EdgeWall;
     public int WallMaterial { get; private set; } = 2;
     private (TilePos Cell, int Side)? _hoverEdge;
-    private (TilePos Cell, int Side) _lineStart, _lineEnd; // a wall line being dragged (WallLine)
+    /// <summary>The edge a wall drag started on, and where the mouse is on that level's floor plane.</summary>
+    private (TilePos Cell, int Side) _lineStart;
+    private System.Numerics.Vector2 _edgeAt;
+    /// <summary>Where (screen) the press that started a box was: letting go far from it applies the box (drag-and-release).</summary>
+    private Vector2? _pressAt;
     /// <summary>Floor and roof material for the Floor and Roof box tools.</summary>
     public int FloorMaterial { get; private set; } = 1;
     public int RoofMaterial { get; private set; } = 1;
@@ -116,122 +123,40 @@ public partial class DesignationTool : Node3D
     private bool _squadOrders;
     public PartType? PartFor(ToolMode m) => m == ToolMode.Part ? Part : null;
 
-    public string ModeName(ToolMode m)
-    {
-        if (PartFor(m) is { } part)
-            return PartInfo.Sizes(part) > 1
-                ? $"Build: {PartInfo.Name(part, SizeFor(part))} (size {SizeFor(part)}/{PartInfo.Sizes(part)}, [ ] to change)"
-                : $"Build: {PartInfo.Name(part)}";
-        if (m == ToolMode.Structure) return $"Build: {Constructions.Name(Structure)} (facing {FacingName(_facing)}, R turns)";
-        string mat = WallMaterials.All[WallMaterial].Name.ToLowerInvariant();
-        if (m == ToolMode.Outline) return $"Build: {mat} walls round a box (drag over the floor; Shift-drag clears walls)";
-        if (m == ToolMode.Edge) return $"Build: {Constructions.Name(EdgePiece).ToLowerInvariant()} ({mat}) on the cell edge under the cursor; Shift+click removes";
-        if (m == ToolMode.WallLine) return $"Build: a line of {Constructions.Name(EdgePiece).ToLowerInvariant()}s ({mat}): click an edge, drag along it, click; Shift starts a removal line";
-        if (m == ToolMode.Floor) return $"Build: {FloorMaterials.All[FloorMaterial].Name.ToLowerInvariant()} over a box of floor (Shift-drag takes floors up)";
-        if (m == ToolMode.Roof) return $"Build: {RoofMaterials.All[RoofMaterial].Name.ToLowerInvariant()} roof over a box of floor (Shift-drag takes roofs down)";
-        if (m == ToolMode.Rack) return $"Build: storage racks over stockpile cells (fronts face {FacingName(_facing)}, R turns; Shift-drag takes them down)";
-        if (m == ToolMode.TradeDepot) return "Zone: trade depot (other colonies' traders deliver here; Shift-drag removes)";
-        return m == ToolMode.Room ? $"Build: {Workshop.Name} room" : BaseModeName(m);
-    }
+    /// <summary>The box (or wall drag) in progress removes rather than places.</summary>
+    public bool Removing => _selection == Selection.Cancel;
+    /// <summary>Chop and gather: areas on the surface, whatever level is in view.</summary>
+    public bool IsArea => IsAreaTool(Mode);
 
-    private static string FacingName(int f) => f switch { 0 => "east", 1 => "south", 2 => "west", _ => "north" };
-
-    private static string BaseModeName(ToolMode m) => m switch
-    {
-        ToolMode.None => "No tool (click: inspect · drag: levels)",
-        ToolMode.Cancel => "Cancel orders (designations, plans and zone cells in a box)",
-        ToolMode.Demolish => "Demolish (take down built walls, doors, windows, floors, roofs, racks, waterworks and room parts in a box)",
-        ToolMode.Dig => "Dig",
-        ToolMode.Stairs => "Stairs (auto)",
-        ToolMode.UpStair => "Up stair",
-        ToolMode.DownStair => "Down stair",
-        ToolMode.UpDownStair => "Up/Down stair",
-        ToolMode.Chop => "Chop trees",
-        ToolMode.Gather => "Gather plants",
-        ToolMode.Stockpile => "Stockpile",
-        ToolMode.FarmGrain => "Farm plot: grain",
-        ToolMode.FarmHerbs => "Farm plot: herbs",
-        ToolMode.FarmGlowcaps => "Fungus farm: glowcaps (under a roof)",
-        ToolMode.FarmFlax => "Farm plot: flax (fiber)",
-        ToolMode.Wall => "Build wall (dams, canals; Z/X raise it)",
-        _ => m.ToString(),
-    };
-
-    /// <summary>One HUD line about the current tool (selection in progress, or placement preview).</summary>
-    public string? SelectionInfo
+    /// <summary>Pieces the wall drag in progress covers (a line, or round a box), null when not dragging a wall.</summary>
+    public int? EdgePieces
     {
         get
         {
-            if (_selection != Selection.None)
-            {
-                var (a, b) = Corners();
-                int w = Math.Abs(a.X - b.X) + 1, d = Math.Abs(a.Y - b.Y) + 1, h = Math.Abs(a.Z - b.Z) + 1;
-                string what = _selection == Selection.Cancel ? RemovalName() : ModeName(Mode);
-                if (IsAreaTool(Mode))
-                    return $"{what}: {w}x{d} area on the surface   click to confirm, Esc/RMB: abort";
-                string levels = h > 1 ? $"levels {Math.Min(a.Z, b.Z)}..{Math.Max(a.Z, b.Z)}" : $"level {a.Z}";
-                return $"{what}: {w}x{d}x{h} ({levels})   click to confirm, Shift/Ctrl or Z/X: change level, Esc/RMB: abort";
-            }
-            if (Mode == ToolMode.Room)
-                return $"{Workshop.Name}: drag a box over floor to paint it (touching rooms of the same kind join up)   " +
-                       "Shift+drag: erase cells (shrink or split a room; parts on erased cells come down)";
-            if (Mode == ToolMode.Rack)
-            {
-                int planks = Constructions.Cost(StructureKind.Rack, Colony.Core.Items.Stockpiles.MaxRackLevels).Count;
-                return $"Storage rack: rises up to {Colony.Core.Items.Stockpiles.MaxRackLevels} levels, holding {Colony.Core.Items.Stockpiles.Capacity(Colony.Core.Items.Stockpiles.MaxRackLevels)} stacks" +
-                       $"   cost {Constructions.RackPlanksPerLevel} planks a level ({planks} full height)   R: turn   drag a box over stockpile cells";
-            }
-            if (Mode == ToolMode.Structure)
-            {
-                var (mat, n) = Constructions.Cost(Structure);
-                string what = Structure == StructureKind.WaterWheel
-                    ? "makes power from water flowing through its cell (best under a fall or in a fast current)"
-                    : $"lifts water from its cell to the cell {FacingName(_facing)} and one level up, using power";
-                return $"{Constructions.Name(Structure)}: {what}   cost {n} {mat.Name.ToLowerInvariant()}   R: turn   " +
-                       (PlacementProblem is { } sp ? $"can't place: {sp}" : "click to place");
-            }
-            if (PartFor(Mode) is { } part)
-            {
-                int size = SizeFor(part);
-                var (fw, fd) = PartInfo.Footprint(part, size);
-                if (_rotated) (fw, fd) = (fd, fw);
-                int tiles = fw * fd;
-                var (material, cost) = PartInfo.Cost(part, size);
-                string role = PartInfo.Role(part) switch
-                {
-                    PartRole.Machine => MachineInfo(part, size),
-                    PartRole.Auxiliary =>
-                        $"+{PartInfo.Bonus(part, size):P0} for up to {PartInfo.Coverage(part, size)} machine tiles " +
-                        $"({PartInfo.Coverage(part, size) / (float)tiles:0.#} per own tile)",
-                    PartRole.Input => "holds one of the room's inputs",
-                    _ => "holds the room's products",
-                };
-                return $"{PartInfo.Name(part, size)} {fw}x{fd}: {role}   cost {cost} {material.Name.ToLowerInvariant()} ({cost / (float)tiles:0.#}/tile)   " +
-                       "R: rotate   " + (PlacementProblem is { } p ? $"can't place: {p}" : "click to place");
-            }
-            return null;
+            if (_selection == Selection.None || Mode != ToolMode.Edge) return null;
+            var d = EdgeDrag();
+            return d.Box ? 2 * (Math.Abs(d.A.X - d.B.X) + 1) + 2 * (Math.Abs(d.A.Y - d.B.Y) + 1) : Math.Abs(d.To - d.From) + 1;
         }
     }
 
-    /// <summary>"batch of 4: 4 logs -> 16 planks, 0.6 s labour per unit; also makes: ..." for a station.</summary>
-    private static string MachineInfo(PartType part, int size)
+    /// <summary>The wall drag so far: a line along the start edge (From..To along it), or a box beside it (A..B, ground level).</summary>
+    private (bool Box, int From, int To, TilePos A, TilePos B) EdgeDrag()
     {
-        var first = part.Recipes[0];
-        var batch = PartInfo.MachineBatchOf(part, size, first);
-        double labour = batch.WorkTicks / (double)batch.Units / ColonySim.TicksPerSecond;
-        string others = part.Recipes.Count > 1 ? $"; also: {string.Join(", ", part.Recipes.Skip(1).Select(r => r.Name.ToLowerInvariant()))}" : "";
-        return $"batch of {batch.Units}: {first.Describe(batch.Units)}, {labour:0.0} s labour per unit{others}";
+        var (cell, side) = _lineStart;
+        bool east = side == EdgeInfo.East;
+        float along = east ? _edgeAt.Y : _edgeAt.X, across = east ? _edgeAt.X : _edgeAt.Y;
+        int line = east ? cell.X + 1 : cell.Y + 1; // the grid line the edge lies on
+        int from = east ? cell.Y : cell.X;
+        int to = Math.Clamp((int)MathF.Floor(along), 0, (east ? _sim.World.Depth : _sim.World.Width) - 1);
+        // Within half a cell of the edge's line: a line of pieces. Further out (walls only): the box between the edge and the mouse.
+        if (EdgePiece != StructureKind.EdgeWall || MathF.Abs(across - line) < 0.5f) return (false, from, to, default, default);
+        int first = across > line ? line : line - 1;
+        int far = Math.Clamp((int)MathF.Floor(across), 0, (east ? _sim.World.Width : _sim.World.Depth) - 1);
+        int z = cell.Z - 1; // the ground under the walls (PlaceOutline builds a level above it)
+        return east
+            ? (true, from, to, new TilePos(first, from, z), new TilePos(far, to, z))
+            : (true, from, to, new TilePos(from, first, z), new TilePos(to, far, z));
     }
-
-    private string RemovalName() => Mode switch
-    {
-        ToolMode.Room => "Erase room",
-        ToolMode.Part => "Remove parts",
-        ToolMode.Structure => "Remove waterworks",
-        ToolMode.Rack => "Take racks down",
-        ToolMode.Wall => "Cancel walls",
-        _ => "Cancel",
-    };
 
     public void Initialize(ColonySim sim, WorldView view)
     {
@@ -251,7 +176,7 @@ public partial class DesignationTool : Node3D
                 mode == ToolMode.Stockpile ? ItemView.StockpileColor with { A = 0.3f }
                 : mode == ToolMode.TradeDepot ? ItemView.DepotColor with { A = 0.35f }
                 : CropFor(mode) is not null ? ItemView.FarmColor with { A = 0.3f }
-                : mode == ToolMode.Wall ? new Color(0.75f, 0.72f, 0.68f, 0.35f)
+                : mode == ToolMode.Block ? new Color(0.75f, 0.72f, 0.68f, 0.35f)
                 : mode is ToolMode.Cancel or ToolMode.Demolish ? new Color(1f, 0.25f, 0.2f, 0.3f)
                 : mode == ToolMode.None ? new Color(1, 1, 1, 0.2f)
                 : IsBuild(mode) ? new Color(1f, 0.68f, 0.3f, 0.3f)
@@ -299,14 +224,14 @@ public partial class DesignationTool : Node3D
         EndSelection();
     }
 
-    public void SelectEdgeTool(ToolMode mode, StructureKind piece)
+    /// <summary>The wall tool with a piece (wall, door or window) and, for walls, a material.</summary>
+    public void SelectWall(StructureKind piece, int material)
     {
-        Mode = mode;
+        Mode = ToolMode.Edge;
         EdgePiece = piece;
+        WallMaterial = WallMaterials.Clamp(material);
         EndSelection();
     }
-
-    public void SelectWallMaterial(int material) => WallMaterial = WallMaterials.Clamp(material);
 
     public void SelectFloor(int material)
     {
@@ -374,7 +299,7 @@ public partial class DesignationTool : Node3D
     {
         get
         {
-            if (_selection == Selection.None || Mode == ToolMode.WallLine) return null;
+            if (_selection == Selection.None || Mode == ToolMode.Edge) return null;
             var (a, b) = Corners();
             return (Math.Abs(a.X - b.X) + 1, Math.Abs(a.Y - b.Y) + 1, IsAreaTool(Mode) ? 1 : Math.Abs(a.Z - b.Z) + 1);
         }
@@ -418,7 +343,7 @@ public partial class DesignationTool : Node3D
     public void StepLevel(int step)
     {
         if (_sim == null) return;
-        if (_selection != Selection.None && !IsAreaTool(Mode))
+        if (_selection != Selection.None && !IsAreaTool(Mode) && Mode != ToolMode.Edge)
         {
             _cornerZ = Math.Clamp(_cornerZ + step, 1, _sim.World.Height - 1);
             _view.ViewLevel = _cornerZ;
@@ -442,22 +367,48 @@ public partial class DesignationTool : Node3D
         return (new TilePos(x, y - 1, z), EdgeInfo.North);
     }
 
-    private void PlaceEdgePiece((TilePos Cell, int Side) edge) => Issue(new PlaceEdge(EdgePiece, edge.Cell, edge.Side, WallMaterial));
-
-    /// <summary>Shows the wall line being dragged as a thin box along its edges.</summary>
-    private void UpdateLine()
+    /// <summary>
+    /// Shows the wall drag: a line as a thin slab along its edges; a box as the cells it walls round (one level), with
+    /// the slab still marking the edge it started from.
+    /// </summary>
+    private void UpdateWallDrag()
     {
+        var d = EdgeDrag();
         var (start, side) = _lineStart;
-        int lo = side == EdgeInfo.East ? Math.Min(start.Y, _cornerY) : Math.Min(start.X, _cornerX);
-        int hi = side == EdgeInfo.East ? Math.Max(start.Y, _cornerY) : Math.Max(start.X, _cornerX);
+        var mat = _selection == Selection.Cancel ? _cancelMat : _ghostOk;
+        if (d.Box)
+        {
+            int x0 = Math.Min(d.A.X, d.B.X), x1 = Math.Max(d.A.X, d.B.X) + 1, y0 = Math.Min(d.A.Y, d.B.Y), y1 = Math.Max(d.A.Y, d.B.Y) + 1;
+            _box.Position = new Vector3((x0 + x1) / 2f, start.Z + 0.5f, (y0 + y1) / 2f);
+            _box.Scale = new Vector3(x1 - x0 + 0.08f, 1.05f, y1 - y0 + 0.08f);
+            _box.MaterialOverride = mat;
+            _box.Visible = true;
+            _ghost.Visible = false;
+            return;
+        }
+        int lo = Math.Min(d.From, d.To), hi = Math.Max(d.From, d.To);
         float len = hi - lo + 1, mid = (lo + hi + 1) / 2f;
         _box.Position = side == EdgeInfo.East ? new Vector3(start.X + 1, start.Z + 0.5f, mid) : new Vector3(mid, start.Z + 0.5f, start.Y + 1);
         _box.Scale = side == EdgeInfo.East ? new Vector3(0.2f, 1.05f, len) : new Vector3(len, 1.05f, 0.2f);
-        _box.MaterialOverride = _selection == Selection.Cancel ? _cancelMat : _ghostOk;
+        _box.MaterialOverride = mat;
         _box.Visible = true;
+        _ghost.Visible = false;
     }
 
-    private void RemoveEdgePiece((TilePos Cell, int Side) edge) => Issue(new RemoveEdge(edge.Cell, edge.Side));
+    /// <summary>The wall drag let go: one piece, a line, or walls round a box (Shift: removes instead).</summary>
+    private void ApplyWall()
+    {
+        var d = EdgeDrag();
+        var (cell, side) = _lineStart;
+        bool remove = _selection == Selection.Cancel;
+        Command command = d.Box
+            ? remove ? new ClearWalls(d.A, d.B) : new PlaceOutline(d.A, d.B, WallMaterial)
+            : d.From == d.To
+                ? remove ? new RemoveEdge(cell, side) : new PlaceEdge(EdgePiece, cell, side, WallMaterial)
+                : new EdgeLine(EdgePiece, cell, side, d.To, WallMaterial, remove);
+        Issue(command);
+        EndSelection();
+    }
 
     /// <summary>Paints rooms of this workshop (or homes).</summary>
     public void SelectWorkshop(RoomType w)
@@ -475,7 +426,11 @@ public partial class DesignationTool : Node3D
     }
 
     /// <summary>True while the mouse is over the UI (so clicks and hovering there don't reach the world).</summary>
-    private bool OverMenu => UI.GlyphManager.Instance?.Blocks(GetViewport().GetMousePosition()) ?? false;
+    /// <summary>The mouse, from the input events (so injected events, as in the UI self-test, move it too).</summary>
+    private Vector2 Mouse => _mouseFromEvents ?? GetViewport().GetMousePosition();
+    private Vector2? _mouseFromEvents;
+
+    private bool OverMenu => UI.GlyphManager.Instance?.Blocks(Mouse) ?? false;
 
     // ---- Picking ----------------------------------------------------------------------------------------
 
@@ -518,7 +473,7 @@ public partial class DesignationTool : Node3D
         if (_sim == null) return;
 
         var camera = GetViewport().GetCamera3D();
-        var mouse = GetViewport().GetMousePosition();
+        var mouse = Mouse;
         var origin = SimSpace.ToSim(camera.ProjectRayOrigin(mouse));
         var dir = SimSpace.ToSim(camera.ProjectRayNormal(mouse));
 
@@ -530,7 +485,7 @@ public partial class DesignationTool : Node3D
         if (Hovered is { } h)
             _cursor.Position = SimSpace.TileCenter(IsAreaTool(Mode) && SurfaceAt(h.X, h.Y) is >= 0 and var s ? h with { Z = s } : h);
         UpdateGhost(placing);
-        _hoverEdge = Mode is ToolMode.Edge or ToolMode.WallLine && _selection == Selection.None ? EdgeUnderMouse(origin, dir) : null;
+        _hoverEdge = Mode == ToolMode.Edge && _selection == Selection.None ? EdgeUnderMouse(origin, dir) : null;
         if (_hoverEdge is { } he)
         {
             var (cell, side) = he;
@@ -546,7 +501,12 @@ public partial class DesignationTool : Node3D
         {
             // Area tools follow the picked column; box tools slide the free corner on the top plane of its
             // level, so it tracks the mouse over open air too.
-            if (IsAreaTool(Mode) && Hovered is { } col)
+            if (Mode == ToolMode.Edge)
+            {
+                // A wall drag tracks the mouse on the floor plane of the level it started on.
+                if (VoxelRaycast.IntersectLevelPlane(origin, dir, _lineStart.Cell.Z) is { } ep) _edgeAt = new System.Numerics.Vector2(ep.X, ep.Y);
+            }
+            else if (IsAreaTool(Mode) && Hovered is { } col)
                 (_cornerX, _cornerY) = (col.X, col.Y);
             else if (VoxelRaycast.IntersectLevelPlane(origin, dir, _cornerZ + 1) is { } pt)
             {
@@ -575,6 +535,7 @@ public partial class DesignationTool : Node3D
 
     public override void _Input(InputEvent e)
     {
+        if (e is InputEventMouse me) _mouseFromEvents = me.Position;
         // Shift / Ctrl on their own (pressed and released with nothing else in between): a level up / down. Watched
         // here, before the UI, so a click or key while held (Shift+click, Ctrl+Tab) cancels the tap.
         switch (e)
@@ -677,30 +638,37 @@ public partial class DesignationTool : Node3D
                 Handled();
                 break;
 
+            // Letting go: a wall drag always ends (one piece if it never left its edge); a box ends if it was dragged
+            // (a press and release in place leaves it open for a second click: click one corner, then the other).
+            case InputEventMouseButton { Pressed: false, ButtonIndex: MouseButton.Left } when Mode == ToolMode.Edge && _selection != Selection.None:
+                _pressAt = null;
+                ApplyWall();
+                Handled();
+                break;
+            case InputEventMouseButton { Pressed: false, ButtonIndex: MouseButton.Left } up when _pressAt is { } pressed:
+                _pressAt = null;
+                if (_selection != Selection.None && up.Position.DistanceTo(pressed) > ClickSlop)
+                {
+                    Apply();
+                    Handled();
+                }
+                break;
+
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when _selection != Selection.None:
                 Apply();
                 Handled();
                 break;
 
-            // A wall line: click an edge to start it (Shift: a removal line); then the free end follows the mouse along it (see UpdateLine).
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } lb when Mode == ToolMode.WallLine && _selection == Selection.None:
-                if (_hoverEdge is { } first)
-                {
-                    _selection = lb.ShiftPressed ? Selection.Cancel : Selection.Designate;
-                    _lineStart = _lineEnd = first;
-                    _anchor = first.Cell.Offset(0, 0, -1);
-                    (_cornerX, _cornerY, _cornerZ) = (_anchor.X, _anchor.Y, _anchor.Z);
-                    UpdateBox();
-                }
-                Handled();
-                break;
-
-            // Edge pieces: click the edge under the cursor; Shift+click removes what is on it.
-            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } eb when Mode == ToolMode.Edge && _selection == Selection.None:
+            // The wall tool: press on an edge (Shift: removes), drag along it for a line or away from it for a box, let go.
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } eb when Mode == ToolMode.Edge:
                 if (_hoverEdge is { } edge)
                 {
-                    if (!eb.ShiftPressed) PlaceEdgePiece(edge);
-                    else RemoveEdgePiece(edge);
+                    _selection = eb.ShiftPressed ? Selection.Cancel : Selection.Designate;
+                    _lineStart = edge;
+                    _edgeAt = edge.Side == EdgeInfo.East
+                        ? new System.Numerics.Vector2(edge.Cell.X + 1, edge.Cell.Y + 0.5f)
+                        : new System.Numerics.Vector2(edge.Cell.X + 0.5f, edge.Cell.Y + 1);
+                    UpdateBox();
                 }
                 Handled();
                 break;
@@ -720,6 +688,7 @@ public partial class DesignationTool : Node3D
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } mb
                 when Hovered is { } start && Mode != ToolMode.None:
                 _selection = mb.ShiftPressed && Mode is not (ToolMode.Cancel or ToolMode.Demolish) ? Selection.Cancel : Selection.Designate;
+                _pressAt = mb.Position;
                 _anchor = start;
                 (_cornerX, _cornerY, _cornerZ) = (start.X, start.Y, start.Z);
                 _surface.Clear(); // the ground may have changed since the last selection
@@ -730,7 +699,7 @@ public partial class DesignationTool : Node3D
 
             // While selecting, Z/X move the free corner between levels and the view follows it (DF-style cursor).
             case InputEventKey { Pressed: true, Keycode: Key.Z or Key.X or Key.Pagedown or Key.Pageup } k
-                when _selection != Selection.None && !IsAreaTool(Mode):
+                when _selection != Selection.None && !IsAreaTool(Mode) && Mode != ToolMode.Edge:
                 StepLevel(k.Keycode is Key.X or Key.Pageup ? 1 : -1);
                 Handled();
                 break;
@@ -833,13 +802,10 @@ public partial class DesignationTool : Node3D
         bool cancel = _selection == Selection.Cancel;
         Command command = Mode switch
         {
-            ToolMode.WallLine => new EdgeLine(EdgePiece, _lineStart.Cell, _lineStart.Side,
-                _lineStart.Side == EdgeInfo.East ? _cornerY : _cornerX, WallMaterial, cancel),
             ToolMode.Floor => new Covers(StructureKind.Floor, a, b, FloorMaterial, cancel),
             ToolMode.Roof => new Covers(StructureKind.Roof, a, b, RoofMaterial, cancel),
-            ToolMode.Outline => cancel ? new ClearWalls(a, b) : new PlaceOutline(a, b, WallMaterial),
             ToolMode.Room => cancel ? new EraseRoom(a, b) : new PaintRoom(Workshop.Id, a, b),
-            ToolMode.Wall => cancel ? new CancelWalls(a, b) : new PlaceWalls(a, b),
+            ToolMode.Block => cancel ? new CancelWalls(a, b) : new PlaceWalls(a, b),
             ToolMode.Structure => new RemoveStructures(a, b),
             ToolMode.Part => new RemoveParts(a, b),
             ToolMode.Rack => cancel ? new RemoveStructures(a, b) : new PlaceRacks(a, b, _facing),
@@ -891,6 +857,7 @@ public partial class DesignationTool : Node3D
 
     private void EndSelection()
     {
+        _pressAt = null;
         _selection = Selection.None;
         _box.Visible = false;
         _drape.Visible = false;
@@ -928,9 +895,9 @@ public partial class DesignationTool : Node3D
 
     private void UpdateBox()
     {
-        if (Mode == ToolMode.WallLine)
+        if (Mode == ToolMode.Edge)
         {
-            UpdateLine();
+            UpdateWallDrag();
             return;
         }
         if (IsAreaTool(Mode))

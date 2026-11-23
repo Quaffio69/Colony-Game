@@ -409,12 +409,12 @@ public partial class InspectorWindow : GlyphWindow
             Content.AddChild(G.Gap());
             Content.AddChild(new GlyphSection("Work (J to change)"));
             Content.AddChild(G.Para(string.Join(" · ", Enumerable.Range(0, Colonist.WorkTypes).Select(w =>
-                $"{ShortWork[w]} {(c.Priority((Work)w) is var p and > 0 ? p.ToString() : "-")}")), "Dim"));
+                $"{(w < ShortWork.Length ? ShortWork[w] : Colonist.WorkNames[w])} {(c.Priority((Work)w) is var p and > 0 ? p.ToString() : "-")}")), "Dim"));
             Content.AddChild(G.Para($"Likes {c.FavoriteFood.Name.ToLowerInvariant()}, things of {c.LikedMaterial}, and {c.PreferredWork.ToString().ToLowerInvariant()} work", "Faint"));
         }
     }
 
-    private static readonly string[] ShortWork = ["Mine", "Wood", "Farm", "Build", "Haul", "Craft"];
+    private static readonly string[] ShortWork = ["Mine", "Wood", "Farm", "Build", "Haul", "Craft", "Trade"];
 
     private void ZonePanel(PickZone z)
     {
@@ -489,8 +489,9 @@ public partial class InspectorWindow : GlyphWindow
 
     private void SitePanel(Blueprint bp)
     {
-        Content.AddChild(new GlyphSection(Colony.Core.Orders.Constructions.Name(bp.Kind) + " (planned)"));
-        Content.AddChild(G.Para(_ui.Waiting(Colony.Core.Orders.Constructions.Name(bp.Kind), bp.Cost.Material, bp.Cost.Count,
+        Content.AddChild(new GlyphSection(Tools.BuiltName(bp) + " (planned)"));
+        KV("Made of", bp.Cost.Material.Name.ToLowerInvariant());
+        Content.AddChild(G.Para(WorldInfo.Waiting(_ui, bp.Cost.Material, bp.Cost.Count,
             Colony.Core.Orders.Constructions.MaterialsOnSite(bp, _ui.Sim.Items)), "Dim"));
         KV("Builder", bp.BuilderId >= 0 ? _ui.Sim.Colonists.FirstOrDefault(c => c.Id == bp.BuilderId)?.Name ?? "someone" : "nobody yet", "dim");
         Content.AddChild(G.Para("Shift+X over it cancels the plan (what was delivered stays).", "Faint"));
@@ -507,10 +508,22 @@ public partial class InspectorWindow : GlyphWindow
         Content.AddChild(G.Para("G then click the nest sends the drafted against it (Military, M).", "Faint"));
     }
 
+    /// <summary>A tile: its name and level, then what is built and lying there (the hover card's facts, with materials).</summary>
     private void TilePanel(TilePos tile)
     {
+        var card = WorldInfo.For(_ui, tile);
         Content.AddChild(new GlyphSection(TileInfo.Name(_ui.Sim.World.Get(tile))));
-        Content.AddChild(G.Para(_ui.Describe(tile), "Dim"));
+        KV("Where", $"{tile.X}, {tile.Y}, level {tile.Z}", "dim");
+        if (card.Lines.Count == 0) return;
+        Content.AddChild(G.Gap());
+        Content.AddChild(new GlyphSection("Here"));
+        foreach (var (glyph, color, text, tone) in card.Lines)
+        {
+            var row = new HBoxContainer();
+            row.AddChild(new GlyphChip(glyph, color));
+            row.AddChild(G.Para(text, tone));
+            Content.AddChild(row);
+        }
     }
 
     private void KV(string name, string value, string tone = "hi") => Content.AddChild(new GlyphKV(null, default, name, value, tone));
@@ -549,7 +562,7 @@ public partial class InspectorWindow : GlyphWindow
         var shell = home.Shell;
         Content.AddChild(G.Gap());
         Content.AddChild(new GlyphSection("Building"));
-        BarRow("Walls", shell.Enclosure, shell.Enclosure <= 0 ? "none: B, Walls" : $"{shell.Enclosure:P0} {string.Join(", ", shell.Materials)}");
+        BarRow("Walls", shell.Enclosure, shell.Enclosure <= 0 ? "none: Build (B), Structures" : $"{shell.Enclosure:P0} {string.Join(", ", shell.Materials)}");
         KV("Windows", shell.Windows.ToString());
         KV("Floor", shell.Floored > 0 ? $"{shell.Floored:P0} {Catalog.FixtureTiers[Math.Clamp((int)MathF.Round(shell.FloorTier), 0, 3)]}" : "bare", shell.Floored > 0 ? "hi" : "dim");
         KV("Roof", shell.Covered > 0 ? $"{shell.Covered:P0} {Catalog.FixtureTiers[Math.Clamp((int)MathF.Round(shell.RoofTier), 0, 3)]}" : "open sky", shell.Covered > 0 ? "hi" : "dim");
@@ -578,6 +591,7 @@ public partial class InspectorWindow : GlyphWindow
         var sim = _ui.Sim;
         int levels = room.Cells.Select(c => c.Z).Distinct().Count();
         Content.AddChild(new GlyphSection(room.Name));
+        Content.AddChild(G.Para($"{room.Type.Name} workshop: {room.Type.About}", "Faint"));
         KV("Status", Rooms.Status(room, sim), "dim");
         KV("Size", $"{room.Cells.Count} cells on {G.Plural(levels, "level")}");
         BarRow("Efficiency", Math.Min(1, room.Efficiency / 2f), $"{room.Efficiency:P0}", "accent");
@@ -663,27 +677,42 @@ public partial class HelpWindow : GlyphWindow
     }
     public HelpWindow() : this(null!) { }
 
-    private static readonly (string Key, string What)[] Keys =
+    /// <summary>Every key, grouped the way the game is played: looking around, giving orders, building, the windows.</summary>
+    private static readonly (string Section, (string Key, string What)[] Keys)[] Sections =
     [
-        ("WASD / Q E", "pan / rotate the camera"), ("RMB drag", "pan the camera"), ("Wheel, middle-drag", "zoom, orbit"),
-        ("Shift / Ctrl (tap)", "view level up / down"), ("Z X  (PgDn PgUp)", "view level down / up"), ("LMB drag, no tool", "move the view up / down levels"),
-        ("Home", "look at the colony"), ("Space, 1 2 3", "pause, speed"),
-        ("n y u k o", "dig, stairs, up, down, up/down stair"), ("t p", "chop trees, gather plants"),
-        ("Shift+P F B", "stockpile, farm plot (again: next crop), dam wall"), ("Shift+O, Shift+X", "demolish box, cancel box (also Del)"), ("Tab / Shift+Tab", "cycle the orders"),
-        ("LMB, Shift+LMB", "start/confirm a box or place; removal box"), ("RMB click", "abort the box, then put the tool down"),
-        ("Shift/Ctrl, Z X while boxing", "stretch the box over levels"),
-        ("R, [ ]", "rotate, size of the part being placed"), ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor"),
-        ("Esc", "cancel placing, close the window, main menu"), ("Ctrl+Tab", "next window"),
-        ("F5 / F9", "quicksave / load the newest save"), ("F10", "tune the pixel-art look (Save keeps it)"), ("F4", "play the next colony (hot-seat, several colonies)"),
-        ("G", "draft everyone, then click ground to march or a nest to attack (G again: done)"), ("Shift+G", "stand everyone down"),
-        ("C I B L", "colonists, stocks, build, chronicle"), ("H J V M", "housing, work, inspect, military"), ("F1 F2 F3", "tests, appearance, this help"), ("F6", "trade with other colonies (offers, counters, deals)"),
+        ("Camera", [
+            ("WASD / Q E", "pan / turn the camera"), ("RMB drag", "pan"), ("Wheel, middle drag", "zoom, orbit"),
+            ("Shift / Ctrl (tap)", "view a level up / down"), ("Z X, PgDn PgUp", "view a level down / up"), ("LMB drag, no tool", "move through the levels"),
+            ("Home", "look at the colony")]),
+        ("Looking", [
+            ("Hover", "the card at the bottom right says what is there"), ("Click, no tool", "keep it in Inspect (V)"), ("Esc / RMB click", "clear the selection")]),
+        ("Orders", [
+            ("N  Y", "dig, stairway"), ("U  K  O", "up, down, up/down stair"), ("T  P", "chop trees, gather plants"),
+            ("Shift+P", "stockpile"), ("Shift+F", "farm (again: the next crop)"), ("Shift+B", "stone block (dams)"),
+            ("Shift+O", "demolish"), ("Shift+X, Del", "cancel orders"), ("Tab / Shift+Tab", "cycle the orders")]),
+        ("Using a tool", [
+            ("Drag", "a box (or click one corner, then the other)"), ("Shift + drag", "remove instead"),
+            ("Shift / Ctrl, Z X", "stretch the box over levels"), ("RMB click, Esc", "abort the box, then put the tool down"),
+            ("Walls: click / drag", "one piece / a line along an edge, or a box round"), ("R, [ ]", "turn, size of the part being placed"),
+            ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor")]),
+        ("People", [
+            ("G", "draft everyone, then click ground to march or a nest to attack (G again: done)"), ("Shift+G", "stand everyone down")]),
+        ("Windows", [
+            ("C  I  B  L", "colonists, stocks, build, chronicle"), ("H  J  V  M", "housing, work, inspect, military"), ("F6", "trade"),
+            ("F2  F3  F10", "appearance, this help, pixel look"), ("Esc", "close the window, then the menu"), ("Ctrl+Tab", "next window")]),
+        ("Game", [
+            ("Space, 1 2 3", "pause, speed"), ("F5 / F9", "quicksave / load the newest save"), ("F4", "play the next colony (hot-seat)")]),
     ];
 
     protected override void Build()
     {
         _live.Clear();
-        Content.AddChild(new GlyphSection("Keys"));
-        foreach (var (k, what) in Keys) Content.AddChild(new GlyphKV(null, default, what, k, "accent"));
+        foreach (var (section, keys) in Sections)
+        {
+            Content.AddChild(new GlyphSection(section));
+            foreach (var (k, what) in keys) Content.AddChild(new GlyphKV(null, default, what, k, "accent"));
+            Content.AddChild(G.Gap(0.4f));
+        }
         Content.AddChild(G.Gap());
         Content.AddChild(new GlyphSection("Debug"));
         var sim = _ui.Sim;

@@ -320,7 +320,7 @@ public sealed class Rooms
         foreach (var c in Footprint(type, origin, rotated, PartInfo.ClampSize(type, size)))
         {
             var r = RoomAt(c);
-            if (r is null) return "must be placed inside a room";
+            if (r is null) return "must be placed inside a workshop";
             if (room is not null && r != room) return "must fit inside one room";
             room = r;
             if (_cellPart.ContainsKey(c)) return "space is occupied";

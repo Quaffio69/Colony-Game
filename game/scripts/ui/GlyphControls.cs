@@ -490,3 +490,78 @@ public static class G
 
     public static string Plural(int n, string one, string? many = null) => $"{n} {(n == 1 ? one : many ?? one + "s")}";
 }
+
+/// <summary>
+/// Key hints on one row: "[Drag] a box  [Shift] remove  [RMB] done", each key a keycap followed by what it does in
+/// dim text. Shared by the tool card and the Build window's footer so controls read the same everywhere.
+/// </summary>
+public partial class KeyHints : GlyphControl
+{
+    private (string Key, string What)[] _hints = [];
+    public int Cells { get; private set; }
+
+    public KeyHints() => MouseFilter = MouseFilterEnum.Ignore;
+
+    public static int CellsOf((string Key, string What)[] hints)
+    {
+        int n = 0;
+        foreach (var (k, w) in hints) n += GlyphDraw.KeycapCells(k) + 1 + w.Length + 2;
+        return Math.Max(0, n - 2);
+    }
+
+    public void Set((string Key, string What)[] hints)
+    {
+        if (hints.Length == _hints.Length && System.Linq.Enumerable.SequenceEqual(hints, _hints)) return;
+        _hints = hints;
+        Cells = CellsOf(hints);
+        UpdateMinimumSize();
+        QueueRedraw();
+    }
+
+    public override Vector2 _GetMinimumSize() => new(Cells * Cw, Ch);
+
+    public override void _Draw()
+    {
+        float x = 0;
+        foreach (var (k, w) in _hints)
+        {
+            if (x + (GlyphDraw.KeycapCells(k) + 1 + w.Length) * Cw > Size.X + 1) break; // what doesn't fit is left off whole
+            x += GlyphDraw.Keycap(this, k, x) * Cw + Cw;
+            GlyphDraw.Text(this, w, new Vector2(x, 0), w.Length * Cw + 2, Tok("dim"));
+            x += (w.Length + 2) * Cw;
+        }
+    }
+}
+
+/// <summary>
+/// Wrapped text on the cell grid for tooltips and cards: the first line bold in hi when there are several paragraphs
+/// (a title), the rest in text.
+/// </summary>
+public partial class TipText : GlyphControl
+{
+    private List<string> _lines = new();
+    private int _titleLines;
+    public int Cols { get; private set; }
+    public int Rows => _lines.Count;
+
+    public TipText() => MouseFilter = MouseFilterEnum.Ignore;
+
+    public void Set(string text, int maxCols)
+    {
+        int br = text.IndexOf('\n');
+        _titleLines = br > 0 ? GlyphDraw.Wrap(text[..br], maxCols).Count : 0;
+        _lines = GlyphDraw.Wrap(text, maxCols);
+        Cols = 0;
+        foreach (var l in _lines) Cols = Math.Max(Cols, l.Length);
+        QueueRedraw();
+    }
+
+    public override void _Draw()
+    {
+        for (int i = 0; i < _lines.Count; i++)
+        {
+            bool title = i < _titleLines;
+            GlyphDraw.Text(this, _lines[i], new Vector2(0, i * Ch), Size.X, title ? Tok("hi") : Tok(_titleLines > 0 ? "text" : "hi"), title);
+        }
+    }
+}

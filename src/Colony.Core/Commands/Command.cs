@@ -115,7 +115,7 @@ public sealed record Demolish(TilePos A, TilePos B) : Command
             if (sim.Rooms.PartAt(new TilePos(x, y, z)) is { Built: true } p && p.Room.Faction == Player && !built.Contains(p)) built.Add(p);
         int parts = sim.Rooms.RemovePartsIn(A, B, Player);
         Refund(sim, built);
-        return $"Demolished {walls} wall pieces, {covers} floors and roofs, {structures} structures, {parts} room parts; cancelled {plans} plans";
+        return $"Demolished {walls} wall pieces, {covers} floors and roofs, {structures} structures, {parts} workshop parts; cancelled {plans} plans";
     }
 }
 
@@ -140,7 +140,7 @@ public sealed record PlaceWalls(TilePos A, TilePos B) : Command
     public override string Apply(ColonySim sim)
     {
         int n = sim.Constructions.PlaceWalls(A, B, Player);
-        return n > 0 ? $"Walls: {n} blueprints (each needs 1 stone and a builder)" : "Walls: no open cell with ground or a wall below in that box";
+        return n > 0 ? $"Stone blocks: {n} planned (each needs 1 stone and a builder)" : "Stone blocks: no open cell with ground or a block below in that box";
     }
 }
 
@@ -170,7 +170,7 @@ public sealed record PaintRoom(string RoomTypeId, TilePos A, TilePos B) : Comman
     {
         var type = RoomTypeId == Catalog.Home.Id ? Catalog.Home : Catalog.Workshops.First(w => w.Id == RoomTypeId);
         int n = sim.Rooms.Paint(type, A, B, Player);
-        return n > 0 ? $"{type.Name}: painted {n} floor cells" : $"{type.Name}: no free floor in that box";
+        return n > 0 ? $"{type.Name}: marked out {n} floor cells" : $"{type.Name}: no free floor in that box";
     }
 }
 

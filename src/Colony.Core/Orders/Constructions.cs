@@ -105,10 +105,10 @@ public sealed class Constructions
 
     public static string Name(StructureKind kind) => kind switch
     {
-        StructureKind.Wall => "Wall",
+        StructureKind.Wall => "Stone block",
         StructureKind.WaterWheel => "Water wheel",
         StructureKind.Pump => "Pump",
-        StructureKind.EdgeWall => "Thin wall",
+        StructureKind.EdgeWall => "Wall",
         StructureKind.Door => "Door",
         StructureKind.Floor => "Floor",
         StructureKind.Roof => "Roof",
@@ -302,7 +302,7 @@ public sealed class Constructions
         if (kind == StructureKind.Rack)
             return IsStorage?.Invoke(cell) != true ? "racks go on stockpile cells" : onFloor ? null : "needs ground below";
         if (kind == StructureKind.Wall)
-            return onFloor || _byCell.TryGetValue(below, out var under) && under.Kind == StructureKind.Wall ? null : "a wall needs ground or a wall below";
+            return onFloor || _byCell.TryGetValue(below, out var under) && under.Kind == StructureKind.Wall ? null : "a stone block needs ground or a block below";
         if (kind == StructureKind.WaterWheel)
         {
             // A wheel can hang on a wall beside a fall (where it makes the most power), or stand on the ground.

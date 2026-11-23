@@ -163,11 +163,16 @@ public partial class Notices : Control
 
     // ---- The tool card ------------------------------------------------------------------------------------
 
-    /// <summary>"▼ Dig   drag a box: click a corner, then the other · Shift: remove · RMB: put down".</summary>
+    /// <summary>
+    /// "▼ Dig  [Drag] a box  [Shift] remove  [RMB] done": the tool in hand (from <see cref="Tools"/>), then its controls as
+    /// keycaps; while boxing, the box size; when the spot is no good, why not.
+    /// </summary>
     private sealed partial class CardLine : GlyphControl
     {
         private readonly Notices _n;
-        private string _glyph = "", _tone = "accent", _name = "", _hint = "";
+        private string _glyph = "", _name = "", _extra = "", _drawn = "", _extraTone = "hi";
+        private Color _color;
+        private (string Key, string What)[] _keys = [];
         public int Cells { get; private set; } = 10;
 
         public CardLine(Notices n) { _n = n; MouseFilter = MouseFilterEnum.Ignore; }
@@ -176,44 +181,57 @@ public partial class Notices : Control
         public void Refresh(int maxCols)
         {
             var tool = _n._ui.Tool;
-            string glyph, tone, name, hint;
+            string glyph, name, extra = "", extraTone = "hi";
+            Color color;
+            (string Key, string What)[] keys;
             if (tool.SquadOrders)
             {
-                (glyph, tone, name) = ("‼", "bad", "Squad orders");
-                hint = "click the ground to march there, a nest to attack it · RMB or G: done";
+                (glyph, color, name) = ("‼", Tok("bad"), "Squad orders");
+                keys = [("Click", "march there"), ("Click a nest", "attack it"), ("G", "done")];
             }
             else
             {
-                var entry = OrdersRibbon.Entries.FirstOrDefault(e => e.Mode == tool.Mode || e.Mode == ToolMode.FarmGrain && tool.Mode is ToolMode.FarmHerbs or ToolMode.FarmGlowcaps or ToolMode.FarmFlax);
-                glyph = entry?.Glyph ?? "#";
-                tone = entry?.Tone ?? "warn";
-                string full = tool.ModeName(tool.Mode);
-                name = (full.StartsWith("Build: ") ? full[7..] : full).Split(" (")[0];
-                bool click = tool.PartFor(tool.Mode) is not null || tool.Mode is ToolMode.Structure or ToolMode.Edge;
-                hint = tool.BoxSize is { } b ? $"{b.W}×{b.D}×{b.H} · click to confirm · Shift/Ctrl: levels · RMB: abort"
-                    : tool.Mode == ToolMode.WallLine ? "click an edge, drag along it, click · Shift: remove · RMB: put down"
-                    : click ? "click to place · Shift+click: remove · R: turn · RMB: put down"
-                    : tool.Mode is ToolMode.Cancel or ToolMode.Demolish ? "drag a box: click a corner, then the other · RMB: put down"
-                    : "drag a box: click a corner, then the other · Shift: remove · RMB: put down";
-                if (tool.PlacementProblem is { } why) hint = $"can't place: {why} · RMB: put down";
+                var info = Tools.Current(tool);
+                (glyph, color, name, keys) = (info.Glyph, info.Color, info.Name, info.How);
+                if (tool.Removing) { name = "Remove: " + name; color = Tok("bad"); }
+                if (tool.EdgePieces is { } pieces) extra = G.Plural(pieces, "piece");
+                else if (tool.BoxSize is { } b) extra = b.H > 1 ? $"{b.W}×{b.D}×{b.H}" : $"{b.W}×{b.D}";
+                if (tool.IsArea && tool.Selecting) keys = [("Click", "confirm"), ("RMB", "abort")];
+                if (tool.PlacementProblem is { } why && !tool.Selecting)
+                {
+                    extra = "can't place: " + why;
+                    extraTone = "bad";
+                }
             }
-            int cells = 2 + 2 + name.Length + 3 + hint.Length + 1;
-            if (cells > maxCols)
-            {
-                hint = hint[..Math.Max(0, hint.Length - (cells - maxCols) - 1)] + "…";
-                cells = maxCols;
-            }
-            if (glyph == _glyph && name == _name && hint == _hint) return;
-            (_glyph, _tone, _name, _hint, Cells) = (glyph, tone, name, hint, cells);
+            string key = $"{glyph}|{name}|{extra}|{extraTone}|{string.Join(",", keys)}|{maxCols}|{color}";
+            if (key == _drawn) return;
+            _drawn = key;
+            // Leave hints off the end (whole ones) until it fits.
+            int Width((string, string)[] k) => 1 + 2 + name.Length + 2 + (extra.Length > 0 ? extra.Length + 2 : 0) + KeyHints.CellsOf(k) + 2;
+            while (keys.Length > 1 && Width(keys) > maxCols) keys = keys[..^1];
+            (_glyph, _color, _name, _extra, _extraTone, _keys, Cells) = (glyph, color, name, extra, extraTone, keys, Math.Min(maxCols, Width(keys)));
             QueueRedraw();
         }
 
         public override void _Draw()
         {
-            GlyphDraw.Chip(this, _glyph, new Vector2(1.5f * Cw, 0), Tok(_tone));
-            GlyphDraw.Text(this, _name, new Vector2(3.8f * Cw, 0), _name.Length * Cw + 2, Tok("accent"), true);
-            float x = (4 + _name.Length + 2) * Cw;
-            GlyphDraw.Text(this, _hint, new Vector2(x, 0), Size.X - x, Tok("text"));
+            float x = 1.2f * Cw;
+            GlyphDraw.Chip(this, _glyph, new Vector2(x, 0), _color);
+            x += 2.4f * Cw;
+            GlyphDraw.Text(this, _name, new Vector2(x, 0), _name.Length * Cw + 2, Tok("accent"), true);
+            x += (_name.Length + 2) * Cw;
+            if (_extra.Length > 0)
+            {
+                GlyphDraw.Text(this, _extra, new Vector2(x, 0), _extra.Length * Cw + 2, Tok(_extraTone), true);
+                x += (_extra.Length + 2) * Cw;
+            }
+            foreach (var (k, w) in _keys)
+            {
+                if (x + (GlyphDraw.KeycapCells(k) + 1 + w.Length) * Cw > Size.X) break;
+                x += GlyphDraw.Keycap(this, k, x) * Cw + Cw;
+                GlyphDraw.Text(this, w, new Vector2(x, 0), w.Length * Cw + 2, Tok("dim"));
+                x += (w.Length + 2) * Cw;
+            }
         }
     }
 }

@@ -44,7 +44,6 @@ public partial class GameUi : CanvasLayer
         AddChild(_m);
         _m.CancelPlacement = () => Tool.CancelPlacement();
         _m.EscapeFallback = () => ShowMenu(!_menu!.Visible);
-        _m.WorldStatus = WorldStatus;
 
         Add(new ColonistsWindow(this), Key.C);
         Add(new StocksWindow(this), Key.I);
@@ -65,6 +64,7 @@ public partial class GameUi : CanvasLayer
         Ribbon = new OrdersRibbon(this) { Name = "OrdersRibbon" };
         _m.AddChild(Ribbon);
         _m.AddChild(new Notices(this) { Name = "Notices" });
+        _m.AddChild(new HoverCard(this) { Name = "HoverCard" });
         if (main != null)
         {
             // A click with no tool selects what is under the cursor and shows it in Inspect; Esc / a right click clears it.
@@ -288,64 +288,6 @@ public partial class GameUi : CanvasLayer
         G.Retone(_net, _net.Text.StartsWith("Out of step") || _net.Text.StartsWith("Disconnected") ? "Bad" : "Info");
     }
 
-    // ---- Status pill (when the mouse is over the world) -----------------------------------------------
-
-    private (string, bool) WorldStatus()
-    {
-        if (Tool.SelectionInfo is { } sel) return (sel, true);
-        string tool = Tool.SquadOrders ? "Squad orders: click ground to march, a nest to attack it · RMB: done" : Tool.ModeName(Tool.Mode);
-        string hover = HoverText();
-        return (hover.Length > 0 ? $"{tool} · {hover}" : $"{tool} · n/u/k/o/t/p…: orders · B: build · RMB drag: pan · Esc: menu", false);
-    }
-
-    /// <summary>"Saw horse planned: 0/2 logs here · no logs to bring: chop trees (t)" or "... waiting for a builder".</summary>
-    public string Waiting(string name, ItemType material, int needed, int delivered)
-    {
-        string mat = material.Name.ToLowerInvariant();
-        string s = $"{name} planned: {Math.Min(delivered, needed)}/{needed} {mat} here";
-        if (delivered >= needed) return s + " · waiting for a builder (Construction work)";
-        if (Count(material) - delivered > 0) return s + " · haulers will bring the rest";
-        string from = material == ItemType.Log ? "chop trees (t)" : material == ItemType.Plank ? "saw logs at a saw bench (Carpentry)"
-            : material == ItemType.Stone ? "dig rock (n)" : "make some";
-        return s + $" · no {mat} to bring: {from}";
-    }
-
-    /// <summary>What is under the cursor: tile, plant, water, waterworks, farm plot, machine.</summary>
-    public string HoverText() => Tool.Hovered is { } hovered ? Describe(hovered) : "";
-
-    /// <summary>A tile and what is on it, in one line.</summary>
-    public string Describe(TilePos h)
-    {
-        var above = h.Offset(0, 0, 1);
-        string s = $"{TileInfo.Name(Sim.World.Get(h))} at {h.X},{h.Y},{h.Z}";
-        if (Sim.Flora.TryGet(above, out var plant))
-            s += $", {Colony.Core.Nature.PlantInfo.Name(plant.Kind)}" + (Colony.Core.Nature.PlantInfo.IsGatherable(plant) ? " (ripe)" : "");
-        if (Sim.Water.MassAt(above) >= Colony.Core.Fluids.Water.MinMass)
-            s += $", water {Sim.Water.Level(above)}/7" + (Sim.Water.Pressure(above) is var pr and > 0.05f ? $" (pressed by {pr:0.0})" : "");
-        if (Sim.Waterworks.At(above) is { } thing)
-            s += thing switch
-            {
-                Colony.Core.Fluids.WaterWheel ww => $", water wheel making {ww.Power:0.#} power",
-                Colony.Core.Fluids.Pump pp => $", pump moving {pp.Pumped} per step",
-                _ => "",
-            };
-        if (Sim.Farms.TryGet(above, out var crop))
-            s += $", farm plot ({Colony.Core.Nature.PlantInfo.Name(crop).ToLowerInvariant()})";
-        if (Tool.HoveredMachine() is { Recipe: { } making } hm)
-            s += $", {hm.Name.ToLowerInvariant()} making {making.Name.ToLowerInvariant()} (F to change)";
-        if (Sim.Rooms.RoomAt(above) is { } room) s += room.Faction == Me ? $" · {room.Name} (V: details)" : $" · {room.Name} of {Sim.Factions[room.Faction].Name}";
-        // Blueprints say what they wait for: their materials (and where those come from), or a builder.
-        if (Sim.Rooms.PartAt(above) is { Built: false } planned)
-            s += " · " + Waiting(planned.Name, planned.Cost.Material, planned.Cost.Count, planned.Cells.Sum(c => Sim.Items.TryGet(c, out var p) && p.Type == planned.Cost.Material ? p.Count : 0));
-        else if ((Sim.Constructions.At(above) ?? Sim.Constructions.CoverAt(above, false) ?? Sim.Constructions.CoverAt(above, true)) is { } site)
-            s += " · " + Waiting(Colony.Core.Orders.Constructions.Name(site.Kind), site.Cost.Material, site.Cost.Count, Colony.Core.Orders.Constructions.MaterialsOnSite(site, Sim.Items));
-        if (Sim.Items.TryGet(above, out var pile) && pile.Count > 0) s += $" · {pile.Count} {pile.Type.Name.ToLowerInvariant()}";
-        if (Sim.Wildlife.NestNear(above, 2) is { } nest)
-            s += $" · {nest.Kind.Name.ToLowerInvariant()} nest of {nest.Total} ({(nest.HostileTo(Me, Sim.Tick) ? "hostile" : "calm, leave them be")}; G then click: attack)";
-        int ants = Sim.Wildlife.Near(above, 1).Count();
-        if (ants > 0) s += $" · {G.Plural(ants, "giant ant")}";
-        return s;
-    }
 }
 
 /// <summary>A HUD resource: chip, bold value, ↑/↓ for the daily change; blinks bad when low; hover hint, click opens.</summary>

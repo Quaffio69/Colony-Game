@@ -81,8 +81,8 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   (walls round a box)/`CancelEdge`/`Demolish` (instant, refunds); edge blueprints are delivered to whichever adjacent
   cell has floor (`Blueprint.Cell` = site, `EdgeCell`/`Side` = the edge) and built by builders like other structures;
   a door or window may be cut into a built wall (the wall's material comes back). Costs: wall 1 of its material,
-  door 2 planks, window 1 glass. **Tool:** build menu "Walls & doors": Outline (box), Wall/Door/Window (click the
-  edge nearest the cursor; RMB removes), material row. **Look:** `EdgeView` (stacked logs, rubble, plank panels,
+  door 2 planks, window 1 glass. **Tool:** one wall tool (Build, Structures: a wall per material, doors & windows): click the edge for one piece,
+  drag along it for a line, drag away from it to wall round a box; Shift removes (see ui.md). **Look:** `EdgeView` (stacked logs, rubble, plank panels,
   coursed blocks, brick; coping, corner posts, door leaves, glazed windows; blueprint ghosts). **Homes:** the shell
   (`HomeLayout.Survey`: outline closed by walls/doors/windows/rock, their tier vs expectation, windows) is a fifth of
   `Housing.Score`; wall materials count for liked materials. The old full-cell `TileType.Wall` (Tab order) stays

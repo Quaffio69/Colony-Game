@@ -9,37 +9,19 @@ namespace ColonyGame.UI;
 /// <summary>
 /// The orders ribbon: a small pill above the dock listing every order with its icon and hotkey. It shows while an order
 /// tool is in hand (pressing any order's hotkey brings it up) or while pinned open by its own "Orders" pill; clicking
-/// an entry picks it. Hotkeys follow Dwarf Fortress's designation letters where the camera (WASD, Q/E, Z/X) and the
-/// window keys leave them free, shown DF-style: lowercase is the key alone, uppercase is Shift+key.
+/// an entry picks it. Names, icons and keys come from <see cref="Tools"/>, shown DF-style: lowercase is the key alone,
+/// uppercase is Shift+key.
 /// </summary>
 public partial class OrdersRibbon : Control
 {
-    public sealed record Entry(ToolMode Mode, string Glyph, string Tone, string Name, Key Key, bool Shift, string Tip)
+    /// <summary>One order on the ribbon (its look comes from <see cref="Tools.Of"/>).</summary>
+    public sealed record Entry(ToolMode Mode, Key Key, bool Shift)
     {
         /// <summary>DF-style: "n" is N, "P" is Shift+P.</summary>
-        public string KeyName => Key == Key.Delete ? "Del" : Shift ? Key.ToString().ToUpperInvariant() : Key.ToString().ToLowerInvariant();
+        public string KeyName => Shift ? Key.ToString().ToUpperInvariant() : Key.ToString().ToLowerInvariant();
     }
 
-    /// <summary>
-    /// The orders and their keys. DF: d mine, u/j/i stairs, t chop, p gather, x remove; d, j and i are taken here (pan
-    /// right, Work, Stocks), so mine is n, down stair k, up/down stair o, and the removal box is X (Shift+X, or Del).
-    /// Stockpile (DF.s p menu) is P, farm plot F (again: the next crop), dam wall B, demolish O (DF o: remove construction).
-    /// </summary>
-    public static readonly Entry[] Entries =
-    [
-        new(ToolMode.Dig, "▼", "ore", "Dig", Key.N, false, "Dig out a box of rock and soil (DF: mine)"),
-        new(ToolMode.Stairs, "≡", "stair", "Stairs", Key.Y, false, "Stairs through a box of levels: down on top, up/down between, up at the bottom"),
-        new(ToolMode.UpStair, "▲", "stair", "Up", Key.U, false, "Carve up stairs"),
-        new(ToolMode.DownStair, "▼", "stair", "Down", Key.K, false, "Carve down stairs"),
-        new(ToolMode.UpDownStair, "÷", "stair", "Up/down", Key.O, false, "Carve up/down stairs"),
-        new(ToolMode.Chop, "♣", "pine", "Chop", Key.T, false, "Fell trees in an area (logs by tree size)"),
-        new(ToolMode.Gather, "♦", "good", "Gather", Key.P, false, "Gather ripe plants in an area (berries, fiber, herbs)"),
-        new(ToolMode.Stockpile, "≡", "item", "Stockpile", Key.P, true, "Zone floor where haulers store goods (racks: Build, Zones)"),
-        new(ToolMode.FarmGrain, "τ", "farm", "Farm", Key.F, true, "Farm plot: press again for the next crop (grain, herbs, flax, glowcaps)"),
-        new(ToolMode.Wall, "#", "wall", "Dam wall", Key.B, true, "Full stone wall cells for dams and canals (stack to raise)"),
-        new(ToolMode.Demolish, "▓", "warn", "Demolish", Key.O, true, "Take down what is built in a box: walls, doors, windows, floors, roofs, racks, waterworks, room parts (DF: o)"),
-        new(ToolMode.Cancel, "×", "bad", "Cancel", Key.X, true, "Cancel designations and plans (walls, floors, parts not yet built), remove zone cells (also Del)"),
-    ];
+    public static readonly Entry[] Entries = Tools.Hotkeys.Select(h => new Entry(h.Mode, h.Key, h.Shift)).ToArray();
 
     /// <summary>The order a key picks (null: not an order key).</summary>
     public static ToolMode? OrderFor(Key key, bool shift)
@@ -143,8 +125,8 @@ public partial class OrdersRibbon : Control
         {
             _r = r;
             MouseDefaultCursorShape = CursorShape.PointingHand;
-            MouseEntered += () => { _hover = true; GlyphStatus.Tip = GlyphStatus.Banner = "Orders: dig, stairs, chop, gather, zones, cancel · each has a hotkey · click to keep this open"; QueueRedraw(); };
-            MouseExited += () => { _hover = false; GlyphStatus.Tip = GlyphStatus.Banner = null; QueueRedraw(); };
+            MouseEntered += () => { _hover = true; GlyphStatus.Banner = "Orders\nDig, stairs, chop, gather, stockpiles, farms, blocks and cancel. Each has its hotkey beside it.\nClick to keep this open."; QueueRedraw(); };
+            MouseExited += () => { _hover = false; GlyphStatus.Banner = null; QueueRedraw(); };
         }
         public PillButton() : this(null!) { }
 
@@ -189,14 +171,20 @@ public partial class OrdersRibbon : Control
         {
             _r = r;
             MouseDefaultCursorShape = CursorShape.PointingHand;
-            MouseExited += () => { _hover = -1; GlyphStatus.Tip = GlyphStatus.Banner = null; QueueRedraw(); };
+            MouseExited += () => { _hover = -1; GlyphStatus.Banner = null; QueueRedraw(); };
         }
         public Row() : this(null!) { }
 
-        private static string NameOf(Entry e, ToolMode current) =>
-            e.Mode == ToolMode.FarmGrain ? current switch { ToolMode.FarmHerbs => "Herbs", ToolMode.FarmGlowcaps => "Glowcaps", ToolMode.FarmFlax => "Flax", ToolMode.FarmGrain => "Grain", _ => e.Name } : e.Name;
+        /// <summary>The entry as the tool would be: the farm entry shows the crop in hand ("Farm" otherwise).</summary>
+        private ToolInfo InfoOf(Entry e, ToolMode current)
+        {
+            var info = Tools.Of(_r._ui.Tool, Covers(e, current) ? current : e.Mode);
+            return e.Mode == ToolMode.FarmGrain && !Covers(e, current) ? info with { Short = "Farm" } : info;
+        }
 
-        private static int EntryCells(Entry e, ToolMode current, bool compact) => compact ? 2 + e.KeyName.Length + 1 : 2 + NameOf(e, current).Length + 1 + e.KeyName.Length + 2;
+        private string NameOf(Entry e, ToolMode current) => InfoOf(e, current).Short;
+
+        private int EntryCells(Entry e, ToolMode current, bool compact) => compact ? 2 + e.KeyName.Length + 1 : 2 + NameOf(e, current).Length + 1 + e.KeyName.Length + 2;
 
         public int CellsFor(bool compact) => 1 + Entries.Sum(e => EntryCells(e, _r.Current, compact));
 
@@ -236,7 +224,14 @@ public partial class OrdersRibbon : Control
                     {
                         _hover = i;
                         var en = i >= 0 ? Entries[i] : null;
-                        GlyphStatus.Tip = GlyphStatus.Banner = en is null ? null : $"{NameOf(en, _r.Current)} ({(en.Shift ? "Shift+" : "")}{en.Key}): {en.Tip}";
+                        if (en is null) GlyphStatus.Banner = null;
+                        else
+                        {
+                            var info = InfoOf(en, _r.Current);
+                            string name = en.Mode == ToolMode.FarmGrain ? "Farm" : info.Name;
+                            string more = en.Mode == ToolMode.FarmGrain ? "\nPress again for the next crop: grain, herbs, flax, glowcaps" : "";
+                            GlyphStatus.Banner = $"{name}  ({(en.Shift ? "Shift+" : "")}{en.Key})\n{info.About}{more}";
+                        }
                         QueueRedraw();
                     }
                     break;
@@ -259,7 +254,8 @@ public partial class OrdersRibbon : Control
                 var r = new Rect2(x - 0.4f * Cw, Ch * 0.14f, (n - (Compact ? 0.2f : 1.2f)) * Cw, Ch * 0.72f);
                 if (on) GlyphDraw.Round(this, r, GlyphTheme.Tok("accent", 0.2f), Ch * 0.36f);
                 else if (i == _hover) GlyphDraw.Round(this, r, GlyphTheme.Tok("text", 0.08f), Ch * 0.36f);
-                GlyphDraw.Chip(this, e.Glyph, new Vector2(x, 0), Tok(e.Tone));
+                var info = InfoOf(e, current);
+                GlyphDraw.Chip(this, info.Glyph, new Vector2(x, 0), info.Color);
                 x += 2 * Cw;
                 if (!Compact)
                 {
