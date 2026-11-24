@@ -31,6 +31,7 @@ public sealed class Designations
     private readonly Dictionary<TilePos, int> _claims = new();
     private readonly Owners _owners = new();
     private readonly Dictionary<int, int> _counts = new(); // orders per colony (never enumerated)
+    private readonly Dictionary<TilePos, byte> _priority = new(); // orders not at DefaultPriority
 
     /// <summary>How many orders a colony has (capped at <see cref="Balance.MaxOrders"/>; farm sowing excepted).</summary>
     public int OrdersOf(int faction) => _counts.GetValueOrDefault(faction);
@@ -76,6 +77,7 @@ public sealed class Designations
         {
             var tile = _world.Get(p);
             if (tile is TileType.Air or TileType.Deck) return false; // a built floor is taken down (Demolish), not dug
+            if (_world.IsBedrock(p)) return false; // the floor of the world
             if (Result(kind, tile) == tile) return false; // nothing would change
         }
         bool exists = _orders.TryGetValue(p, out var existing);
@@ -94,10 +96,34 @@ public sealed class Designations
         return true;
     }
 
+    // ---- Priority (DF-style: 1 first ... 5 last) ---------------------------------------------------------------
+
+    public const int DefaultPriority = 3, MaxPriority = 5;
+
+    /// <summary>An order's priority: 1 is done first, 5 last (3 unless set). Colonists take the most urgent order they can
+    /// reach, then the highest, then the nearest.</summary>
+    public int PriorityOf(TilePos p) => _priority.TryGetValue(p, out byte v) ? v : DefaultPriority;
+
+    /// <summary>Sets the priority of every order (of this colony) in the inclusive box; returns how many it covered.</summary>
+    public int SetPriorityBox(TilePos a, TilePos b, int priority, int faction = Owners.Any)
+    {
+        priority = Math.Clamp(priority, 1, MaxPriority);
+        int n = ForBox(a, b, p =>
+        {
+            if (!_orders.ContainsKey(p) || !_owners.Matches(p, faction)) return false;
+            if (priority == DefaultPriority) _priority.Remove(p);
+            else _priority[p] = (byte)priority;
+            return true;
+        });
+        if (n > 0) Version++;
+        return n;
+    }
+
     public bool Cancel(TilePos p, int faction = Owners.Any)
     {
         if (!_orders.ContainsKey(p) || !_owners.Matches(p, faction)) return false;
         _orders.Remove(p);
+        _priority.Remove(p);
         Uncount(p);
         _owners.Clear(p);
         _claims.Remove(p);
@@ -222,6 +248,7 @@ public sealed class Designations
     public bool Complete(TilePos p)
     {
         if (!_orders.Remove(p, out var kind)) return false;
+        _priority.Remove(p);
         Uncount(p);
         _claims.Remove(p);
         _owners.Clear(p);
@@ -230,19 +257,27 @@ public sealed class Designations
         return true;
     }
 
-    /// <summary>How many simulation ticks of work a designation takes.</summary>
-    public static int WorkTicks(DesignationKind kind, TileType tile)
+    /// <summary>How many simulation ticks of work a designation takes (natural rock as slate, at level zero).</summary>
+    public static int WorkTicks(DesignationKind kind, TileType tile) => WorkTicks(kind, tile, Procedural.Rock.Slate, 0);
+
+    /// <summary>
+    /// Ticks of work for a designation on a tile: by material (natural rock by its kind), and below level zero longer the
+    /// deeper it is (<see cref="Balance.DigDepthHardening"/> per level).
+    /// </summary>
+    public static int WorkTicks(DesignationKind kind, TileType tile, Procedural.Rock rock, int belowZero)
     {
         int dig = tile switch
         {
             TileType.Grass or TileType.Soil or TileType.Sand => Balance.DigLoose,
             TileType.Clay => Balance.DigClay,
-            TileType.Stone => Balance.DigStone,
+            TileType.Stone => Procedural.Geology.DigTicks(rock),
             TileType.Aetherite => Balance.DigAetherite,
+            _ when TileInfo.IsGem(tile) => Balance.DigGem,
             _ when TileInfo.IsMineral(tile) => Balance.DigOre,
             _ when TileInfo.IsStair(tile) => Balance.DigStair, // already carved: only reshaping or clearing it
             _ => Balance.DigOther,
         };
+        if (belowZero > 0) dig = (int)(dig * (1f + Balance.DigDepthHardening * belowZero));
         return IsStair(kind) ? dig + Balance.StairCarveTicks : dig;
     }
 
@@ -265,6 +300,7 @@ public sealed class Designations
     {
         Net.SnapIO.Compact(_orders);
         Net.SnapIO.Compact(_claims);
+        Net.SnapIO.Compact(_priority);
         _owners.Compact();
     }
 
@@ -276,6 +312,8 @@ public sealed class Designations
         foreach (var (p, id) in _claims) { Net.SnapIO.Write(w, p); w.Write(id); }
         _owners.SnapSave(w);
         w.Write(Version);
+        w.Write(_priority.Count);
+        foreach (var (p, v) in _priority) { Net.SnapIO.Write(w, p); w.Write(v); }
     }
 
     internal void SnapLoad(BinaryReader r)
@@ -288,5 +326,9 @@ public sealed class Designations
         _counts.Clear();
         foreach (var p in _orders.Keys) _counts[_owners.Of(p)] = OrdersOf(_owners.Of(p)) + 1;
         Version = r.ReadInt32();
+        _priority.Clear();
+        if (Net.SnapIO.Before(7)) return; // order priorities came with version 7
+        int np = r.ReadInt32();
+        for (int i = 0; i < np; i++) _priority[Net.SnapIO.ReadPos(r)] = r.ReadByte();
     }
 }

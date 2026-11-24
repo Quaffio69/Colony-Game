@@ -24,7 +24,7 @@ public static class WorldGenerator
     public static GeneratedWorld GenerateWithTerrain(WorldGenSettings s)
     {
         var terrain = Terrain.Generate(s);
-        var world = new VoxelWorld(s.Width, s.Depth, s.Height);
+        var world = new VoxelWorld(s.Width, s.Depth, s.Height) { Geology = Geology.For(s, terrain) };
         Parallel.For(0, world.ChunksX * world.ChunksY, column =>
         {
             int cx = column % world.ChunksX, cy = column / world.ChunksX;
@@ -141,9 +141,11 @@ public static class WorldGenerator
             float px = (gx + Noise.Hash(gx, gy, gz, s.Seed + 502)) * DepositCell;
             float py = (gy + Noise.Hash(gx, gy, gz, s.Seed + 503)) * DepositCell;
             float pz = (gz + Noise.Hash(gx, gy, gz, s.Seed + 504)) * DepositCell;
-            float rx = 1.5f + Noise.Hash(gx, gy, gz, s.Seed + 505) * 3f;
-            float ry = 1.5f + Noise.Hash(gx, gy, gz, s.Seed + 506) * 3f;
-            float rz = 1.2f + Noise.Hash(gx, gy, gz, s.Seed + 507) * 1.8f; // flattish, like seams
+            // Deeper deposits are bigger (the reward for digging down); gems are small pockets.
+            float scale = (0.8f + 0.5f * depth01) * (TileInfo.IsGem(mineral) ? 0.45f : 1f);
+            float rx = (1.5f + Noise.Hash(gx, gy, gz, s.Seed + 505) * 3f) * scale;
+            float ry = (1.5f + Noise.Hash(gx, gy, gz, s.Seed + 506) * 3f) * scale;
+            float rz = (1.2f + Noise.Hash(gx, gy, gz, s.Seed + 507) * 1.8f) * scale; // flattish, like seams
 
             int bx0 = Math.Max(x0, (int)MathF.Floor(px - rx)), bx1 = Math.Min(x1, (int)MathF.Ceiling(px + rx));
             int by0 = Math.Max(y0, (int)MathF.Floor(py - ry)), by1 = Math.Min(y1, (int)MathF.Ceiling(py + ry));
@@ -155,7 +157,7 @@ public static class WorldGenerator
                 float dx = (x + 0.5f - px) / rx, dy = (y + 0.5f - py) / ry, dz = (z + 0.5f - pz) / rz;
                 float lumpy = 0.75f + 0.5f * Noise.Hash(x, y, z, s.Seed + 508);
                 if (dx * dx + dy * dy + dz * dz > lumpy) continue;
-                if (world.Get(x, y, z) == TileType.Stone) world.SetForGeneration(x, y, z, mineral);
+                if (world.Get(x, y, z) == TileType.Stone && z > world.Geology!.BedrockTop(x, y)) world.SetForGeneration(x, y, z, mineral);
             }
         }
     }
@@ -163,7 +165,7 @@ public static class WorldGenerator
     /// <summary>
     /// Which mineral a deposit is, by height in the world (0 = bottom, 1 = top) and a random pick weighted by
     /// stratum: copper and tin near the surface, iron in the middle, silver, gold and sulfur deep, aetherite
-    /// only at the very bottom; quartz geodes anywhere.
+    /// only at the very bottom; quartz geodes anywhere; gems from the middle down, the finest (diamond) only near the bottom.
     /// </summary>
     public static TileType DepositMineral(float height01, float pick)
     {
@@ -177,6 +179,12 @@ public static class WorldGenerator
             (TileType.GoldOre, height01 < 0.4f ? 1f : 0f),
             (TileType.Sulfur, height01 < 0.35f ? 1.5f : 0f),
             (TileType.Aetherite, height01 < 0.18f ? 2f : 0f),
+            // Gems: the deeper, the rarer and finer.
+            (TileType.Garnet, height01 < 0.45f ? 1.2f : 0f),
+            (TileType.Sapphire, height01 < 0.3f ? 0.8f : 0f),
+            (TileType.Ruby, height01 < 0.3f ? 0.8f : 0f),
+            (TileType.Emerald, height01 < 0.25f ? 0.7f : 0f),
+            (TileType.Diamond, height01 < 0.12f ? 0.9f : 0f),
         ];
         float total = 0;
         foreach (var (_, w) in table) total += w;

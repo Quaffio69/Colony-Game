@@ -95,8 +95,12 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
 
 - **Raw resources:** clay (lake beds, under river sand, patches of the soil layer), sand (riverbeds, beaches)
   and 8 minerals (`TileInfo.IsMineral`; copper/tin high, iron middle, silver/gold/sulfur deep, aetherite
-  deepest and glowing, quartz anywhere; `WorldGenerator.DepositMineral`). Terrain colours and glow (alpha < 1)
-  are in `WorldView.TileColor`; the cap palette holds 32 entries. Wild ferns/wildflowers give herbs.
+  deepest and glowing, quartz anywhere; `WorldGenerator.DepositMineral`), plus 5 gems (`TileInfo.IsGem`: garnet from
+  the middle down, sapphire, ruby and emerald deep, diamond only near the bedrock; small pockets) that leave rough gems,
+  cut at the glassworks' grinding wheel (emerald and diamond need Scholars), set into jewellery and regalia at the forge.
+  Deposits grow bigger with depth and never sit in the bedrock. All natural rock yields "stone" whatever its kind
+  (`Procedural.Geology`, see world.md). Terrain colours and glow (alpha < 1) are in `WorldView.TileColor`; the palette
+  holds 32 entries (1-28 tiles and rock looks, 30 unexplored, 31 far water; 29 free). Wild ferns/wildflowers give herbs.
 - **Farms (`Nature.Farms`):** zoned plots grow one crop each (flax -> fiber; wheat -> grain and herbs on grass/soil, glowcaps
   on any floor under a roof). Every `GrowInterval` ticks all plots grow at once (one flora rebuild per
   region); empty plots get a `Sow` order and grown crops a `Gather` order (Designations labor). Crops are

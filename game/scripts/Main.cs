@@ -427,7 +427,7 @@ public partial class Main : Node3D
             {
                 s_devArgsDone = true;
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--house-demo", "--falls-demo", "--ticks" }.Any(a => Arg(a) != null))
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--house-demo", "--falls-demo", "--mine-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
                 if (Arg("--dig-demo") is { } digDemo) DigDemo(digDemo);
                 if (Arg("--stairs-demo") != null) StairsDemo();
@@ -443,6 +443,7 @@ public partial class Main : Node3D
                 if (Arg("--falls-demo") != null) FallsDemo();
                 if (Arg("--ants-demo") is { } antsDemo) AntsDemo(antsDemo);
                 if (Arg("--trade-demo") != null) TradeDemo();
+                if (Arg("--mine-demo") is { } mineDemo) MineDemo(mineDemo);
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
                 if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
@@ -688,6 +689,42 @@ public partial class Main : Node3D
             GD.Print(_sim.Commands.Execute(new Colony.Core.Commands.DesignateBox(new TilePos(c.X - 120, c.Y - 120, 0), new TilePos(c.X + 120, c.Y + 120, c.Z - 1), Colony.Core.Orders.DesignationKind.Dig)));
         }
         else _sim.Designations.DesignateBox(new TilePos(cx - 6, cy - 4, z), new TilePos(cx + 6, cy + 4, z));
+    }
+
+    /// <summary>
+    /// --mine-demo[=N]: a stair shaft from beside the colony down to N levels below zero (default 20; "deep": just over the
+    /// bedrock), and a gallery there (a cross of tunnels and a hall), dug at once. Views that level, so its walls show the
+    /// rock and what it holds, and the rock further in stays dark (fog of war).
+    /// </summary>
+    private void MineDemo(string arg)
+    {
+        var w = _sim.World;
+        var c = _sim.Colonists[0].Position;
+        int sx = c.X + 3, sy = c.Y + 3, top = w.SurfaceLevel(sx, sy);
+        int bottom = arg == "deep" && w.Geology is { } g ? g.BedrockTop(sx, sy) + 2
+            : w.ZeroLevel - (int.TryParse(arg, out int n) ? n : 20);
+        bottom = Math.Clamp(bottom, 2, top - 4);
+        for (int z = top; z >= bottom; z--)
+        {
+            var p = new TilePos(sx, sy, z);
+            _sim.Flora.Remove(p.Offset(0, 0, 1), out _);
+            w.Set(p, z == top ? TileType.DownStair : z == bottom ? TileType.UpStair : TileType.UpDownStair);
+        }
+        void Open(int x, int y)
+        {
+            if (w.InBounds(x, y, bottom) && !w.IsBedrock(new TilePos(x, y, bottom)) && !(x == sx && y == sy)) w.Set(x, y, bottom, TileType.Air);
+        }
+        for (int d = 1; d <= 26; d++) { Open(sx + d, sy); Open(sx - d, sy); Open(sx, sy + d); Open(sx, sy - d); }
+        for (int y = sy + 8; y <= sy + 16; y++)
+        for (int x = sx + 8; x <= sx + 16; x++) Open(x, y);
+        for (int d = 1; d < 8; d++) Open(sx + 12, sy + d);
+        _sim.CheckSupport(new TilePos(sx, sy, bottom));
+        var rocks = new System.Text.StringBuilder();
+        for (int z = top; z >= 0; z -= 12) rocks.Append($" {z - w.ZeroLevel}:{w.RockAt(new TilePos(sx, sy, z))}");
+        GD.Print($"[mine-demo] shaft at {sx},{sy} from level {top - w.ZeroLevel} to {bottom - w.ZeroLevel} (zero is z {w.ZeroLevel}); rock down the shaft:{rocks}");
+        _world.ViewLevel = bottom;
+        float zoom = float.TryParse(Arg("--zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float zf) ? zf : 34f;
+        _rig.Focus(SimSpace.TileCenter(new TilePos(sx + 6, sy + 6, bottom)), zoom, yaw: 205f, pitch: -62f);
     }
 
     /// <summary>

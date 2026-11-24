@@ -37,7 +37,9 @@ void vertex() {
 	// to a point.
 	float cut = cut_height + 0.95;
 	if (wp.y > cut) VERTEX += (inverse(MODEL_MATRIX) * vec4(0.0, cut - wp.y, 0.0, 0.0)).xyz;
-	if (abs(fol_mode - 1.0) < 0.5) VERTEX = vec3(0.0);
+	// A tree standing wholly above the cut (its base over it) is gone, not flattened: viewing deep underground, every tree
+	// on the surface was squashed onto the cut plane as a blob.
+	if (abs(fol_mode - 1.0) < 0.5 || MODEL_MATRIX[3].y > cut) VERTEX = vec3(0.0);
 #endif
 	v_world = wp.xyz + off;
 	v_sphere_w = normalize((MODEL_MATRIX * vec4(CUSTOM0.xyz, 0.0)).xyz);

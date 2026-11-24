@@ -90,6 +90,11 @@ public static class Balance
 
     /// <summary>Digging out a tile, by material (stairs add <see cref="StairCarveTicks"/>).</summary>
     public const int DigLoose = 40, DigClay = 55, DigStone = 90, DigOre = 120, DigAetherite = 180, DigStair = 30, DigOther = 60;
+    /// <summary>Digging natural rock by kind (<see cref="Procedural.Geology"/>; slate is <see cref="DigStone"/>): soft sediment
+    /// near the top, hard granite and basalt deep down. Gems are slow to work free.</summary>
+    public const int DigSandstone = 70, DigLimestone = 80, DigGranite = 120, DigBasalt = 150, DigGem = 200;
+    /// <summary>Below level zero every dig takes this much longer per level deeper (rock pressure): 100 levels down, half as long again.</summary>
+    public const float DigDepthHardening = 0.005f;
     public const int StairCarveTicks = 45;
     /// <summary>Felling: base plus this per level of the tree's height.</summary>
     public const int ChopTicks = 60, ChopTicksPerLevel = 20;

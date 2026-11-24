@@ -512,8 +512,8 @@ public partial class InspectorWindow : GlyphWindow
     private void TilePanel(TilePos tile)
     {
         var card = WorldInfo.For(_ui, tile);
-        Content.AddChild(new GlyphSection(TileInfo.Name(_ui.Sim.World.Get(tile))));
-        KV("Where", $"{tile.X}, {tile.Y}, level {tile.Z}", "dim");
+        Content.AddChild(new GlyphSection(WorldInfo.GroundName(_ui.Sim, tile)));
+        KV("Where", $"{tile.X}, {tile.Y}, level {WorldInfo.Level(_ui.Sim, tile.Z)}", "dim");
         if (card.Lines.Count == 0) return;
         Content.AddChild(G.Gap());
         Content.AddChild(new GlyphSection("Here"));

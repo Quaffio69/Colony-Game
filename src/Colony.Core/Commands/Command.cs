@@ -608,3 +608,16 @@ public sealed record SetMachineLimit(TilePos Cell, int Limit) : Command
         return machine.Limit == 0 ? $"{machine.Name} makes {what} without limit" : $"{machine.Name} keeps {machine.Limit} {what} in store";
     }
 }
+
+/// <summary>
+/// Sets the priority (1 first ... 5 last) of this colony's orders in a box. The dig tools send it right after each box, so
+/// it says nothing (the box's own message stands).
+/// </summary>
+public sealed record SetOrderPriority(TilePos A, TilePos B, int Priority) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        sim.Designations.SetPriorityBox(A, B, Priority, Player);
+        return "";
+    }
+}

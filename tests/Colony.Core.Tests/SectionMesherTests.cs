@@ -21,7 +21,7 @@ public class SectionMesherTests
             {
                 if (d == FaceDir.NegZ && z == 0) continue;
                 var (nx, ny, nz) = SectionMesher.Normal(d);
-                if (!TileInfo.Occludes(w.Get(x + nx, y + ny, z + nz))) faces.Add((x, y, z, d, t));
+                if (!TileInfo.Occludes(w.Get(x + nx, y + ny, z + nz))) faces.Add((x, y, z, d, w.LookAt(x, y, z, t)));
             }
         }
         return faces;

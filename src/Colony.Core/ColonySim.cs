@@ -252,7 +252,8 @@ public sealed partial class ColonySim
     {
         if (kind == DesignationKind.Gather) return Balance.GatherTicks;
         if (kind == DesignationKind.Sow) return Balance.SowTicks;
-        if (kind != DesignationKind.Chop) return Designations.WorkTicks(kind, World.Get(target));
+        if (kind != DesignationKind.Chop)
+            return Designations.WorkTicks(kind, World.Get(target), World.RockAt(target), World.ZeroLevel - target.Z);
         if (!Flora.TryGet(target, out var tree)) return 1;
         return Balance.ChopTicks + (int)(PlantInfo.MatureHeight(tree.Kind) * tree.Growth / 255f * Balance.ChopTicksPerLevel);
     }
@@ -275,6 +276,7 @@ public sealed partial class ColonySim
         TileType.Quartz => ItemType.Quartz,
         TileType.Sulfur => ItemType.Sulfur,
         TileType.Aetherite => ItemType.Aetherite,
+        _ when TileInfo.IsGem(removed) => ItemType.RoughGem(removed),
         TileType.Wall => ItemType.Stone,
         _ => null,
     };

@@ -45,8 +45,8 @@
       "stations": [
         { "id": "stonecutter", "name": "Stonecutter's block", "build": ["logs", "stone_blocks"] },
         { "id": "carving_block", "name": "Carving plinth", "build": ["stone", "stone_blocks"] } ],
-      "later": ["millstones", "fountains", "tombstones", "gemcutting"] },
-    { "id": "glassworks", "name": "Glassworks", "color": "#7fd6e0", "about": "Molten sand into glass, ground lenses and leaded windows.",
+      "later": ["millstones", "fountains", "tombstones"] },
+    { "id": "glassworks", "name": "Glassworks", "color": "#7fd6e0", "about": "Molten sand into glass, ground lenses, leaded windows, and the gems the deep mines give up cut and polished.",
       "stations": [
         { "id": "glass_furnace", "name": "Glass furnace", "build": ["stone", "bricks"] },
         { "id": "grinding_wheel", "name": "Grinding wheel", "build": ["stone", "stone_blocks", "bronze"] } ],
@@ -73,7 +73,7 @@
       "stations": [
         { "id": "anvil", "name": "Anvil", "build": ["stone", "iron_ingot", "steel"] },
         { "id": "rolling_mill", "name": "Rolling & drawing mill", "build": ["planks", "iron_ingot", "steel"] } ],
-      "later": ["nails", "hinges", "chains", "coinage", "jewellery"] },
+      "later": ["nails", "hinges", "chains", "coinage"] },
     { "id": "artificer", "name": "Artificer's Workshop", "color": "#4fc4b8", "about": "Precision mechanisms up to the colony's greatest machines.",
       "stations": [
         { "id": "tinker_bench", "name": "Tinker's bench", "build": ["planks", "bronze"] },
@@ -119,6 +119,11 @@
     { "id": "herbs", "name": "Herbs", "category": "raw", "source": "Gathering ferns and wildflowers, or herb gardens", "model": "bundle", "color": "#5ca64a", "stack": 30, "weight": 0.5 },
     { "id": "chitin", "name": "Ant Chitin", "category": "raw", "source": "Slain giant ants (one in three leaves a plate)", "model": "lumps", "color": "#5c3a2e", "stack": 40, "weight": 2 },
     { "id": "glowcaps", "name": "Glowcaps", "category": "raw", "source": "Fungus farms (farm plots under a roof)", "uses": ["need: food (raw)"], "food": 1, "model": "basket", "color": "#5cd6c4", "stack": 30, "weight": 0.5 },
+    { "id": "rough_garnet", "name": "Rough Garnet", "category": "raw", "source": "Mining garnet pockets (middle strata down)", "model": "crystals", "color": "#9a2438", "stack": 30, "weight": 1 },
+    { "id": "rough_sapphire", "name": "Rough Sapphire", "category": "raw", "source": "Mining sapphire pockets (deep strata)", "model": "crystals", "color": "#2f4fb8", "stack": 30, "weight": 1 },
+    { "id": "rough_ruby", "name": "Rough Ruby", "category": "raw", "source": "Mining ruby pockets (deep strata)", "model": "crystals", "color": "#d0203c", "stack": 30, "weight": 1 },
+    { "id": "rough_emerald", "name": "Rough Emerald", "category": "raw", "source": "Mining emerald pockets (deep strata)", "model": "crystals", "color": "#22a05a", "stack": 30, "weight": 1 },
+    { "id": "rough_diamond", "name": "Rough Diamond", "category": "raw", "source": "Mining diamond pockets (just over the bedrock)", "model": "crystals", "color": "#e8f4ff", "stack": 30, "weight": 1 },
 
     { "id": "planks", "name": "Planks", "category": "material", "uses": ["construction"], "model": "planks", "color": "#dbb375", "stack": 40, "weight": 2 },
     { "id": "charcoal", "name": "Charcoal", "category": "material", "weight": 1, "uses": ["fuel"], "model": "lumps", "color": "#333033" },
@@ -186,6 +191,13 @@
     { "id": "glimmer_lamp", "name": "Glimmer Lamp", "category": "home", "weight": 1, "fixture": "lighting", "material": "glass", "place": "floor", "tier": 3, "wear": 150, "model": "lamp", "color": "#c7a6ff" },
     { "id": "paintings", "name": "Paintings", "category": "culture", "weight": 2, "fixture": "decor", "material": "cloth", "place": "wall", "tier": 3, "wear": 200, "uses": ["culture: galleries, manors, temples"], "model": "frames", "color": "#d9a633" },
     { "id": "sculptures", "name": "Sculptures", "category": "culture", "weight": 10, "fixture": "decor", "material": "stone", "place": "corner", "tier": 3, "wear": 300, "uses": ["culture: plazas, temples"], "model": "statue", "color": "#e6e3dc" },
+    { "id": "cut_garnet", "name": "Cut Garnet", "category": "culture", "weight": 0.2, "uses": ["prestige", "trade"], "model": "crystals", "color": "#b8304a" },
+    { "id": "cut_sapphire", "name": "Cut Sapphire", "category": "culture", "weight": 0.2, "uses": ["prestige", "trade"], "model": "crystals", "color": "#3c64e0" },
+    { "id": "cut_ruby", "name": "Cut Ruby", "category": "culture", "weight": 0.2, "uses": ["prestige", "trade"], "model": "crystals", "color": "#f0304c" },
+    { "id": "cut_emerald", "name": "Cut Emerald", "category": "culture", "weight": 0.2, "uses": ["prestige", "trade"], "model": "crystals", "color": "#30c870" },
+    { "id": "cut_diamond", "name": "Cut Diamond", "category": "culture", "weight": 0.2, "uses": ["prestige", "trade", "drill bits (later)"], "model": "crystals", "color": "#f4faff" },
+    { "id": "jewellery", "name": "Jewellery", "category": "culture", "weight": 0.5, "uses": ["prestige", "trade"], "model": "jars", "color": "#e0b040" },
+    { "id": "regalia", "name": "Regalia", "category": "culture", "weight": 2, "uses": ["prestige: crowns and sceptres for the nobility (later)", "trade"], "model": "orb", "color": "#f2c230" },
     { "id": "stained_glass", "name": "Stained Glass", "category": "culture", "weight": 3, "uses": ["culture: temples, chapels"], "model": "frames", "color": "#4d80e6" },
 
     { "id": "treatises", "name": "Treatises", "category": "knowledge", "model": "books", "color": "#2e5c8c" },
@@ -234,6 +246,11 @@
 
     { "output": "glass", "count": 2, "workshop": "glassworks", "station": "glass_furnace", "education": "Unskilled", "inputs": ["sand*2", "charcoal"] },
     { "output": "lenses", "count": 2, "workshop": "glassworks", "station": "grinding_wheel", "education": "Literate", "inputs": ["glass"] },
+    { "output": "cut_garnet", "workshop": "glassworks", "station": "grinding_wheel", "education": "Literate", "inputs": ["rough_garnet"] },
+    { "output": "cut_sapphire", "workshop": "glassworks", "station": "grinding_wheel", "education": "Literate", "inputs": ["rough_sapphire"] },
+    { "output": "cut_ruby", "workshop": "glassworks", "station": "grinding_wheel", "education": "Literate", "inputs": ["rough_ruby"] },
+    { "output": "cut_emerald", "workshop": "glassworks", "station": "grinding_wheel", "education": "Scholar", "inputs": ["rough_emerald"] },
+    { "output": "cut_diamond", "ticks": 600, "workshop": "glassworks", "station": "grinding_wheel", "education": "Scholar", "inputs": ["rough_diamond"] },
     { "output": "stained_glass", "workshop": "glassworks", "station": "glass_furnace", "education": "Literate", "inputs": ["glass*2", "pigments", "bronze"] },
     { "output": "bronze_lantern", "workshop": "glassworks", "station": "glass_furnace", "education": "Literate", "inputs": ["glass", "bronze"] },
     { "output": "glimmer_lamp", "workshop": "glassworks", "station": "grinding_wheel", "education": "Scholar", "inputs": ["glass*2", "glimmer_dust", "silver_ingot"] },
@@ -269,6 +286,8 @@
     { "output": "plate_armor", "workshop": "forge", "station": "anvil", "education": "Literate", "inputs": ["steel_plate*2", "cloth"] },
     { "output": "iron_shield", "workshop": "forge", "station": "anvil", "education": "Unskilled", "inputs": ["iron_ingot*2", "planks"] },
     { "output": "gold_leaf", "count": 4, "workshop": "forge", "station": "anvil", "education": "Literate", "inputs": ["gold_ingot"] },
+    { "output": "jewellery", "workshop": "forge", "station": "anvil", "education": "Literate", "inputs": ["silver_ingot", "cut_garnet*2"] },
+    { "output": "regalia", "ticks": 900, "workshop": "forge", "station": "anvil", "education": "Scholar", "inputs": ["gold_ingot*2", "cut_sapphire", "cut_ruby", "cut_emerald", "cut_diamond"] },
     { "output": "silverware", "count": 2, "workshop": "forge", "station": "anvil", "education": "Literate", "inputs": ["silver_ingot"] },
     { "output": "steel_plate", "workshop": "forge", "station": "rolling_mill", "education": "Literate", "inputs": ["steel", "charcoal"] },
     { "output": "wire", "count": 4, "workshop": "forge", "station": "rolling_mill", "education": "Literate", "inputs": ["copper_ingot"] },

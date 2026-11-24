@@ -193,9 +193,9 @@ public sealed class JobBoard
     }
 
     /// <summary>
-    /// Up to <paramref name="max"/> unclaimed jobs reachable from <paramref name="component"/>, nearest first
-    /// (straight-line), skipping any in <paramref name="exclude"/>. Ties prefer higher levels, so digging
-    /// proceeds top-down.
+    /// Up to <paramref name="max"/> unclaimed jobs reachable from <paramref name="component"/>, skipping any in
+    /// <paramref name="exclude"/>. Orders of a more urgent priority come first; then dig and carve orders on higher levels
+    /// (a box is dug top down, so no one undercuts it); then the nearest (straight-line).
     /// </summary>
     public List<Job> Candidates(int component, TilePos from, Designations designations, int max,
         IReadOnlySet<TilePos>? exclude = null, int kinds = -1, int faction = Owners.Any, bool scaffolds = false)
@@ -210,10 +210,12 @@ public sealed class JobBoard
             if (faction != Owners.Any && designations.OwnerOf(job.Target) != faction) continue; // another colony's order
 
             long dx = job.Target.X - from.X, dy = job.Target.Y - from.Y, dz = job.Target.Z - from.Z;
-            long dist = dx * dx + dy * dy + 4 * dz * dz;
-            // Pack (distance, -z, y, x) into one sortable key for a deterministic order.
-            long key = (dist << 24) | ((long)(255 - Math.Clamp(job.Target.Z, 0, 255)) << 16)
-                       | ((long)(job.Target.Y & 0xFF) << 8) | (long)(job.Target.X & 0xFF);
+            long dist = Math.Min(dx * dx + dy * dy + 4 * dz * dz, (1L << 30) - 1);
+            // Pack (priority, -z, distance, y, x) into one sortable key for a deterministic order: the most urgent orders
+            // first, then the highest level (a box is dug top down, never undercut), then the nearest.
+            long level = IsPlantOrderKind(job.Kind) ? 0 : 1023 - Math.Clamp(job.Target.Z, 0, 1023); // plants: nearest only
+            long key = ((long)designations.PriorityOf(job.Target) << 60) | (level << 50)
+                       | (dist << 20) | ((long)(job.Target.Y & 0x3FF) << 10) | (long)(job.Target.X & 0x3FF);
 
             if (best.Count == max && key >= best[^1].Key) continue;
             int at = best.FindIndex(b => b.Key > key);
@@ -222,6 +224,8 @@ public sealed class JobBoard
         }
         return best.ConvertAll(b => b.Job);
     }
+
+    private static bool IsPlantOrderKind(DesignationKind k) => Designations.IsPlantOrder(k);
 
     /// <summary>Forgets every job: the next update rebuilds the board from the designations (snapshots do this on both sides).</summary>
     internal void Reset()

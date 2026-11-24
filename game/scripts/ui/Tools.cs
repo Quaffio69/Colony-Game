@@ -110,10 +110,24 @@ public static class Tools
     }
 
     /// <summary>A mode as the tool would be with its current picks.</summary>
-    public static ToolInfo Of(DesignationTool t, ToolMode m) => m switch
+    public static ToolInfo Of(DesignationTool t, ToolMode m)
+    {
+        var info = Base(t, m);
+        if (!DesignationTool.IsDigTool(m)) return info;
+        // Dig and stair orders carry a priority: 1 is dug first, 5 last.
+        string pri = t.DigPriority == Designations.DefaultPriority ? "" : $", priority {t.DigPriority}";
+        return info with
+        {
+            Name = info.Name + pri,
+            About = info.About + $". Priority {t.DigPriority} ([ more urgent, ] less): miners take the most urgent orders first, then the highest",
+            How = [("Drag", "a box"), ("[ ]", "priority"), ("Shift", "remove"), ("RMB", "done")],
+        };
+    }
+
+    private static ToolInfo Base(DesignationTool t, ToolMode m) => m switch
     {
         ToolMode.None => new("·", Tok("dim"), "Look", "Look", "Click anything to inspect it", [("Click", "inspect"), ("Drag", "levels"), ("RMB drag", "pan")]),
-        ToolMode.Dig => new("▼", Tok("ore"), "Dig", "Dig", "Dig out rock and soil (stone half the time; clay, sand and ores always)", BoxKeys),
+        ToolMode.Dig => new("▼", Tok("ore"), "Dig", "Dig", "Dig out rock and soil (stone half the time; clay, sand, ores and gems always). Deeper rock is harder", BoxKeys),
         ToolMode.Stairs => new("≡", Tok("stair"), "Stairway", "Stairs", "Stairs through a box of levels: down at the top, up/down between, up at the bottom", BoxKeys),
         ToolMode.UpStair => new("▲", Tok("stair"), "Up stair", "Up", "Carve stairs that lead up", BoxKeys),
         ToolMode.DownStair => new("▼", Tok("stair"), "Down stair", "Down", "Carve stairs that lead down", BoxKeys),

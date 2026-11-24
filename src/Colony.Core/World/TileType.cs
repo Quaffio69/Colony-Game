@@ -39,12 +39,33 @@ public enum TileType : byte
     /// below, like a stair; its floor's material is the cell's floor cover. Not solid, carries no rock.
     /// </summary>
     Deck,
+    /// <summary>Garnet: gem pockets from the middle strata down.</summary>
+    Garnet,
+    /// <summary>Sapphire: deep gem pockets.</summary>
+    Sapphire,
+    /// <summary>Ruby: deep gem pockets.</summary>
+    Ruby,
+    /// <summary>Emerald: deep gem pockets.</summary>
+    Emerald,
+    /// <summary>Diamond: the rarest gem, only just over the bedrock.</summary>
+    Diamond,
+
+    // Rock looks: palette entries for the kinds of natural rock (Procedural.Geology). Never stored in the world: natural
+    // rock is Stone there (its look is slate) and its kind comes from the geology, by position.
+    Sandstone,
+    Limestone,
+    Granite,
+    Basalt,
+    Bedrock,
 }
 
 public static class TileInfo
 {
     /// <summary>Number of <see cref="TileType"/> values (for palettes and lookup tables).</summary>
-    public const int Count = 19;
+    public const int Count = 29;
+
+    /// <summary>Palette entry of unexplored rock (fog of war) on the cut surface; not a tile type.</summary>
+    public const TileType Hidden = (TileType)30;
 
     /// <summary>Blocks movement: natural rock and earth. Stairs and decks are walk-in cells, not solid.</summary>
     public static bool IsSolid(TileType t) => t != TileType.Air && t != TileType.Deck && !IsStair(t);
@@ -66,7 +87,10 @@ public static class TileInfo
 
     /// <summary>Metal ores and minerals (mined slowly; always leave their item).</summary>
     public static bool IsMineral(TileType t) => t is TileType.CopperOre or TileType.TinOre or TileType.IronOre or TileType.SilverOre
-        or TileType.GoldOre or TileType.Quartz or TileType.Sulfur or TileType.Aetherite;
+        or TileType.GoldOre or TileType.Quartz or TileType.Sulfur or TileType.Aetherite || IsGem(t);
+
+    /// <summary>Gem pockets: deep, small and slow to work free; always leave their rough gem.</summary>
+    public static bool IsGem(TileType t) => t is TileType.Garnet or TileType.Sapphire or TileType.Ruby or TileType.Emerald or TileType.Diamond;
 
     /// <summary>Loose earth: dug quickly.</summary>
     public static bool IsEarth(TileType t) => t is TileType.Grass or TileType.Soil or TileType.Clay or TileType.Sand;

@@ -41,7 +41,7 @@ public static class WorldInfo
         var cell = tile.Offset(0, 0, 1);
         var card = new InfoCard();
         var pick = ui.Main.Selection.PickFor(tile, ui.Me);
-        string ground = TileInfo.Name(sim.World.Get(tile));
+        string ground = GroundName(sim, tile);
         bool showsSite = false, showsPile = false, showsFarm = false;
         switch (pick)
         {
@@ -114,10 +114,10 @@ public static class WorldInfo
                 break;
             }
             default:
-                (card.Glyph, card.Color, card.Title, card.Sub) = ("·", Tok("dim"), ground, $"level {tile.Z}");
+                (card.Glyph, card.Color, card.Title, card.Sub) = ("·", Tok("dim"), ground, $"level {Level(sim, tile.Z)}");
                 break;
         }
-        if (pick is not PickTile) card.Add("·", Tok("faint"), $"on {ground.ToLowerInvariant()}, level {tile.Z}", "Faint");
+        if (pick is not PickTile) card.Add("·", Tok("faint"), $"on {ground.ToLowerInvariant()}, level {Level(sim, tile.Z)}", "Faint");
         AddBuilt(ui, card, cell);
         AddFacts(ui, card, tile, cell, showsSite, showsPile, showsFarm);
         if (card.Hint.Length == 0 && pick is PickTile) card.Hint = "click: keep it in Inspect";
@@ -158,9 +158,23 @@ public static class WorldInfo
     }
 
     /// <summary>Plants, water, waterworks, crops, parts, plans, piles and ants at the cell.</summary>
+    /// <summary>A level as the player reads it: counted from level zero (the lowest ground on the map), negative below.</summary>
+    public static string Level(ColonySim sim, int z) => (z - sim.World.ZeroLevel).ToString();
+
+    /// <summary>What a tile is called: natural rock by its kind, unexplored rock (fog of war) by nothing more.</summary>
+    public static string GroundName(ColonySim sim, TilePos tile) =>
+        sim.World.IsHidden(tile.X, tile.Y, tile.Z) ? "Unexplored rock" : sim.World.TileName(tile);
+
     private static void AddFacts(GameUi ui, InfoCard card, TilePos tile, TilePos cell, bool showsSite, bool showsPile, bool showsFarm)
     {
         var sim = ui.Sim;
+        if (sim.Designations.TryGet(tile, out var order) || sim.Designations.TryGet(cell, out order))
+        {
+            var at = sim.Designations.Contains(tile) ? tile : cell;
+            int pri = sim.Designations.PriorityOf(at);
+            string what = Colony.Core.Orders.Designations.IsPlantOrder(order) ? order.ToString().ToLowerInvariant() : order == Colony.Core.Orders.DesignationKind.Dig ? "dig" : "carve stairs";
+            card.Add("▼", Tok("ore"), $"ordered: {what}" + (pri != Colony.Core.Orders.Designations.DefaultPriority ? $", priority {pri}" : ""), "Dim");
+        }
         if (sim.Flora.TryGet(cell, out var plant))
         {
             bool ripe = Colony.Core.Nature.PlantInfo.IsGatherable(plant);

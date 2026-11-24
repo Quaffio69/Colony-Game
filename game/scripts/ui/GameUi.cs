@@ -280,7 +280,7 @@ public partial class GameUi : CanvasLayer
         int alerts = AlertCount();
         _alerts.Visible = alerts > 0;
         _alerts.Set(alerts.ToString(), 0, false, "Alerts today · click: chronicle");
-        _level.Text = $"Level {Main.View.ViewLevel}";
+        _level.Text = $"Level {WorldInfo.Level(Sim, Main.View.ViewLevel)}";
         _terrain.Text = Main.PendingSections > 0 ? $"building terrain {Main.PendingSections}" : !Sim.WaterReady ? "settling water…" : "";
         _speed.Index = Main.Paused ? 0 : Main.SpeedIndex + 1;
         _speed.Visible = Main.Client == null; // a guest runs at the host's pace

@@ -39,6 +39,43 @@ public sealed class VoxelWorld : ITileReader
 
     public IReadOnlyList<Chunk> Chunks => _chunks;
 
+    /// <summary>What natural rock is where (set by world generation; null in hand-built worlds: all slate, no bedrock).</summary>
+    public Procedural.Geology? Geology { get; set; }
+
+    /// <summary>The level shown as 0 (the lowest ground on the map); lower levels read negative.</summary>
+    public int ZeroLevel => Geology?.ZeroLevel ?? 0;
+
+    /// <summary>The kind of natural rock at a position (slate without a geology).</summary>
+    public Procedural.Rock RockAt(TilePos p) => Geology?.RockAt(p.X, p.Y, p.Z) ?? Procedural.Rock.Slate;
+
+    /// <summary>Undiggable rock at the bottom of the world.</summary>
+    public bool IsBedrock(TilePos p) => Geology is { } g && Get(p) == TileType.Stone && g.RockAt(p.X, p.Y, p.Z) == Procedural.Rock.Bedrock;
+
+    /// <summary>What a tile is drawn as: natural rock by its kind, everything else as itself.</summary>
+    public TileType LookAt(int x, int y, int z, TileType tile) =>
+        tile == TileType.Stone && Geology is { } g ? Procedural.Geology.Look(g.RockAt(x, y, z)) : tile;
+
+    /// <summary>A tile's name, with natural rock named by its kind.</summary>
+    public string TileName(TilePos p)
+    {
+        var t = Get(p);
+        return t == TileType.Stone && Geology is { } g ? Procedural.Geology.Name(g.RockAt(p.X, p.Y, p.Z)) : TileInfo.Name(t);
+    }
+
+    /// <summary>
+    /// Fog of war: solid ground no one has seen, i.e. with no open cell beside it (above, below or on any side). Tunnels
+    /// show the rock round them; what lies further in stays dark until dug to. Stateless (derived from the tiles).
+    /// </summary>
+    public bool IsHidden(int x, int y, int z)
+    {
+        if (!TileInfo.IsSolid(Get(x, y, z))) return false;
+        return Closed(x + 1, y, z) && Closed(x - 1, y, z) && Closed(x, y + 1, z) && Closed(x, y - 1, z)
+               && Closed(x, y, z + 1) && Closed(x, y, z - 1);
+    }
+
+    // Out of the world counts as closed (the map's sides and bottom are no view), except the sky above the top.
+    private bool Closed(int x, int y, int z) => z < Height && (!InBounds(x, y, z) || TileInfo.IsSolid(Get(x, y, z)));
+
     /// <summary>Increments on every tile change, so views can skip per-chunk scans when nothing changed.</summary>
     public long Revision { get; private set; }
 

@@ -33,6 +33,17 @@ public readonly record struct ItemType(ushort Index)
     public static ItemType Herbs => Known.Herbs;
     public static ItemType Glowcaps => Known.Glowcaps;
 
+    /// <summary>The rough gem a gem pocket leaves (garnet, sapphire, ruby, emerald, diamond).</summary>
+    public static ItemType RoughGem(World.TileType gem) => gem switch
+    {
+        World.TileType.Garnet => Known.Garnet,
+        World.TileType.Sapphire => Known.Sapphire,
+        World.TileType.Ruby => Known.Ruby,
+        World.TileType.Emerald => Known.Emerald,
+        World.TileType.Diamond => Known.Diamond,
+        _ => throw new ArgumentOutOfRangeException(nameof(gem)),
+    };
+
     // Resolved on first use, never while the catalog itself is loading.
     private static class Known
     {
@@ -54,6 +65,11 @@ public readonly record struct ItemType(ushort Index)
         public static readonly ItemType Grain = Catalog.Item("grain");
         public static readonly ItemType Herbs = Catalog.Item("herbs");
         public static readonly ItemType Glowcaps = Catalog.Item("glowcaps");
+        public static readonly ItemType Garnet = Catalog.Item("rough_garnet");
+        public static readonly ItemType Sapphire = Catalog.Item("rough_sapphire");
+        public static readonly ItemType Ruby = Catalog.Item("rough_ruby");
+        public static readonly ItemType Emerald = Catalog.Item("rough_emerald");
+        public static readonly ItemType Diamond = Catalog.Item("rough_diamond");
     }
 }
 

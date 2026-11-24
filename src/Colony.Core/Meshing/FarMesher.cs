@@ -62,7 +62,7 @@ public static class FarMesher
                 int z = top[ly * Chunk.Size + lx];
                 if (z < 0) continue;
                 float ground = z + 1;
-                if (ground > heights[i]) { heights[i] = ground; types[i] = kind[ly * Chunk.Size + lx]; }
+                if (ground > heights[i]) { heights[i] = ground; types[i] = world.LookAt(x, y, z, kind[ly * Chunk.Size + lx]); }
                 if (water != null && z + 1 < world.Height && water.SurfaceAt(x, y, z + 1) is { } s && s > ground + 0.1f)
                 {
                     wet[i]++;

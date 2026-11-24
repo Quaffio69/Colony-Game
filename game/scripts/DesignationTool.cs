@@ -247,6 +247,12 @@ public partial class DesignationTool : Node3D
         EndSelection();
     }
 
+    /// <summary>Priority (1 first ... 5 last) the dig and stair tools give their orders ([ and ]).</summary>
+    public int DigPriority { get; private set; } = Designations.DefaultPriority;
+
+    /// <summary>Tools whose orders take a priority: digging and carving stairs.</summary>
+    public static bool IsDigTool(ToolMode m) => m is ToolMode.Dig or ToolMode.Stairs or ToolMode.UpStair or ToolMode.DownStair or ToolMode.UpDownStair;
+
     /// <summary>Storeys of the house the House tool plans ([ and ], or Z/X while dragging).</summary>
     public int Storeys { get; private set; } = 1;
 
@@ -276,6 +282,7 @@ public partial class DesignationTool : Node3D
     public void ChangeSize(int step)
     {
         if (Mode == ToolMode.House) { ChangeStoreys(step); return; }
+        if (IsDigTool(Mode)) { DigPriority = Math.Clamp(DigPriority + step, 1, Designations.MaxPriority); return; }
         if (PartFor(Mode) is { } part && PartInfo.Sizes(part) > 1)
             _sizes[part] = PartInfo.ClampSize(part, SizeFor(part) + step);
     }
@@ -847,6 +854,8 @@ public partial class DesignationTool : Node3D
             _ => new DesignateBox(a, b, KindFor(Mode, 0, 0, 0)),
         };
         Issue(command);
+        // Dig orders carry the tool's priority (sent every time, so a box at 3 also resets orders it covers).
+        if (!cancel && IsDigTool(Mode)) Issue(new SetOrderPriority(a, b, DigPriority));
         EndSelection();
     }
 
@@ -870,6 +879,7 @@ public partial class DesignationTool : Node3D
     /// <summary>What a command did (shown in the status pill).</summary>
     public void ShowResult(string message)
     {
+        if (message.Length == 0) return; // a command that rides along with another (an order box's priority) says nothing
         LastAction = message;
         ActionSerial++;
     }

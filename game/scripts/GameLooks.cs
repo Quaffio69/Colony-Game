@@ -28,6 +28,7 @@ public static class GameLooks
             var t = (TileType)i;
             BlockLooks.Register(i, Look(t));
         }
+        BlockLooks.Register((int)TileInfo.Hidden, Look(TileInfo.Hidden));
         RegisterSymbols();
     }
 
@@ -114,6 +115,17 @@ public static class GameLooks
             TileType.UpStair => B("#b48a58", TileRecipe.Path, UpStairs),
             TileType.DownStair => B("#b48a58", TileRecipe.Path, DownStairs),
             TileType.UpDownStair => B("#b48a58", TileRecipe.Path, UpDownStairs),
+            TileType.Garnet => B("#9a2438", TileRecipe.Noise, GlyphAtlas.Crystal, SurfaceClass.Ore),
+            TileType.Sapphire => B("#3050c0", TileRecipe.Noise, GlyphAtlas.Crystal, SurfaceClass.Ore),
+            TileType.Ruby => B("#d42040", TileRecipe.Noise, GlyphAtlas.Crystal, SurfaceClass.Ore),
+            TileType.Emerald => B("#24a85c", TileRecipe.Noise, GlyphAtlas.Crystal, SurfaceClass.Ore),
+            TileType.Diamond => B("#e8f4ff", TileRecipe.Noise, GlyphAtlas.Crystal, SurfaceClass.Prop, glow: true),
+            TileType.Sandstone => B("#b8925e", TileRecipe.Stone, GlyphAtlas.Stone),
+            TileType.Limestone => B("#b4ae9a", TileRecipe.Stone, GlyphAtlas.Stone),
+            TileType.Granite => B("#8c7470", TileRecipe.Stone, GlyphAtlas.Stone),
+            TileType.Basalt => B("#4a4a52", TileRecipe.DeepStone, GlyphAtlas.DeepStone),
+            TileType.Bedrock => B("#2a2428", TileRecipe.DeepStone, GlyphAtlas.DeepStone),
+            TileInfo.Hidden => B("#000000", TileRecipe.Noise, GlyphAtlas.Sky), // unexplored rock: dark, no symbols
             _ => B("#77706a", TileRecipe.Stone, GlyphAtlas.Stone),
         };
     }
@@ -125,8 +137,9 @@ public static class GameLooks
         var palette = new Vector4[32];
         var groups = new float[32];
         var capGroups = new float[32];
-        for (int i = 1; i < TileInfo.Count && i < 32; i++)
+        for (int i = 1; i < 32; i++)
         {
+            if (i >= TileInfo.Count && i != (int)TileInfo.Hidden) continue;
             var look = BlockLooks.Get(i);
             var classic = WorldView.TileColor((TileType)i);
             palette[i] = new Vector4(look.Color.R, look.Color.G, look.Color.B, look.Emissive ? 0.2f : classic.A);

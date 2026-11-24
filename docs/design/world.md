@@ -26,6 +26,28 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   (`DesignatePlantArea`, any level, ignores the view level), since that work always happens on the surface;
   their marks are drawn whatever level is viewed. Dig/stairs/stockpiles/rooms stay level-based boxes.
 
+- **Dig order and priority:** colonists take the reachable order with the most urgent priority (`Designations.PriorityOf`, 1
+  first ... 5 last, default 3; stored only when not 3, in snapshots from version 7 and in `StateHash`; command
+  `SetOrderPriority` over a box, sent by the dig tools after each box), then dig and carve orders on the highest level (a
+  box is dug top down, never undercut; plant orders ignore level), then the nearest (`JobBoard.Candidates` packs
+  priority, level, distance into one key; levels up to 1023). Cancelling or finishing an order forgets its priority.
+- **Geology and depth (`Procedural.Geology`, on `VoxelWorld.Geology`):** natural rock is `TileType.Stone` in the world;
+  its kind (`Rock`: sandstone and limestone in tilted 6-level bands at the top, slate, granite, basalt, bedrock) is a
+  function of position from the seed: layer tops on an 8-tile grid, interpolated in integers (deterministic, no memory:
+  deep chunks stay uniform). Meshes, far blocks and the cap draw rock by its kind (`Geology.Look`: rock-look palette
+  entries `TileType.Sandstone`..`Bedrock`, never stored); `VoxelWorld.TileName` names it. **Level zero**
+  (`VoxelWorld.ZeroLevel`) is the lowest ground on the map; the UI shows levels from it, negative below. **Bedrock:**
+  every column's floor is bedrock up to `BedrockTop(x, y)` (2 to ~2 + 3.5% of the height, varying smoothly: a random
+  bottom within a range; small test worlds below 96 levels keep only z = 0), which cannot be designated
+  (`VoxelWorld.IsBedrock`) and holds no ore. **Harder deeper:** dig time by rock (`Balance.DigSandstone` 70 ...
+  `DigBasalt` 150, gems `DigGem` 200) and, below level zero, `DigDepthHardening` (0.5%) longer per level
+  (`Designations.WorkTicks(kind, tile, rock, belowZero)`). Hand-built worlds (no geology) are all slate, no bedrock.
+- **Fog of war (stateless):** solid ground with no open cell on any of its six sides is unexplored
+  (`VoxelWorld.IsHidden`; the map's sides and bottom count as closed). Mesh faces only exist next to open cells, so
+  only the cut surface needs it: `WorldView.FillCap` reads the levels below, at and above the cut with a ring and writes
+  `TileInfo.Hidden` (palette entry 30, near-black, no glyphs) for unexplored texels; the cap re-patches when chunks on
+  those three levels change. Hover and Inspect call it "Unexplored rock". Orders may still be placed on it. Caverns
+  (open but unseen) will need stored state.
 - **Water (`Fluids.Water`): shallow-water flow over column spans** (city-builder style, generalised to caves). A
   column is a list of spans: vertical runs of open cells resting on solid ground (the sky above the surface, a
   tunnel). A span holds a continuous depth of water (fixed point, `U` = 1/65536 level per unit), so surfaces are

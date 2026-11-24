@@ -21,6 +21,7 @@ public class SnapshotTests
         int ga = a.Z - 1, gb = b.Z - 1;
         var q = sim.Commands;
         q.Execute(new DesignateBox(a.Offset(3, -2, -1), a.Offset(7, 2, -2), DesignationKind.Dig));
+        q.Execute(new SetOrderPriority(a.Offset(3, -2, -1), a.Offset(5, 2, -2), 1)); // part of it first
         q.Execute(new DesignatePlants(DesignationKind.Chop, a.X - 20, a.Y - 20, a.X + 20, a.Y + 20));
         q.Execute(new AddStockpile(new TilePos(a.X - 6, a.Y - 6, ga - 3), new TilePos(a.X - 3, a.Y - 3, ga + 3)));
         q.Execute(new PaintRoom("carpentry", new TilePos(a.X - 6, a.Y + 3, ga - 3), new TilePos(a.X - 1, a.Y + 7, ga + 3)));

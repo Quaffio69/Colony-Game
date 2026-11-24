@@ -29,11 +29,12 @@ public static class SectionMesher
     public static void Build(VoxelWorld world, int x0, int y0, int z0, int sx, int sy, int sz, List<Quad> output)
     {
         var box = TileBox.Capture(world, x0 - Pad, y0 - Pad, z0 - Pad, sx + 2 * Pad, sy + 2 * Pad, sz + 2 * Pad);
-        Build(box, x0, y0, z0, sx, sy, sz, output);
+        Build(box, x0, y0, z0, sx, sy, sz, output, world.Geology);
     }
 
     /// <param name="tiles">Snapshot covering the section plus <see cref="Pad"/> on every side.</param>
-    public static void Build(in TileBox tiles, int x0, int y0, int z0, int sx, int sy, int sz, List<Quad> output)
+    public static void Build(in TileBox tiles, int x0, int y0, int z0, int sx, int sy, int sz, List<Quad> output,
+        Procedural.Geology? geology = null)
     {
         output.Clear();
         int[] size = [sx, sy, sz];
@@ -64,7 +65,10 @@ public static class SectionMesher
                     if (TileInfo.Occludes(t) && !(axis == 2 && sign < 0 && c[2] == 0)) // world underside is never seen
                     {
                         c[axis] += sign;
-                        if (!TileInfo.Occludes(tiles.Get(c[0], c[1], c[2]))) face = t;
+                        if (!TileInfo.Occludes(tiles.Get(c[0], c[1], c[2])))
+                            face = t == TileType.Stone && geology != null // natural rock is drawn by its kind
+                                ? Procedural.Geology.Look(geology.RockAt(c[0] - (axis == 0 ? sign : 0), c[1] - (axis == 1 ? sign : 0), c[2] - (axis == 2 ? sign : 0)))
+                                : t;
                     }
                     mask[v * su + u] = face;
                     any |= face != TileType.Air;

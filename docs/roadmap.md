@@ -49,7 +49,8 @@ What is done and what is next, milestone by milestone.
       (walls/floors); stockpile filters; standing orders ("keep 50 planks") instead of fixed recipes;
       wonders as aux parts (philosopher's stone, farseer orb, orrery); real ratios.
 - [~] Flora: grass grows back over dug dirt (`Regrowth`). Next: wild growth and spreading/regrowth of plants (staggered, deterministic).
-- [ ] Geology: several stone types in layered/warped strata (palette now has room).
+- [x] Geology: sandstone and limestone bands, slate, granite, basalt over an uneven bedrock floor (derived from the seed, no
+      memory); harder to dig deeper; gems (garnet to diamond) deep down, bigger deposits deeper. `--mine-demo` shows it.
 - [~] M5: Needs and homes. Done: hunger, eating, starving leaves; daily goods standard (clothing, tinctures); homes
       (sized rooms, housing policies, tiered fixtures with wear, salvage, auto layout), rest in beds, residents by
       education, mood -> work speed, gentle departures, settlers by food, mood and free beds; procedural home
@@ -104,9 +105,9 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [ ] General improvements to buildings.
 
 ### Mining and orders
-- [ ] Dig the highest blocks of a designation first.
-- [ ] Dig priority setting (per designation).
-- [ ] Mining gets harder deeper down, with better ores and gems as the reward.
+- [x] Dig the highest blocks of a designation first (then the nearest).
+- [x] Dig priority setting (per order, 1-5: `[ ]` with the dig and stair tools).
+- [x] Mining gets harder deeper down (rock kinds, and slower per level below zero), with bigger deposits and gems as the reward.
 
 ### Multiplayer
 - [ ] Saved multiplayer sessions that players can rejoin.
@@ -114,8 +115,8 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 
 ### World
 - [ ] Randomly generated caverns.
-- [ ] Depths below zero, down to a random bottom within a range.
-- [ ] Fog of war: dark tiles where no one can see or has been.
+- [x] Depths below zero (levels read from the lowest ground on the map), down to an undiggable bedrock floor that varies within a range.
+- [x] Fog of war: rock with no open side is dark on the cut surface ("Unexplored rock") until dug to.
 - [ ] Bigger maps, pushing how large a world can be (needs the optimisation below).
 
 ### Balance

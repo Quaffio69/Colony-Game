@@ -24,7 +24,7 @@ public class CommandTests
         new SetPolicyTier(1, 4, 3), new SetPolicyPerResident(0, 2, 1.25f), new SetPolicyShared(3, true), new AddPolicy(),
         new PlaceRacks(A, B, 2), new Demolish(A, B), new AddTradeDepot(A, B) { Player = 1 },
         new ProposeTrade(2, new Trade.TradeTerms([new Trade.TradeTerm(0, "planks", 20), new Trade.TradeTerm(2, "iron_ingot", 3)])),
-        new CounterTrade(5, new Trade.TradeTerms([new Trade.TradeTerm(1, "bread", 9)])) { Player = 1 }, new AcceptTrade(5), new RejectTrade(6) { Player = 2 }, new SetMachineLimit(A, 50),
+        new CounterTrade(5, new Trade.TradeTerms([new Trade.TradeTerm(1, "bread", 9)])) { Player = 1 }, new AcceptTrade(5), new RejectTrade(6) { Player = 2 }, new SetMachineLimit(A, 50), new SetOrderPriority(A, B, 1) { Player = 2 },
     }.Select(c => new object[] { c });
 
     [Theory]
@@ -84,7 +84,7 @@ public class CommandTests
         var c = sim.Colonists.Count > 0 ? sim.Colonists[0].Position : new TilePos(24, 24, sim.World.SurfaceLevel(24, 24));
         string? message = null;
         sim.Commands.Applied += (_, m) => message = m;
-        sim.Commands.Submit(new DesignateBox(new TilePos(20, 20, 0), new TilePos(22, 22, 0), DesignationKind.Dig));
+        sim.Commands.Submit(new DesignateBox(new TilePos(20, 20, 1), new TilePos(22, 22, 1), DesignationKind.Dig));
         Assert.Equal(0, sim.Designations.Count); // queued, not yet applied
         sim.Step();
         Assert.Equal(9, sim.Designations.Count);

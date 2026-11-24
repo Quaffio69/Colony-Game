@@ -195,6 +195,17 @@ public partial class WorldView : Node3D
         TileType.UpStair => new Color(0.74f, 0.64f, 0.46f),
         TileType.DownStair => new Color(0.62f, 0.54f, 0.42f),
         TileType.UpDownStair => new Color(0.80f, 0.72f, 0.56f),
+        TileType.Garnet => new Color(0.62f, 0.14f, 0.22f),
+        TileType.Sapphire => new Color(0.20f, 0.32f, 0.78f),
+        TileType.Ruby => new Color(0.84f, 0.12f, 0.24f),
+        TileType.Emerald => new Color(0.14f, 0.66f, 0.36f),
+        TileType.Diamond => new Color(0.90f, 0.96f, 1.00f, 0.5f), // a faint sparkle
+        TileType.Sandstone => new Color(0.74f, 0.60f, 0.42f),
+        TileType.Limestone => new Color(0.72f, 0.70f, 0.62f),
+        TileType.Granite => new Color(0.58f, 0.50f, 0.50f),
+        TileType.Basalt => new Color(0.30f, 0.30f, 0.33f),
+        TileType.Bedrock => new Color(0.16f, 0.14f, 0.16f),
+        TileInfo.Hidden => new Color(0.02f, 0.018f, 0.024f), // unexplored rock (fog of war)
         FarMesher.Water => new Color(0.24f, 0.46f, 0.62f), // standing water in far blocks
         _ => Colors.Magenta,
     };
@@ -330,7 +341,7 @@ public partial class WorldView : Node3D
         int sx = (c.X << Chunk.Shift) / SectionX, sy = (c.Y << Chunk.Shift) / SectionY, sz = (c.Z << Chunk.Shift) / SectionZ;
         Enqueue((sz * _sectionsY + sy) * _sectionsX + sx);
         _farBlocks[((c.Y << Chunk.Shift) / FarBlock) * _farBlocksX + (c.X << Chunk.Shift) / FarBlock].Dirty = true;
-        if (c.Z >= _capLevel >> Chunk.Shift && c.Z <= (_capLevel + 1) >> Chunk.Shift) _capDirty.Add(chunkIndex);
+        if (c.Z >= (_capLevel - 1) >> Chunk.Shift && c.Z <= (_capLevel + 1) >> Chunk.Shift) _capDirty.Add(chunkIndex);
     }
 
     /// <summary>Snapshots queued sections and hands them to worker threads, within the frame budget.</summary>
@@ -665,6 +676,8 @@ public partial class WorldView : Node3D
             var c = TileColor((TileType)i);
             palette[i] = new Vector4(c.R, c.G, c.B, c.A);
         }
+        var fog = TileColor(TileInfo.Hidden);
+        palette[(int)TileInfo.Hidden] = new Vector4(fog.R, fog.G, fog.B, 1f);
 
         _capMaterial = new ShaderMaterial { Shader = GameLooks.Shader("res://shaders/cap.gdshader") };
         StyleTiles(_capMaterial);
@@ -679,46 +692,64 @@ public partial class WorldView : Node3D
         AddChild(_cap);
     }
 
-    /// <summary>Cap texel = tile type at the view level where the tile above is also solid (its top is hidden by the cut).</summary>
+    /// <summary>
+    /// Cap texel = what the tile at the view level shows where the tile above is also solid (its top is hidden by the cut):
+    /// its look (natural rock by its kind), or unexplored dark (fog of war) when no open cell touches it.
+    /// </summary>
     private void RebuildCapFull()
     {
         int level = _viewLevel;
         _capLevel = level;
         _cap.Position = new Vector3(World.Width / 2f, level + 1, World.Depth / 2f);
         _capMaterial.SetShaderParameter("level", (float)level);
-
-        var layers = new TileType[World.Width * World.Depth * 2];
-        World.CopyBox(0, 0, level, World.Width, World.Depth, 2, layers);
-        int plane = World.Width * World.Depth;
-        for (int i = 0; i < plane; i++)
-            _capData[i] = TileInfo.IsSolid(layers[i]) && TileInfo.IsSolid(layers[plane + i]) ? (byte)layers[i] : (byte)0;
-
+        FillCap(0, 0, World.Width, World.Depth);
         _capDirty.Clear();
         UploadCap();
     }
 
-    /// <summary>Patches the cap where chunks on the view level (or the one above it) changed.</summary>
+    /// <summary>Patches the cap where chunks on the view level (or the ones above and below it) changed.</summary>
     private void UpdateCap()
     {
-        bool changed = false;
         foreach (int key in _capDirty)
         {
             var chunk = World.Chunks[key];
             int x0 = chunk.Origin.X, y0 = chunk.Origin.Y;
-            int sx = Math.Min(Chunk.Size, World.Width - x0), sy = Math.Min(Chunk.Size, World.Depth - y0);
-            var layers = new TileType[sx * sy * 2];
-            World.CopyBox(x0, y0, _capLevel, sx, sy, 2, layers);
-            for (int y = 0; y < sy; y++)
-            for (int x = 0; x < sx; x++)
-            {
-                var t = layers[y * sx + x];
-                var above = layers[sx * sy + y * sx + x];
-                _capData[(y0 + y) * World.Width + x0 + x] = TileInfo.IsSolid(t) && TileInfo.IsSolid(above) ? (byte)t : (byte)0;
-            }
-            changed = true;
+            FillCap(x0, y0, Math.Min(Chunk.Size, World.Width - x0), Math.Min(Chunk.Size, World.Depth - y0));
         }
+        bool changed = _capDirty.Count > 0;
         _capDirty.Clear();
         if (changed) UploadCap();
+    }
+
+    private TileType[] _capBox = [];
+
+    /// <summary>Fills the cap texels of a rectangle, reading the levels below, at and above the cut with a ring round it.</summary>
+    private void FillCap(int x0, int y0, int sx, int sy)
+    {
+        int bx = sx + 2, by = sy + 2, plane = bx * by;
+        if (_capBox.Length < plane * 3) _capBox = new TileType[plane * 3];
+        var box = _capBox;
+        World.CopyBox(x0 - 1, y0 - 1, _capLevel - 1, bx, by, 3, box);
+        // Off the map's sides counts as rock (no view in from there); CopyBox leaves it air, so fill the ring in.
+        for (int z = 0; z < 3; z++)
+        for (int y = 0; y < by; y++)
+        for (int x = 0; x < bx; x++)
+            if ((uint)(x0 - 1 + x) >= (uint)World.Width || (uint)(y0 - 1 + y) >= (uint)World.Depth) box[z * plane + y * bx + x] = TileType.Stone;
+        bool bottom = _capLevel == 0; // under the world: rock
+        for (int y = 0; y < sy; y++)
+        for (int x = 0; x < sx; x++)
+        {
+            int i = plane + (y + 1) * bx + x + 1;
+            var t = box[i];
+            byte texel = 0;
+            if (TileInfo.IsSolid(t) && TileInfo.IsSolid(box[i + plane]))
+            {
+                bool hidden = (bottom || TileInfo.IsSolid(box[i - plane])) && TileInfo.IsSolid(box[i - 1]) && TileInfo.IsSolid(box[i + 1])
+                              && TileInfo.IsSolid(box[i - bx]) && TileInfo.IsSolid(box[i + bx]);
+                texel = hidden ? (byte)TileInfo.Hidden : (byte)World.LookAt(x0 + x, y0 + y, _capLevel, t);
+            }
+            _capData[(y0 + y) * World.Width + x0 + x] = texel;
+        }
     }
 
     private void UploadCap()

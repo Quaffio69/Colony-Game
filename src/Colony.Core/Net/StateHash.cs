@@ -38,7 +38,7 @@ public static class StateHash
         foreach (var (p, pile) in sim.Items.All)
             sum += Of(2, Pos(p), pile.Type.Index, pile.Count, pile.Reserved);
         foreach (var (p, kind) in sim.Designations.All)
-            sum += Of(3, Pos(p), (long)kind, sim.Designations.OwnerOf(p));
+            sum += Of(3, Pos(p), (long)kind, sim.Designations.OwnerOf(p), sim.Designations.PriorityOf(p));
         foreach (var p in sim.Stockpiles.Cells)
             sum += Of(4, Pos(p), sim.Stockpiles.OwnerOf(p));
         foreach (var (p, rack) in sim.Stockpiles.Racks)
