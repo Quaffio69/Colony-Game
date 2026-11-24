@@ -63,18 +63,144 @@ public sealed class VoxelWorld : ITileReader
     }
 
     /// <summary>
-    /// Fog of war: solid ground no one has seen, i.e. with no open cell beside it (above, below or on any side). Tunnels
-    /// show the rock round them; what lies further in stays dark until dug to. Stateless (derived from the tiles).
+    /// Fog of war: ground no one has seen. Solid ground with no seen open cell beside it (above, below or on any side), and
+    /// unseen open cells (caverns not yet breached). Tunnels show the rock round them; what lies further in stays dark
+    /// until dug to.
     /// </summary>
     public bool IsHidden(int x, int y, int z)
     {
-        if (!TileInfo.IsSolid(Get(x, y, z))) return false;
+        if (!TileInfo.IsSolid(Get(x, y, z))) return IsUnseen(x, y, z);
         return Closed(x + 1, y, z) && Closed(x - 1, y, z) && Closed(x, y + 1, z) && Closed(x, y - 1, z)
                && Closed(x, y, z + 1) && Closed(x, y, z - 1);
     }
 
-    // Out of the world counts as closed (the map's sides and bottom are no view), except the sky above the top.
-    private bool Closed(int x, int y, int z) => z < Height && (!InBounds(x, y, z) || TileInfo.IsSolid(Get(x, y, z)));
+    // Out of the world counts as closed (the map's sides and bottom are no view), except the sky above the top; so does
+    // cavern air no one has seen.
+    private bool Closed(int x, int y, int z) => z < Height && (!InBounds(x, y, z) || TileInfo.IsSolid(Get(x, y, z)) || IsUnseen(x, y, z));
+
+    // ---- Unseen open cells (caverns before they are breached) ------------------------------------------------------
+
+    private int _unseenCells;
+
+    /// <summary>Unseen open cells in the world (0: nothing to reveal, and the checks cost nothing).</summary>
+    public int UnseenCells => _unseenCells;
+
+    /// <summary>Increments whenever cells are revealed (for views).</summary>
+    public long RevealRevision { get; private set; }
+
+    /// <summary>Raised with each chunk whose unseen cells were revealed (views redraw it; nothing else changed there).</summary>
+    public event Action<int>? ChunkRevealed;
+
+    /// <summary>An open cell no one has seen yet: drawn and picked as rock until a dig opens beside its cavern.</summary>
+    public bool IsUnseen(int x, int y, int z) =>
+        _unseenCells > 0 && InBounds(x, y, z) && ChunkAt(x, y, z).IsUnseen(Chunk.Index(x & Chunk.Mask, y & Chunk.Mask, z & Chunk.Mask));
+
+    public bool IsUnseen(TilePos p) => IsUnseen(p.X, p.Y, p.Z);
+
+    /// <summary>World generation: marks a carved cell unseen (no events).</summary>
+    internal void SetUnseenForGeneration(int x, int y, int z)
+    {
+        if (ChunkAt(x, y, z).SetUnseen(Chunk.Index(x & Chunk.Mask, y & Chunk.Mask, z & Chunk.Mask), true))
+            Interlocked.Increment(ref _unseenCells);
+    }
+
+    /// <summary>A tile changed: an opening beside unseen cells reveals their whole connected space; rock put into an unseen
+    /// cell (a fallen mass) simply fills it.</summary>
+    private void RevealAround(int x, int y, int z, TileType type)
+    {
+        var own = ChunkAt(x, y, z);
+        int i = Chunk.Index(x & Chunk.Mask, y & Chunk.Mask, z & Chunk.Mask);
+        if (TileInfo.IsSolid(type))
+        {
+            if (own.SetUnseen(i, false)) _unseenCells--;
+            return;
+        }
+        if (own.IsUnseen(i)) Reveal(x, y, z);
+        Reveal(x + 1, y, z); Reveal(x - 1, y, z);
+        Reveal(x, y + 1, z); Reveal(x, y - 1, z);
+        Reveal(x, y, z + 1); Reveal(x, y, z - 1);
+    }
+
+    /// <summary>
+    /// Reveals the unseen cell at (x, y, z) and every unseen cell connected to it (face neighbours): breaking into a cavern
+    /// shows all of it. Deterministic (the revealed set does not depend on order). Returns how many cells.
+    /// </summary>
+    public int Reveal(int x, int y, int z)
+    {
+        if (!IsUnseen(x, y, z)) return 0;
+        var stack = new Stack<TilePos>();
+        var touched = new HashSet<int>();
+        stack.Push(new TilePos(x, y, z));
+        ChunkAt(x, y, z).SetUnseen(Chunk.Index(x & Chunk.Mask, y & Chunk.Mask, z & Chunk.Mask), false);
+        int n = 0;
+        while (stack.Count > 0)
+        {
+            var p = stack.Pop();
+            n++;
+            touched.Add(ChunkIndex(p.X >> Chunk.Shift, p.Y >> Chunk.Shift, p.Z >> Chunk.Shift));
+            void Visit(int nx, int ny, int nz)
+            {
+                if (!InBounds(nx, ny, nz)) return;
+                var c = ChunkAt(nx, ny, nz);
+                if (c.Unseen is null) return;
+                if (c.SetUnseen(Chunk.Index(nx & Chunk.Mask, ny & Chunk.Mask, nz & Chunk.Mask), false)) stack.Push(new TilePos(nx, ny, nz));
+            }
+            Visit(p.X + 1, p.Y, p.Z); Visit(p.X - 1, p.Y, p.Z);
+            Visit(p.X, p.Y + 1, p.Z); Visit(p.X, p.Y - 1, p.Z);
+            Visit(p.X, p.Y, p.Z + 1); Visit(p.X, p.Y, p.Z - 1);
+        }
+        _unseenCells -= n;
+        RevealRevision++;
+        // The walls round the revealed cells may sit in neighbouring chunks: those redraw too.
+        var notify = new SortedSet<int>();
+        foreach (int ci in touched)
+        {
+            var cc = _chunks[ci].Coord;
+            for (int dz = -1; dz <= 1; dz++)
+            for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+                if (GetChunk(cc.X + dx, cc.Y + dy, cc.Z + dz) is not null) notify.Add(ChunkIndex(cc.X + dx, cc.Y + dy, cc.Z + dz));
+        }
+        foreach (int ci in touched) _modified?.Add(ci); // snapshots carry what was revealed
+        foreach (int ci in notify)
+        {
+            _chunks[ci].Touch();
+            ChunkRevealed?.Invoke(ci);
+        }
+        return n;
+    }
+
+    /// <summary>Overwrites unseen cells in a copied box (see <see cref="CopyBox"/>) with rock, so views draw what is known only.</summary>
+    public void MaskUnseen(int x0, int y0, int z0, int sx, int sy, int sz, TileType[] dest)
+    {
+        if (_unseenCells == 0) return;
+        int cx0 = Math.Max(0, x0) >> Chunk.Shift, cx1 = Math.Min(Width - 1, x0 + sx - 1) >> Chunk.Shift;
+        int cy0 = Math.Max(0, y0) >> Chunk.Shift, cy1 = Math.Min(Depth - 1, y0 + sy - 1) >> Chunk.Shift;
+        int cz0 = Math.Max(0, z0) >> Chunk.Shift, cz1 = Math.Min(Height - 1, z0 + sz - 1) >> Chunk.Shift;
+        for (int cz = cz0; cz <= cz1; cz++)
+        for (int cy = cy0; cy <= cy1; cy++)
+        for (int cx = cx0; cx <= cx1; cx++)
+        {
+            var chunk = _chunks[ChunkIndex(cx, cy, cz)];
+            if (chunk.Unseen is null) continue;
+            var o = chunk.Origin;
+            for (int lz = 0; lz < Chunk.Size; lz++)
+            {
+                int z = o.Z + lz - z0;
+                if ((uint)z >= (uint)sz) continue;
+                for (int ly = 0; ly < Chunk.Size; ly++)
+                {
+                    int y = o.Y + ly - y0;
+                    if ((uint)y >= (uint)sy) continue;
+                    for (int lx = 0; lx < Chunk.Size; lx++)
+                    {
+                        int x = o.X + lx - x0;
+                        if ((uint)x < (uint)sx && chunk.IsUnseen(Chunk.Index(lx, ly, lz))) dest[(z * sy + y) * sx + x] = TileType.Stone;
+                    }
+                }
+            }
+        }
+    }
 
     /// <summary>Increments on every tile change, so views can skip per-chunk scans when nothing changed.</summary>
     public long Revision { get; private set; }
@@ -101,6 +227,7 @@ public sealed class VoxelWorld : ITileReader
         if (!ChunkAt(x, y, z).Set(x & Chunk.Mask, y & Chunk.Mask, z & Chunk.Mask, type)) return;
         Revision++;
         Changed(x, y, z);
+        if (_unseenCells > 0) RevealAround(x, y, z, type);
         if (_coverCells > 0)
         {
             // A cell filled in loses its coverings; a floor whose ground is dug away goes with it, unless it is a deck (a
@@ -400,5 +527,7 @@ public sealed class VoxelWorld : ITileReader
             _chunks[i].SnapLoad(r);
             _modified.Add(i);
         }
+        _unseenCells = 0;
+        foreach (var c in _chunks) _unseenCells += c.UnseenCount;
     }
 }

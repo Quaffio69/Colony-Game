@@ -20,6 +20,11 @@ public class FloraTests
         int trees = 0, conifers = 0, reeds = 0;
         foreach (var p in a.All)
         {
+            if (p.Kind == PlantKind.Glowcap && w.IsUnseen(p.Position))
+            {
+                Assert.True(PlantInfo.CanGrowAt(w, p.Position, PlantKind.Glowcap), $"{p}: cave glowcap with no ground or roof");
+                continue; // wild glowcaps on cavern floors (CavernTests)
+            }
             Assert.True(PlantInfo.CanGrowAt(w, p.Position), $"{p} has no ground");
             int i = p.Position.Y * w.Width + p.Position.X;
             Assert.Equal(SurfaceKind.Land, t.Kind[i]);

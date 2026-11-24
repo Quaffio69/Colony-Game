@@ -58,6 +58,7 @@ public sealed class Connectivity
         _baseOf = new int[_nav.Length];
         _countOf = new int[_nav.Length];
         world.ChunkChanged += i => _changed.Add(i);
+        world.ChunkRevealed += i => _changed.Add(i); // a breached cavern's floors become standable
     }
 
     // Chunks changed since the last update (fed by VoxelWorld.ChunkChanged), so updates never scan the world.
@@ -154,12 +155,14 @@ public sealed class Connectivity
 
         // Fully solid chunks have no open cells (stairs are open, so they don't count as solid); empty chunks
         // (no stairs either) above chunks with nothing solid have no floors.
-        if (chunk.SolidCount == Chunk.Size * Chunk.Size * Chunk.Size) return;
+        if (chunk.SolidCount + chunk.UnseenCells == Chunk.Size * Chunk.Size * Chunk.Size) return; // unseen cavern air is rock until found
         var c = chunk.Coord;
         if (chunk.NonAirCount == 0 && (_world.GetChunk(c.X, c.Y, c.Z - 1)?.SolidCount ?? 0) == 0) return;
 
         var o = chunk.Origin;
-        var box = TileBox.Capture(_world, o.X - Pad, o.Y - Pad, o.Z - Pad,
+        // As known: unseen cavern floors are not standable (no one can reach them, and labelling every cavern chunk cost
+        // ~100 MB on a big map); a breach reveals and relabels them.
+        var box = TileBox.CaptureSeen(_world, o.X - Pad, o.Y - Pad, o.Z - Pad,
             Chunk.Size + 2 * Pad, Chunk.Size + 2 * Pad, Chunk.Size + 2 * Pad);
 
         var labels = new ushort[Chunk.Size * Chunk.Size * Chunk.Size];

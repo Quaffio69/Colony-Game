@@ -161,7 +161,7 @@ public sealed class Designations
     /// on the surface, so the area is picked in 2D. Returns how many plants were marked.
     /// </summary>
     public int DesignatePlantArea(DesignationKind kind, int x0, int y0, int x1, int y1, int faction = 0) =>
-        ForPlantsInArea(x0, y0, x1, y1, plant => Accepts(kind, plant), p => Designate(p, kind, faction));
+        ForPlantsInArea(x0, y0, x1, y1, plant => Accepts(kind, plant) && !_world.IsUnseen(plant.Position), p => Designate(p, kind, faction)); // not in caverns no one has found
 
     /// <summary>Cancels orders of one plant kind in the columns of a rectangle (any level). Returns how many.</summary>
     public int CancelPlantArea(DesignationKind kind, int x0, int y0, int x1, int y1, int faction = Owners.Any) =>

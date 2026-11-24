@@ -107,6 +107,29 @@ public sealed class Chunk
         return true;
     }
 
+    /// <summary>
+    /// Open cells no one has seen (cavern air before it is breached), one bit a cell; null when the chunk has none. Drawn
+    /// and picked as rock; a dig that opens beside one reveals the whole connected cavern (<see cref="VoxelWorld"/>).
+    /// </summary>
+    internal ulong[]? Unseen;
+    internal int UnseenCount;
+
+    /// <summary>Unseen open cells in the chunk (cavern air before it is breached).</summary>
+    public int UnseenCells => UnseenCount;
+
+    internal bool IsUnseen(int i) => Unseen is { } u && (u[i >> 6] >> (i & 63) & 1UL) != 0;
+
+    /// <returns>True if the bit changed.</returns>
+    internal bool SetUnseen(int i, bool value)
+    {
+        if (value == IsUnseen(i)) return false;
+        Unseen ??= new ulong[Volume / 64];
+        if (value) { Unseen[i >> 6] |= 1UL << (i & 63); UnseenCount++; }
+        else { Unseen[i >> 6] &= ~(1UL << (i & 63)); UnseenCount--; }
+        if (UnseenCount == 0) Unseen = null;
+        return true;
+    }
+
     /// <summary>World generation: make the whole chunk one tile type without allocating storage.</summary>
     internal void InitUniform(TileType type)
     {
@@ -169,6 +192,8 @@ public sealed class Chunk
         w.Write(Covers != null);
         if (Covers != null) w.Write(Covers);
         w.Write(CoverCells);
+        w.Write(Unseen != null);
+        if (Unseen != null) w.Write(System.Runtime.InteropServices.MemoryMarshal.AsBytes(Unseen.AsSpan()));
     }
 
     internal void SnapLoad(BinaryReader r)
@@ -200,5 +225,15 @@ public sealed class Chunk
             r.BaseStream.ReadExactly(Covers);
         }
         CoverCells = r.ReadInt32();
+        if (Net.SnapIO.Before(8)) return; // older snapshots: the generated caverns stay as generated
+        Unseen = null;
+        UnseenCount = 0;
+        if (r.ReadBoolean())
+        {
+            Unseen = new ulong[Volume / 64];
+            r.BaseStream.ReadExactly(System.Runtime.InteropServices.MemoryMarshal.AsBytes(Unseen.AsSpan()));
+            foreach (ulong v in Unseen) UnseenCount += System.Numerics.BitOperations.PopCount(v);
+            if (UnseenCount == 0) Unseen = null;
+        }
     }
 }

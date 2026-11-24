@@ -36,10 +36,15 @@ public readonly struct TileBox : ITileReader
         _worldW = w; _worldD = d; _worldH = h;
     }
 
-    public static TileBox Capture(VoxelWorld world, int x0, int y0, int z0, int sx, int sy, int sz)
+    /// <summary>A box as the player knows it, for drawing: unseen cavern air reads as rock (see <see cref="VoxelWorld.IsUnseen(int, int, int)"/>).</summary>
+    public static TileBox CaptureSeen(VoxelWorld world, int x0, int y0, int z0, int sx, int sy, int sz) =>
+        Capture(world, x0, y0, z0, sx, sy, sz, seenOnly: true);
+
+    public static TileBox Capture(VoxelWorld world, int x0, int y0, int z0, int sx, int sy, int sz, bool seenOnly = false)
     {
         var tiles = new TileType[sx * sy * sz];
         world.CopyBox(x0, y0, z0, sx, sy, sz, tiles);
+        if (seenOnly) world.MaskUnseen(x0, y0, z0, sx, sy, sz, tiles);
         ushort[]? edges = null;
         if (world.HasEdges)
         {

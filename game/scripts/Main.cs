@@ -700,8 +700,21 @@ public partial class Main : Node3D
     {
         var w = _sim.World;
         var c = _sim.Colonists[0].Position;
-        int sx = c.X + 3, sy = c.Y + 3, top = w.SurfaceLevel(sx, sy);
-        int bottom = arg == "deep" && w.Geology is { } g ? g.BedrockTop(sx, sy) + 2
+        int sx = c.X + 3, sy = c.Y + 3;
+        int cavernFloor = -1;
+        if (arg == "cavern" && w.Geology is { CavernLayers.Length: > 0 } geo)
+        {
+            // The nearest column over a roomy part of the first cavern layer: the shaft breaks into it.
+            for (int r = 0; r < 400 && cavernFloor < 0; r += 2)
+            for (int k = 0; k < 16 && cavernFloor < 0; k++)
+            {
+                int x = c.X + (int)(r * Math.Cos(k * Math.PI / 8)), y = c.Y + (int)(r * Math.Sin(k * Math.PI / 8));
+                if (!w.InBounds(x, y, 0) || !geo.CavernSpan(x, y, 0, out int f, out int h) || h < 5 || !w.IsUnseen(x, y, f)) continue;
+                (sx, sy, cavernFloor) = (x, y, f);
+            }
+        }
+        int top = w.SurfaceLevel(sx, sy);
+        int bottom = cavernFloor >= 0 ? cavernFloor : arg == "deep" && w.Geology is { } g ? g.BedrockTop(sx, sy) + 2
             : w.ZeroLevel - (int.TryParse(arg, out int n) ? n : 20);
         bottom = Math.Clamp(bottom, 2, top - 4);
         for (int z = top; z >= bottom; z--)
@@ -714,17 +727,20 @@ public partial class Main : Node3D
         {
             if (w.InBounds(x, y, bottom) && !w.IsBedrock(new TilePos(x, y, bottom)) && !(x == sx && y == sy)) w.Set(x, y, bottom, TileType.Air);
         }
-        for (int d = 1; d <= 26; d++) { Open(sx + d, sy); Open(sx - d, sy); Open(sx, sy + d); Open(sx, sy - d); }
-        for (int y = sy + 8; y <= sy + 16; y++)
-        for (int x = sx + 8; x <= sx + 16; x++) Open(x, y);
-        for (int d = 1; d < 8; d++) Open(sx + 12, sy + d);
+        if (cavernFloor < 0) // a gallery (a cavern needs none: the shaft breaks into it)
+        {
+            for (int d = 1; d <= 26; d++) { Open(sx + d, sy); Open(sx - d, sy); Open(sx, sy + d); Open(sx, sy - d); }
+            for (int y = sy + 8; y <= sy + 16; y++)
+            for (int x = sx + 8; x <= sx + 16; x++) Open(x, y);
+            for (int d = 1; d < 8; d++) Open(sx + 12, sy + d);
+        }
         _sim.CheckSupport(new TilePos(sx, sy, bottom));
         var rocks = new System.Text.StringBuilder();
         for (int z = top; z >= 0; z -= 12) rocks.Append($" {z - w.ZeroLevel}:{w.RockAt(new TilePos(sx, sy, z))}");
-        GD.Print($"[mine-demo] shaft at {sx},{sy} from level {top - w.ZeroLevel} to {bottom - w.ZeroLevel} (zero is z {w.ZeroLevel}); rock down the shaft:{rocks}");
+        GD.Print($"[mine-demo] {(cavernFloor >= 0 ? $"into a cavern ({w.UnseenCells} cells still unseen); " : "")}shaft at {sx},{sy} from level {top - w.ZeroLevel} to {bottom - w.ZeroLevel} (zero is z {w.ZeroLevel}); rock down the shaft:{rocks}");
         _world.ViewLevel = bottom;
         float zoom = float.TryParse(Arg("--zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float zf) ? zf : 34f;
-        _rig.Focus(SimSpace.TileCenter(new TilePos(sx + 6, sy + 6, bottom)), zoom, yaw: 205f, pitch: -62f);
+        _rig.Focus(SimSpace.TileCenter(cavernFloor >= 0 ? new TilePos(sx, sy, bottom) : new TilePos(sx + 6, sy + 6, bottom)), zoom, yaw: 205f, pitch: -62f);
     }
 
     /// <summary>

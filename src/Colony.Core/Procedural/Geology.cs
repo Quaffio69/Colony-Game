@@ -72,6 +72,16 @@ public sealed class Geology
         }
         BedrockMin = bMin;
         BedrockMax = bMax;
+        // Cavern layers: bands below level zero (deep worlds only), each well over the bedrock.
+        var layers = new List<int>();
+        if (deep)
+            foreach (float f in new[] { 0.07f, 0.19f, 0.30f })
+            {
+                // Aligned to a chunk layer: a cavern then fills (makes varied) one layer of chunks, never two or three.
+                int band = (zeroLevel - (int)(h * f)) / World.Chunk.Size * World.Chunk.Size;
+                if (band > bMax + 4 && band + World.Chunk.Size < zeroLevel) layers.Add(band);
+            }
+        CavernLayers = layers.ToArray();
     }
 
     /// <summary>The geology of a generated world: level zero is the lowest ground on the map.</summary>
@@ -106,6 +116,39 @@ public sealed class Geology
         int band = Math.DivRem(z + Lerp(_tilt, x, y) + 400, 6, out _);
         float pick = Noise.Hash(band, 0, 77, _seed + 906);
         return pick < 0.48f ? Rock.Sandstone : pick < 0.88f ? Rock.Limestone : Rock.Slate;
+    }
+
+    // ---- Caverns ----------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The bottom level of each cavern layer's band, top first (none in small worlds). A band is one chunk layer
+    /// (<see cref="World.Chunk.Size"/> levels): a cavern's ground, floor and roof all lie in it, so caverns cost one layer
+    /// of varied chunks (memory) where they open.
+    /// </summary>
+    public int[] CavernLayers { get; } = [];
+
+    /// <summary>Share of the map (roughly) a cavern layer opens under.</summary>
+    public const float CavernThreshold = 0.61f;
+
+    /// <summary>
+    /// The open span of a cavern layer in a column: cells from <paramref name="floor"/> up to floor + height - 1 are open
+    /// (the cell under the floor is the cavern's ground). Caverns are big blobs (roughly a sixth of the map in each layer), their floor rolling
+    /// a few levels, their roof highest in the middle and closing in at the edges, with rock pillars here and there. False
+    /// where the layer is solid.
+    /// </summary>
+    public bool CavernSpan(int x, int y, int layer, out int floor, out int height)
+    {
+        floor = height = 0;
+        int s = _seed + 910 + layer * 31;
+        float m = Noise.Fbm2D(x / 120f, y / 120f, s, 3);
+        if (m <= CavernThreshold) return false;
+        float edge = Math.Clamp((m - CavernThreshold) / 0.05f, 0f, 1f);
+        if (Noise.Value2D(x / 3.3f, y / 3.3f, s + 7) > 0.84f) return false; // a pillar
+        // The floor rolls 0-6 levels over the band's bottom (which stays ground); the roof stays inside the band.
+        floor = CavernLayers[layer] + 1 + Math.Clamp((int)(Noise.Fbm2D(x / 48f, y / 48f, s + 5, 2) * 13f) - 3, 0, 6);
+        height = Math.Min((int)(edge * edge * (3f + 6f * Noise.Fbm2D(x / 26f, y / 26f, s + 3, 2))), CavernLayers[layer] + World.Chunk.Size - floor);
+        if (height < 2) return false; // too low to stand in: leave rock
+        return true;
     }
 
     private static float Smooth(float t)

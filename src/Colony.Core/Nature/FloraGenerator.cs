@@ -28,9 +28,33 @@ public static class FloraGenerator
         {
             int rx = r % flora.RegionsX, ry = r / flora.RegionsX;
             lists[r] = GenerateRegion(s, t, world, rx * Flora.RegionSize, ry * Flora.RegionSize);
+            CaveGlowcaps(s, world, rx * Flora.RegionSize, ry * Flora.RegionSize, lists[r]);
         });
         foreach (var list in lists) flora.AddGenerated(list);
         return flora;
+    }
+
+    /// <summary>
+    /// Wild glowcaps on cavern floors, in patches (ripe: gather them once the cavern is found). Read from the cavern spans,
+    /// so only cells the generator really carved (open, rock beneath) get one.
+    /// </summary>
+    private static void CaveGlowcaps(WorldGenSettings s, VoxelWorld world, int x0, int y0, List<Plant> into)
+    {
+        if (world.Geology is not { CavernLayers.Length: > 0 } g) return;
+        int x1 = Math.Min(x0 + Flora.RegionSize, s.Width), y1 = Math.Min(y0 + Flora.RegionSize, s.Depth);
+        for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+        {
+            if (Noise.Hash(x, y, 3, s.Seed + 740) > 0.18f) continue;
+            for (int layer = 0; layer < g.CavernLayers.Length; layer++)
+            {
+                if (Noise.Value2D(x / 14f, y / 14f, s.Seed + 741 + layer) < 0.62f) continue; // patches
+                if (!g.CavernSpan(x, y, layer, out int floor, out _)) continue;
+                var p = new TilePos(x, y, floor);
+                if (world.Get(p) == TileType.Air && world.IsUnseen(p) && TileInfo.IsSolid(world.Get(x, y, floor - 1)))
+                    into.Add(new Plant(p, PlantKind.Glowcap, 255, (byte)(Noise.Hash(x, y, 4, s.Seed + 740) * 4)));
+            }
+        }
     }
 
     /// <summary>Highest surface level trees grow on.</summary>

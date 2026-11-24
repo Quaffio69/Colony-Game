@@ -114,7 +114,7 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [ ] Option to see other colonies' work orders.
 
 ### World
-- [ ] Randomly generated caverns.
+- [x] Randomly generated caverns: up to three layers below zero, unseen until a dig breaks in (then all of it shows), wild glowcaps to gather.
 - [x] Depths below zero (levels read from the lowest ground on the map), down to an undiggable bedrock floor that varies within a range.
 - [x] Fog of war: rock with no open side is dark on the cut surface ("Unexplored rock") until dug to.
 - [ ] Bigger maps, pushing how large a world can be (needs the optimisation below).

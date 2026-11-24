@@ -46,8 +46,21 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   (`VoxelWorld.IsHidden`; the map's sides and bottom count as closed). Mesh faces only exist next to open cells, so
   only the cut surface needs it: `WorldView.FillCap` reads the levels below, at and above the cut with a ring and writes
   `TileInfo.Hidden` (palette entry 30, near-black, no glyphs) for unexplored texels; the cap re-patches when chunks on
-  those three levels change. Hover and Inspect call it "Unexplored rock". Orders may still be placed on it. Caverns
-  (open but unseen) will need stored state.
+  those three levels change. Hover and Inspect call it "Unexplored rock". Orders may still be placed on it.
+- **Caverns (`Geology.CavernSpan`, `WorldGenerator.CarveCaverns`):** up to three cavern layers below level zero (7%, 19%,
+  30% of the height down; deep worlds only), each a band of exactly one chunk layer (`CavernLayers` holds its bottom), so
+  a cavern varies one layer of chunks where it opens (on a 2048 map ~6k chunks, +34 MB world, +89 MB whole sim). Per
+  column: big blobs (2D noise over `CavernThreshold`, roughly a sixth of the map a layer), a floor rolling 0-6 levels
+  over the band's bottom, a roof 2-9 levels up (lower to the edges), pillars; never within `CavernRoof` (10) of the
+  surface, never in the bedrock. Wild ripe glowcaps grow on cavern floors in patches (`FloraGenerator.CaveGlowcaps`).
+  **Unseen until breached:** carved cells start unseen (`Chunk.Unseen`, a bit a cell, null in chunks without; in
+  snapshots from version 8, the chunk marked modified when revealed; `VoxelWorld.UnseenCells` in `StateHash`). Any
+  `VoxelWorld.Set` that opens a cell beside an unseen one reveals the whole connected unseen space (`Reveal`: a flood
+  fill; raises `ChunkRevealed` for the chunks round it, bumps their versions); rock set into an unseen cell fills it.
+  Unseen air is rock to everything the player sees or orders: meshing (`TileBox.CaptureSeen`, `IsBuried` counts it),
+  the cap (`MaskUnseen`), picking (`VoxelRaycast`), flora (`FloraView` skips its plants, rebuilds on reveal), plant
+  orders (`DesignatePlantArea` skips it), and connectivity (not standable until found: labelling every cavern chunk
+  cost ~100 MB). `--mine-demo=cavern` sinks a shaft into the nearest cavern.
 - **Water (`Fluids.Water`): shallow-water flow over column spans** (city-builder style, generalised to caves). A
   column is a list of spans: vertical runs of open cells resting on solid ground (the sky above the surface, a
   tunnel). A span holds a continuous depth of water (fixed point, `U` = 1/65536 level per unit), so surfaces are

@@ -47,7 +47,7 @@ public static class VoxelRaycast
 
         while (t <= maxDistance)
         {
-            if (world.Get(x, y, z) != TileType.Air) // stairs are pickable too
+            if (world.Get(x, y, z) != TileType.Air || world.IsUnseen(x, y, z)) // stairs are pickable too; unseen cavern air reads as rock
                 return new RayHit(new TilePos(x, y, z), normal, t);
 
             if (tMaxX < tMaxY && tMaxX < tMaxZ)

@@ -30,6 +30,7 @@ public static class WorldGenerator
             int cx = column % world.ChunksX, cy = column / world.ChunksX;
             FillColumn(s, terrain, world, cx, cy);
             PlaceOre(s, world, cx, cy);
+            CarveCaverns(terrain, world, cx, cy);
         });
         return new GeneratedWorld(world, terrain);
     }
@@ -161,6 +162,36 @@ public static class WorldGenerator
             }
         }
     }
+
+    /// <summary>
+    /// Caverns (<see cref="Geology.CavernSpan"/>): open spans carved out of the rock of each cavern layer, never within
+    /// <see cref="CavernRoof"/> levels of the surface nor into the bedrock. Their cells start unseen (drawn as rock until a dig
+    /// breaks in). Per chunk column, like the ore.
+    /// </summary>
+    private static void CarveCaverns(Terrain t, VoxelWorld world, int cx, int cy)
+    {
+        var g = world.Geology!;
+        if (g.CavernLayers.Length == 0) return;
+        int x0 = cx * Chunk.Size, y0 = cy * Chunk.Size;
+        int x1 = Math.Min(x0 + Chunk.Size, world.Width), y1 = Math.Min(y0 + Chunk.Size, world.Depth);
+        for (int y = y0; y < y1; y++)
+        for (int x = x0; x < x1; x++)
+        {
+            int roof = t.SurfaceAt(x, y) - CavernRoof, bottom = g.BedrockTop(x, y) + 2;
+            for (int layer = 0; layer < g.CavernLayers.Length; layer++)
+            {
+                if (!g.CavernSpan(x, y, layer, out int floor, out int height)) continue;
+                for (int z = Math.Max(floor, bottom); z < floor + height && z < roof; z++)
+                {
+                    world.SetForGeneration(x, y, z, TileType.Air);
+                    world.SetUnseenForGeneration(x, y, z);
+                }
+            }
+        }
+    }
+
+    /// <summary>Rock left between a cavern and the surface above it.</summary>
+    public const int CavernRoof = 10;
 
     /// <summary>
     /// Which mineral a deposit is, by height in the world (0 = bottom, 1 = top) and a random pick weighted by

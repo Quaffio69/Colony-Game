@@ -265,6 +265,7 @@ public partial class WorldView : Node3D
         _queued = new bool[_sections.Count];
         for (int i = 0; i < _sections.Count; i++) Enqueue(i);
         World.ChunkChanged += OnChunkChanged;
+        World.ChunkRevealed += OnChunkChanged; // a cavern breached: redraw it (and the cut surface over it)
 
         BuildCap();
 
@@ -332,7 +333,9 @@ public partial class WorldView : Node3D
     // The test menu reloads the scene onto another sim and may bring this one back later: let go of its world.
     public override void _ExitTree()
     {
-        if (_sim != null) World.ChunkChanged -= OnChunkChanged;
+        if (_sim == null) return;
+        World.ChunkChanged -= OnChunkChanged;
+        World.ChunkRevealed -= OnChunkChanged;
     }
 
     private void OnChunkChanged(int chunkIndex)
@@ -372,7 +375,7 @@ public partial class WorldView : Node3D
             Dequeue();
             long t0 = Stopwatch.GetTimestamp();
             var versions = s.CurrentVersions();
-            var box = TileBox.Capture(World, s.X0 - SectionMesher.Pad, s.Y0 - SectionMesher.Pad, s.Z0 - SectionMesher.Pad,
+            var box = TileBox.CaptureSeen(World, s.X0 - SectionMesher.Pad, s.Y0 - SectionMesher.Pad, s.Z0 - SectionMesher.Pad,
                 s.SX + 2 * SectionMesher.Pad, s.SY + 2 * SectionMesher.Pad, s.SZ + 2 * SectionMesher.Pad);
             s.InFlight = true;
             _inFlight++;
@@ -404,14 +407,14 @@ public partial class WorldView : Node3D
         for (int cz = cz0; cz <= cz1; cz++)
         for (int cy = cy0; cy <= cy1; cy++)
         for (int cx = cx0; cx <= cx1; cx++)
-            if (World.GetChunk(cx, cy, cz) is not { SolidCount: Chunk.Volume }) return false;
+            if (World.GetChunk(cx, cy, cz) is not { } c || c.SolidCount + c.UnseenCells != Chunk.Volume) return false; // unseen cavern air counts as rock
         return true;
     }
 
-    private static MeshResult BuildMesh(Section s, int[] versions, TileBox box)
+    private MeshResult BuildMesh(Section s, int[] versions, TileBox box)
     {
         var quads = new List<Quad>();
-        SectionMesher.Build(box, s.X0, s.Y0, s.Z0, s.SX, s.SY, s.SZ, quads);
+        SectionMesher.Build(box, s.X0, s.Y0, s.Z0, s.SX, s.SY, s.SZ, quads, World.Geology); // natural rock by its kind
         return new MeshResult(s, versions, ToArrays(quads));
     }
 
@@ -730,6 +733,7 @@ public partial class WorldView : Node3D
         if (_capBox.Length < plane * 3) _capBox = new TileType[plane * 3];
         var box = _capBox;
         World.CopyBox(x0 - 1, y0 - 1, _capLevel - 1, bx, by, 3, box);
+        World.MaskUnseen(x0 - 1, y0 - 1, _capLevel - 1, bx, by, 3, box); // unseen cavern air: rock, as far as anyone knows
         // Off the map's sides counts as rock (no view in from there); CopyBox leaves it air, so fill the ring in.
         for (int z = 0; z < 3; z++)
         for (int y = 0; y < by; y++)

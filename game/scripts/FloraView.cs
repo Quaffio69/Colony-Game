@@ -51,6 +51,20 @@ public partial class FloraView : Node3D
         _regionNodes = new Node3D?[regions];
         _builtVersions = new int[regions];
         Array.Fill(_builtVersions, -1);
+        sim.World.ChunkRevealed += OnRevealed;
+    }
+
+    /// <summary>A cavern breached: rebuild the regions over the revealed chunk, so its plants appear.</summary>
+    private void OnRevealed(int chunkIndex)
+    {
+        var o = _sim!.World.Chunks[chunkIndex].Origin;
+        int rx = o.X >> Flora.RegionShift, ry = o.Y >> Flora.RegionShift;
+        if (rx < _flora.RegionsX && ry < _flora.RegionsY) _builtVersions[ry * _flora.RegionsX + rx] = -1;
+    }
+
+    public override void _ExitTree()
+    {
+        if (_sim != null) _sim.World.ChunkRevealed -= OnRevealed;
     }
 
     public override void _Process(double delta)
@@ -211,8 +225,10 @@ public partial class FloraView : Node3D
         var byKind = new List<Plant>[PlantInfo.KindCount];
         for (int k = 0; k < byKind.Length; k++) byKind[k] = new List<Plant>();
         var trees = new List<Plant>();
+        var world = _sim.World;
         foreach (var p in plants)
         {
+            if (world.IsUnseen(p.Position)) continue; // in a cavern no one has found yet
             byKind[(int)p.Kind].Add(p);
             if (PlantInfo.IsTree(p.Kind)) trees.Add(p);
         }
