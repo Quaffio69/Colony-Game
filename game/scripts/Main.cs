@@ -427,7 +427,7 @@ public partial class Main : Node3D
             {
                 s_devArgsDone = true;
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--house-demo", "--falls-demo", "--mine-demo", "--ticks" }.Any(a => Arg(a) != null))
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--house-demo", "--falls-demo", "--mine-demo", "--machines-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
                 if (Arg("--dig-demo") is { } digDemo) DigDemo(digDemo);
                 if (Arg("--stairs-demo") != null) StairsDemo();
@@ -444,6 +444,7 @@ public partial class Main : Node3D
                 if (Arg("--ants-demo") is { } antsDemo) AntsDemo(antsDemo);
                 if (Arg("--trade-demo") != null) TradeDemo();
                 if (Arg("--mine-demo") is { } mineDemo) MineDemo(mineDemo);
+                if (Arg("--machines-demo") != null) MachinesDemo();
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
                 if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
@@ -741,6 +742,36 @@ public partial class Main : Node3D
         _world.ViewLevel = bottom;
         float zoom = float.TryParse(Arg("--zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float zf) ? zf : 34f;
         _rig.Focus(SimSpace.TileCenter(cavernFloor >= 0 ? new TilePos(sx, sy, bottom) : new TilePos(sx + 6, sy + 6, bottom)), zoom, yaw: 205f, pitch: -62f);
+    }
+
+    /// <summary>
+    /// --machines-demo: an excavator and a power wagon beside the colony, a dig box for the one, rubble and a stockpile for
+    /// the other (and charcoal to burn); runs a while and frames them close.
+    /// </summary>
+    private void MachinesDemo()
+    {
+        var c = _sim.Colonists[0].Position;
+        int g = c.Z - 1;
+        // Level a yard: ground at g, open above (plants on it go), so the machines have room.
+        for (int y = c.Y - 8; y <= c.Y + 8; y++)
+        for (int x = c.X - 2; x <= c.X + 16; x++)
+        {
+            if (!_sim.World.InBounds(x, y, g)) continue;
+            for (int z = g + 1; z <= g + 6 && z < _sim.World.Height; z++) { _sim.Flora.Remove(new TilePos(x, y, z), out _); _sim.World.Set(x, y, z, TileType.Air); }
+            for (int z = g - 3; z <= g; z++) _sim.World.Set(x, y, z, z == g ? TileType.Grass : TileType.Soil);
+        }
+        var ex = _sim.AddMachine(Colony.Core.Agents.MachineKind.Excavator, new TilePos(c.X + 2, c.Y - 4, g + 1));
+        var wagon = _sim.AddMachine(Colony.Core.Agents.MachineKind.PowerWagon, new TilePos(c.X + 2, c.Y + 4, g + 1));
+        _sim.Commands.Execute(new Colony.Core.Commands.DesignateBox(new TilePos(c.X + 6, c.Y - 7, g), new TilePos(c.X + 14, c.Y - 2, g - 2), Colony.Core.Orders.DesignationKind.Dig));
+        GD.Print("[machines-demo] " + _sim.Commands.Execute(new Colony.Core.Commands.AddStockpile(new TilePos(c.X + 8, c.Y + 3, g), new TilePos(c.X + 14, c.Y + 7, g + 1))));
+        for (int i = 0; i < 6; i++) _sim.Items.Drop(new TilePos(c.X + 3 + i, c.Y + 1, g + 1), Colony.Core.Items.ItemType.Stone, 20);
+        _sim.Items.Drop(new TilePos(c.X - 1, c.Y + 6, g + 1), Colony.Core.Items.ItemType.Charcoal, 30);
+        int ticks = int.TryParse(Arg("--machines-ticks"), out int t) ? t : 500;
+        for (int i = 0; i < ticks; i++) _sim.Step();
+        int stored = _sim.Stockpiles.Cells.Sum(s => _sim.Items.TryGet(s, out var p) && p.Type == Colony.Core.Items.ItemType.Stone ? p.Count : 0);
+        GD.Print($"[machines-demo] {ex.Name}: {ex.Describe()}, fuel {ex.Fuel}; {wagon.Name}: {wagon.Describe()}, carrying {wagon.CarryingCount}; stone stockpiled {stored}; orders left {_sim.Designations.Count}");
+        _world.ViewLevel = g + 1;
+        _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 7, c.Y, g + 1)), float.TryParse(Arg("--zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z0) ? z0 : 14f, yaw: 215f, pitch: -42f);
     }
 
     /// <summary>

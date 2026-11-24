@@ -32,6 +32,7 @@ public readonly record struct ItemType(ushort Index)
     public static ItemType Grain => Known.Grain;
     public static ItemType Herbs => Known.Herbs;
     public static ItemType Glowcaps => Known.Glowcaps;
+    public static ItemType Charcoal => Known.Charcoal;
 
     /// <summary>The rough gem a gem pocket leaves (garnet, sapphire, ruby, emerald, diamond).</summary>
     public static ItemType RoughGem(World.TileType gem) => gem switch
@@ -65,6 +66,7 @@ public readonly record struct ItemType(ushort Index)
         public static readonly ItemType Grain = Catalog.Item("grain");
         public static readonly ItemType Herbs = Catalog.Item("herbs");
         public static readonly ItemType Glowcaps = Catalog.Item("glowcaps");
+        public static readonly ItemType Charcoal = Catalog.Item("charcoal");
         public static readonly ItemType Garnet = Catalog.Item("rough_garnet");
         public static readonly ItemType Sapphire = Catalog.Item("rough_sapphire");
         public static readonly ItemType Ruby = Catalog.Item("rough_ruby");
@@ -81,6 +83,8 @@ public enum ItemKind : byte
     Education,
     /// <summary>A worker (automaton): "making" one adds a colonist.</summary>
     Worker,
+    /// <summary>Heavy machinery (excavator, power wagon): "making" one rolls a machine out (<see cref="Agents.MachineKind"/>).</summary>
+    Machine,
 }
 
 /// <summary>Static facts about an item, from the catalog.</summary>

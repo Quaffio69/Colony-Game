@@ -105,9 +105,9 @@ internal static class SnapIO
 public static class Snapshot
 {
     private const string Magic = "COLONYSNAP";
-    /// <summary>8: unseen cavern cells per chunk. 7: order priorities. 6: blueprints built from another cell (decks, stairs). 5: machine stock limits. 4: trade depots and deals (a seventh work type). 3: storage racks and grass regrowth. Versions 2-4 still
+    /// <summary>9: machines (kind, fuel). 8: unseen cavern cells per chunk. 7: order priorities. 6: blueprints built from another cell (decks, stairs). 5: machine stock limits. 4: trade depots and deals (a seventh work type). 3: storage racks and grass regrowth. Versions 2-4 still
     /// load (without what came later).</summary>
-    private const int Version = 8;
+    private const int Version = 9;
 
     /// <summary>Where the last load or take spent its time (ms), for the bench.</summary>
     public static string LastTimings { get; internal set; } = "";

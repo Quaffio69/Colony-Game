@@ -27,6 +27,8 @@ public partial class ColonistView : Node3D
         public Colonist Colonist = null!;
         public Node3D Root = null!, Body = null!;
         public MeshInstance3D Load = null!, Weapon = null!, Shield = null!, Armour = null!, Bar = null!, Marker = null!, Scaffold = null!;
+        public MeshInstance3D? Drill; // the excavator's drill bit (spins while it digs)
+        public float Heading; // a machine faces where it drives
         public ItemType? ShownWeapon, ShownShield, ShownArmour;
     }
 
@@ -45,17 +47,21 @@ public partial class ColonistView : Node3D
         v.Body = new Node3D { Name = "Body" };
         v.Root.AddChild(v.Body);
         float hue = Colony.Core.Procedural.Noise.Hash(c.Id, 0, 0, 4242);
-        v.Body.AddChild(new MeshInstance3D
-        {
-            Mesh = new CapsuleMesh
+        if (c.IsMachine) AddMachineBody(v);
+        else
+            v.Body.AddChild(new MeshInstance3D
             {
-                Radius = 0.22f,
-                Height = BodyHeight,
-                Material = new StandardMaterial3D { AlbedoColor = Color.FromHsv(hue, 0.65f, 0.9f), Roughness = 0.6f },
-            },
-            Position = new Vector3(0, BodyHeight / 2f, 0),
-        });
-        v.Load = Part(v.Body, MeshKit.Box(0.34f, 0.22f, 0.3f), new Vector3(0, BodyHeight + 0.08f, 0));
+                Mesh = new CapsuleMesh
+                {
+                    Radius = 0.22f,
+                    Height = BodyHeight,
+                    Material = new StandardMaterial3D { AlbedoColor = Color.FromHsv(hue, 0.65f, 0.9f), Roughness = 0.6f },
+                },
+                Position = new Vector3(0, BodyHeight / 2f, 0),
+            });
+        v.Load = c.Machine == MachineKind.PowerWagon
+            ? Part(v.Body, MeshKit.Box(0.46f, 0.2f, 0.4f), new Vector3(0.17f, 0.44f, 0)) // heaped in the wagon's bed
+            : Part(v.Body, MeshKit.Box(0.34f, 0.22f, 0.3f), new Vector3(0, BodyHeight + 0.08f, 0));
         // Gear: a plate over the chest, a weapon in the right hand, a shield on the left arm (hidden until worn).
         v.Armour = Part(v.Body, new CapsuleMesh { Radius = 0.245f, Height = 0.5f }, new Vector3(0, 0.42f, 0));
         v.Weapon = Part(v.Body, MeshKit.Box(0.06f, 0.62f, 0.06f), new Vector3(0.27f, 0.45f, 0.05f));
@@ -105,6 +111,91 @@ public partial class ColonistView : Node3D
             v.Root.AddChild(new DwarfRender.AsciiMarker { GlyphGroup = DwarfRender.GlyphAtlas.Dwarf, GlyphColour = Color.FromHsv(hue, 0.65f, 0.9f), Position = new Vector3(0, 0.5f, 0) });
         AddChild(v.Root);
         _views.Add(v);
+    }
+
+    // ---- Heavy machinery: dwarven steam engines on tracks and wheels (facing +x, turned by Heading) ----------------
+
+    private static Mesh? _excavatorMesh, _wagonMesh, _drillMesh;
+
+    private static StandardMaterial3D Mat(string hex, float metal = 0f, float rough = 0.6f) =>
+        new() { AlbedoColor = Color.FromHtml(hex), Metallic = metal, Roughness = rough };
+
+    private static StandardMaterial3D Glow(string hex) =>
+        new() { AlbedoColor = Color.FromHtml(hex), EmissionEnabled = true, Emission = Color.FromHtml(hex), EmissionEnergyMultiplier = 2.5f };
+
+    private void AddMachineBody(View v)
+    {
+        bool excavator = v.Colonist.Machine == MachineKind.Excavator;
+        v.Body.Scale = Vector3.One * 1.3f; // heavy machinery: bigger than a person, still within its cell
+        v.Body.AddChild(new MeshInstance3D { Mesh = excavator ? _excavatorMesh ??= BuildExcavator() : _wagonMesh ??= BuildWagon() });
+        if (!excavator) return;
+        v.Drill = new MeshInstance3D { Mesh = _drillMesh ??= BuildDrill(), Position = new Vector3(0.5f, 0.4f, 0), Rotation = new Vector3(0, 0, -Mathf.Pi / 2) };
+        v.Body.AddChild(v.Drill);
+    }
+
+    /// <summary>The steam excavator: iron tracks, a riveted chassis, a copper boiler with brass bands, a smokestack, a glowing
+    /// firebox at the back and a brass arm holding the drill out front.</summary>
+    private static Mesh BuildExcavator()
+    {
+        var iron = Mat("#3a3634", 0.4f, 0.7f);
+        var chassis = Mat("#5e554e", 0.5f, 0.55f);
+        var copper = Mat("#b8733a", 0.8f, 0.35f);
+        var brass = Mat("#d0a040", 0.85f, 0.3f);
+        var soot = Mat("#262222", 0.3f, 0.8f);
+        var p = new MeshKit.Parts();
+        foreach (float z in new[] { -0.27f, 0.27f })
+        {
+            p.Add(MeshKit.Box(0.9f, 0.2f, 0.18f), 0, 0.1f, z, iron); // tracks
+            foreach (float x in new[] { -0.32f, 0f, 0.32f }) p.Add(MeshKit.Cyl(0.08f, 0.2f, 10), MeshKit.AlongZ(x, 0.1f, z), brass); // road wheels
+        }
+        p.Add(MeshKit.Box(0.72f, 0.12f, 0.46f), 0, 0.26f, 0, chassis);
+        p.Add(MeshKit.Cyl(0.2f, 0.4f, 14), -0.1f, 0.52f, 0, copper); // boiler
+        foreach (float y in new[] { 0.4f, 0.62f }) p.Add(MeshKit.Cyl(0.215f, 0.035f, 14), -0.1f, y, 0, brass);
+        p.Add(MeshKit.Ball(0.2f, 0.16f, 14), -0.1f, 0.72f, 0, copper); // dome
+        p.Add(MeshKit.Cyl(0.05f, 0.34f, 8), -0.26f, 0.86f, 0.12f, soot); // smokestack
+        p.Add(MeshKit.Cone(0.05f, 0.09f, 0.08f, 8), -0.26f, 1.06f, 0.12f, soot);
+        p.Add(MeshKit.Box(0.04f, 0.09f, 0.16f), -0.37f, 0.38f, 0, Glow("#ff7a2a")); // firebox
+        p.Add(MeshKit.Box(0.4f, 0.08f, 0.09f), MeshKit.At(0.26f, 0.44f, 0, 0, 0, -0.12f), brass); // arm
+        p.Add(MeshKit.Box(0.1f, 0.14f, 0.14f), 0.44f, 0.41f, 0, chassis); // drill housing
+        return MeshKit.Compose(p);
+    }
+
+    /// <summary>The drill bit: a steel cone with a spiral of brass flutes (spun about its axis while digging).</summary>
+    private static Mesh BuildDrill()
+    {
+        var steel = Mat("#a8b0b8", 0.9f, 0.25f);
+        var brass = Mat("#d0a040", 0.85f, 0.3f);
+        var p = new MeshKit.Parts();
+        p.Add(MeshKit.Cone(0.11f, 0.0f, 0.3f, 10), 0, 0.15f, 0, steel);
+        for (int i = 0; i < 3; i++) p.Add(MeshKit.Box(0.02f, 0.2f, 0.17f - i * 0.05f), MeshKit.At(0, 0.06f + i * 0.08f, 0, 0, i * 1.1f, 0), brass);
+        return MeshKit.Compose(p);
+    }
+
+    /// <summary>The power wagon: a plank bed on four iron-rimmed wheels with a copper boiler up front, its smokestack and firebox.</summary>
+    private static Mesh BuildWagon()
+    {
+        var wood = Mat("#8c613a", 0f, 0.8f);
+        var plank = Mat("#a8804e", 0f, 0.8f);
+        var iron = Mat("#3a3634", 0.5f, 0.6f);
+        var copper = Mat("#b8733a", 0.8f, 0.35f);
+        var brass = Mat("#d0a040", 0.85f, 0.3f);
+        var soot = Mat("#262222", 0.3f, 0.8f);
+        var p = new MeshKit.Parts();
+        foreach (float x in new[] { -0.26f, 0.3f })
+        foreach (float z in new[] { -0.28f, 0.28f })
+        {
+            p.Add(MeshKit.Cyl(0.16f, 0.06f, 14), MeshKit.AlongZ(x, 0.16f, z), iron); // wheel
+            p.Add(MeshKit.Cyl(0.06f, 0.08f, 8), MeshKit.AlongZ(x, 0.16f, z), brass); // hub
+        }
+        p.Add(MeshKit.Box(0.84f, 0.08f, 0.5f), 0.04f, 0.3f, 0, wood); // bed
+        foreach (float z in new[] { -0.24f, 0.24f }) p.Add(MeshKit.Box(0.56f, 0.14f, 0.04f), 0.17f, 0.41f, z, plank); // sides
+        p.Add(MeshKit.Box(0.04f, 0.14f, 0.5f), 0.45f, 0.41f, 0, plank); // tailboard
+        p.Add(MeshKit.Cyl(0.15f, 0.34f, 14), MeshKit.AlongX(-0.24f, 0.5f, 0), copper); // boiler, lying along the wagon
+        foreach (float x in new[] { -0.36f, -0.12f }) p.Add(MeshKit.Cyl(0.16f, 0.03f, 14), MeshKit.AlongX(x, 0.5f, 0), brass);
+        p.Add(MeshKit.Cyl(0.045f, 0.3f, 8), -0.34f, 0.78f, 0, soot); // smokestack
+        p.Add(MeshKit.Cone(0.045f, 0.08f, 0.07f, 8), -0.34f, 0.96f, 0, soot);
+        p.Add(MeshKit.Box(0.04f, 0.08f, 0.14f), -0.42f, 0.38f, 0, Glow("#ff7a2a")); // firebox
+        return MeshKit.Compose(p);
     }
 
     private static Mesh? _scaffoldMesh;
@@ -179,6 +270,14 @@ public partial class ColonistView : Node3D
                 }
             }
 
+            if (c.IsMachine)
+            {
+                // Machines turn to face where they drive (or what they dig), and the drill spins while it bites.
+                Vector3? toward = c.NextStep is { } ns ? Foot(ns) - Foot(c.Position) : c.State == ColonistState.Working && c.JobTarget is { } jt ? SimSpace.TileCenter(jt) - pos : null;
+                if (toward is { } d && new Vector2(d.X, d.Z).LengthSquared() > 0.001f) v.Heading = Mathf.LerpAngle(v.Heading, Mathf.Atan2(-d.Z, d.X), Mathf.Min(1f, (float)delta * 8f));
+                v.Body.Rotation = new Vector3(0, v.Heading, 0);
+                if (v.Drill != null && c.State == ColonistState.Working) v.Drill.Rotation = new Vector3(_time * 18f, 0, -Mathf.Pi / 2);
+            }
             v.Root.Position = pos;
             v.Root.Scale = Vector3.One * (c.IsChild ? 0.6f : 1f);
             // Struck down: lying on its side.

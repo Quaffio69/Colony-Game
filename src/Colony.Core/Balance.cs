@@ -106,6 +106,18 @@ public static class Balance
     /// <summary>Building waterworks, walls, floors and roofs: multiplies each structure's base build time.</summary>
     public const float StructureBuildScale = 1.5f;
 
+    // ---- Heavy machinery ------------------------------------------------------------------------------------------
+
+    /// <summary>The excavator digs this many times faster than a colonist (any rock), but crawls (steps take this much longer).</summary>
+    public const float ExcavatorDigSpeed = 5f, ExcavatorStepScale = 1.6f;
+    /// <summary>The power wagon carries this many colonist loads a trip and rolls faster than walking.</summary>
+    public const int WagonLoads = 8;
+    public const float WagonStepScale = 0.7f;
+    /// <summary>Fuel: one charcoal is this much work; a firebox holds this many charcoal. A dig costs the excavator
+    /// <see cref="ExcavatorFuelPerDig"/>, a trip costs the wagon <see cref="WagonFuelPerTrip"/>: a load of charcoal digs
+    /// ~60 tiles or hauls ~40 loads.</summary>
+    public const int FuelPerCharcoal = 10, FuelCharcoalLoad = 12, ExcavatorFuelPerDig = 2, WagonFuelPerTrip = 3;
+
     // ---- Wildlife (giant ant nests) ------------------------------------------------------------------------------
 
     /// <summary>A nest breeds one ant this often (a 40-ant nest refills in about two weeks).</summary>

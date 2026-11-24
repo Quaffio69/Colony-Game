@@ -6,7 +6,13 @@ using Colony.Core.World;
 
 namespace Colony.Core.Tests;
 
+/// <summary>Real sockets with wall-clock waits (a resync must arrive within seconds): run alone, not beside heavy world
+/// generation in other test classes, which starved them into timing out.</summary>
+[CollectionDefinition("Network", DisableParallelization = true)]
+public class NetworkCollection;
+
 /// <summary>A host and clients over loopback TCP: lockstep keeps their worlds identical.</summary>
+[Collection("Network")]
 public class NetTests
 {
     private static readonly GameSettings Small = new(Seed: 21, Width: 64, Depth: 64, Height: 40, Colonists: 3, Colonies: 2);

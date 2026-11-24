@@ -107,3 +107,21 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   harvested whole and resown. Plots, stockpiles and rooms never overlap.
 - **Gathering:** berry bushes -> Berries, reeds/shrubs -> Fiber, herbs from ferns/flowers, only when ripe (`PlantInfo.RipeGrowth`); the
   plant is cut back to `GatheredGrowth`, not removed, so regrowth can drive future yields.
+
+- **Heavy machinery (`Agents.MachineKind`, `Agents/ColonistMachine.cs`):** dwarven steam engines built at the artificer's
+  assembly frame (Literate): a steam engine (4 iron ingots, 2 steel plate, 3 cogs), then the **excavator** (engine, a drill
+  head forged from 3 steel, 4 steel plate) or the **power wagon** (engine, 4 planks, 2 iron ingots). Items of kind
+  "machine" (`ItemKind.Machine`) roll out of the workshop as machines (`ColonySim.AddMachines`/`AddMachine`): colonists
+  with `Machine` set and `IsAutomaton` (no needs, homes, families, schooling or drafting), named "Excavator 2" etc., with
+  one trade at priority 1 (`SetUpMachine`; `SetPriority` keeps every other work at 0). The excavator takes only dig and
+  stair orders and works them `Balance.ExcavatorDigSpeed` (5x) as fast in any rock, but crawls (`ExcavatorStepScale` 1.6);
+  the wagon only hauls, rolls faster (0.7) and carries `WagonLoads` (8) colonist loads: a haul to a stockpile reserves more
+  of the source pile plus room in the stockpile cells round the destination (`WagonReach` 3, same level and colony), and
+  at pickup gathers the same item from loose piles round it into more room (`ExtendLoad`, `PickUpSpill`, `DeliverSpill`;
+  every reservation is released on abandon). **Fuel:** charcoal. A firebox holds `FuelCharcoalLoad` (12) charcoal of
+  `FuelPerCharcoal` (10) work; a dig costs 2, a wagon trip 3. Below a quarter a machine goes for charcoal like a meal
+  (`TryRefuel`, the Eat task; `FinishMeal` stokes); empty, it stands idle ("out of fuel"). Fuel only burns while needs
+  run (sandboxes are free). Snapshot version 9 (kind, fuel), `StateHash`. **Look (`ColonistView`):** the excavator on
+  iron tracks with a copper boiler, smokestack, glowing firebox and a brass arm whose drill spins while it digs; the wagon
+  a plank bed on four wheels with a boiler up front and its load heaped in the bed; both turn to face where they drive and
+  stand 1.3x a person. Hover card: fuel. `--machines-demo` shows both at work.

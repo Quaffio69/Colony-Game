@@ -115,7 +115,7 @@ public sealed partial class Colonist
     public int Education { get; internal set; }
     /// <summary>Built, not born: a tireless unskilled worker that can't be taught.</summary>
     public bool IsAutomaton { get; init; }
-    public string EducationName => IsAutomaton ? "Automaton" : Catalog.EducationName(Education);
+    public string EducationName => IsMachine ? MachineInfo.Name(Machine) : IsAutomaton ? "Automaton" : Catalog.EducationName(Education);
 
     public Colonist(int id, string name, TilePos position, int education = 0)
     {
@@ -151,6 +151,7 @@ public sealed partial class Colonist
     public void SetPriority(Work work, int priority)
     {
         _priority[(int)work] = (byte)Math.Clamp(priority, 0, LowestPriority);
+        if (IsMachine && work != MachineInfo.WorkOf(Machine)) _priority[(int)work] = 0; // a machine has one trade
         _searchedDesignations = -1; // look again with the new priorities
         _retryDelay = 0;
     }
@@ -251,6 +252,12 @@ public sealed partial class Colonist
     private void FinishMeal(ColonySim sim)
     {
         int eaten = sim.Items.TakeReserved(_meal.Cell, _meal.Units);
+        if (IsMachine)
+        {
+            Fuel = Math.Min(FuelCapacity, Fuel + eaten * Balance.FuelPerCharcoal);
+            Finish();
+            return;
+        }
         Satiety += eaten * Needs.MealTicks * Needs.Nutrition(_meal.Type); // a loaf more than fills it: it lasts longer, nothing wasted
         if (eaten > 0 && _meal.Type == FavoriteFood) LastTreat = sim.Tick;
         if (Satiety > 0) StarvingTicks = 0;
@@ -484,6 +491,8 @@ public sealed partial class Colonist
         (ColonistTask.Build, ColonistState.Working) =>
             $"building a {_build.Name.ToLowerInvariant()}{_build.Where} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
         (ColonistTask.Build, _) => $"walking to build a {_build.Name.ToLowerInvariant()}",
+        (ColonistTask.Eat, ColonistState.Working) when IsMachine => "stoking its firebox with charcoal",
+        (ColonistTask.Eat, _) when IsMachine => "going for charcoal",
         (ColonistTask.Eat, ColonistState.Working) => $"eating {ItemInfo.Name(_meal.Type).ToLowerInvariant()}",
         (ColonistTask.Eat, _) => $"going to eat {ItemInfo.Name(_meal.Type).ToLowerInvariant()}",
         (ColonistTask.Sleep, ColonistState.Working) => Home != null && _sleepRate > Housing.RestRate(null, this) ? "asleep in bed" : "asleep on the floor",
@@ -493,6 +502,7 @@ public sealed partial class Colonist
         (ColonistTask.FurnishDeliver, _) => $"carrying {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {_furnish.Home.Name}",
         (ColonistTask.TradePickup, _) => $"fetching {ItemInfo.Name(_trade.Line.Type).ToLowerInvariant()} sold to {_tradePartner}",
         (ColonistTask.TradeDeliver, _) => $"carrying {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {_tradePartner}'s trade depot",
+        _ when OutOfFuel => "out of fuel: needs charcoal in reach",
         _ => "idle",
     };
 
@@ -507,6 +517,7 @@ public sealed partial class Colonist
     internal void Tick(ColonySim sim)
     {
         ApplyGravity(sim);
+        if (_fuelRetry > 0) _fuelRetry--;
         TickHunger(sim);
         TickRest(sim);
         if (TickCombat(sim)) return; // down, drafted, fighting back or fleeing: that is the whole tick
@@ -529,6 +540,8 @@ public sealed partial class Colonist
                     return;
                 }
                 if (Hungry && sim.NeedsEnabled && _foodRetry == 0 && TryEat(sim)) return; // a meal before the next job
+                if (LowOnFuel && TryRefuel(sim)) return; // machines: charcoal before the next job
+                if (OutOfFuel && sim.NeedsEnabled) return; // ... and none at all without it
                 if (Tired && sim.NeedsEnabled && TrySleep(sim)) return; // and bed before work
                 if (IsChild) return; // children don't work (they eat and sleep above)
                 if (NothingNewSinceLastSearch(sim)) return;
@@ -569,6 +582,7 @@ public sealed partial class Colonist
                             return;
                         }
                         sim.CompleteDesignation(JobTarget!.Value);
+                        BurnFuel(sim, Balance.ExcavatorFuelPerDig);
                         Finish();
                         break;
                     case ColonistTask.HaulPickup:
@@ -636,7 +650,7 @@ public sealed partial class Colonist
             var next = _path.Dequeue();
             if (Movement.MoveCost(sim.World, Position, next) is not { } cost) return MoveResult.Failed; // terrain changed under the path; replan
             NextStep = next;
-            _stepTicksTotal = cost * TicksPerFlatStep;
+            _stepTicksTotal = cost * TicksPerFlatStep * MachineInfo.StepScale(Machine);
             _stepTicksDone = 0;
         }
 
@@ -780,6 +794,7 @@ public sealed partial class Colonist
                 continue;
             }
             _haul = plan;
+            ExtendLoad(sim, component);
             _haulDestination = sim.Rooms.PartAt(plan.Destination) switch
             {
                 { Built: false } => "a construction site",
@@ -1156,6 +1171,10 @@ public sealed partial class Colonist
                 sim.AddWorkers(batch.Recipe, batch.Units, Position, Faction);
                 Finish();
                 return;
+            case ItemKind.Machine:
+                sim.AddMachines(batch.Recipe, batch.Units, Position, Faction);
+                Finish();
+                return;
         }
         CarryingType = batch.Recipe.Output;
         CarryingCount = batch.OutCount;
@@ -1285,6 +1304,7 @@ public sealed partial class Colonist
         WorkDone = 0;
         // Mood sets the pace of real work (not of sleeping, eating or the long sleep sentinel).
         if (ticks != int.MaxValue && Task is not (ColonistTask.Eat or ColonistTask.Sleep)) ticks = (int)MathF.Round(ticks / WorkSpeed);
+        if (Machine == MachineKind.Excavator && Task == ColonistTask.Designation) ticks = Math.Max(1, (int)MathF.Round(ticks / Balance.ExcavatorDigSpeed));
         WorkRequired = Math.Max(1, ticks);
     }
 
@@ -1292,15 +1312,16 @@ public sealed partial class Colonist
     {
         int taken = sim.Items.TakeReserved(_haul.Source, _haul.Amount);
         if (taken < _haul.Amount) sim.Items.ReleaseIncoming(_haul.Destination, _haul.Amount - taken);
-        if (taken == 0)
+        int spill = PickUpSpill(sim, taken, sim.Connectivity.ComponentOf(Position)); // a wagon's extra units, for the cells round its stop
+        if (taken + spill == 0)
         {
             Finish(); // someone or something moved the pile; nothing to carry
             return;
         }
         CarryingType = _haul.Type;
         int component = sim.Connectivity.ComponentOf(Position);
-        taken += TopUp(sim, _haul.Source, _haul.Destination, _haul.Type, taken, component);
-        CarryingCount = taken;
+        if (!IsMachine) taken += TopUp(sim, _haul.Source, _haul.Destination, _haul.Type, taken, component);
+        CarryingCount = taken + spill;
         _haul = _haul with { Amount = taken };
 
         var path = Route(sim, ReachableAround(sim, _haul.Destination, component), _haul.Destination);
@@ -1343,7 +1364,12 @@ public sealed partial class Colonist
     /// <summary>How far round a picked-up pile a hauler gathers more of the same (Chebyshev tiles, same level).</summary>
     private const int TopUpReach = 2;
 
-    private void Deliver(ColonySim sim) => Deliver(sim, _haul.Destination);
+    private void Deliver(ColonySim sim)
+    {
+        if (_spill.Count > 0) DeliverSpill(sim);
+        if (Machine == MachineKind.PowerWagon) BurnFuel(sim, Balance.WagonFuelPerTrip);
+        Deliver(sim, _haul.Destination);
+    }
 
     /// <summary>Puts the load into <paramref name="destination"/> (whose incoming reservation it fills); spills the rest.</summary>
     private void Deliver(ColonySim sim, TilePos destination)
@@ -1377,9 +1403,11 @@ public sealed partial class Colonist
             case ColonistTask.HaulPickup:
                 sim.Items.Unreserve(_haul.Source, _haul.Amount);
                 sim.Items.ReleaseIncoming(_haul.Destination, _haul.Amount);
+                ReleaseSpill(sim, source: true);
                 break;
             case ColonistTask.HaulDeliver:
                 sim.Items.ReleaseIncoming(_haul.Destination, _haul.Amount);
+                ReleaseSpill(sim, source: false);
                 break;
             case ColonistTask.TradePickup:
                 sim.Items.Unreserve(_trade.Source, _trade.Amount);
@@ -1577,6 +1605,8 @@ public sealed partial class Colonist
         w.Write(Happiness); w.Write(UnhappyDays); w.Write(Rest); w.Write(LastTreat); w.Write(WorkTicks); w.Write(PreferredTicks);
         w.Write(CarryingType.Index);
         SnapSaveCombat(w);
+        w.Write((byte)Machine);
+        w.Write(Fuel);
     }
 
     /// <summary>Reads a colonist; its spouse is linked afterwards (by id) and its home by the housing.</summary>
@@ -1598,6 +1628,11 @@ public sealed partial class Colonist
         c.WorkTicks = r.ReadInt32(); c.PreferredTicks = r.ReadInt32();
         c.CarryingType = new ItemType(r.ReadUInt16());
         c.SnapLoadCombat(r);
+        if (!Net.SnapIO.Before(9))
+        {
+            c.Machine = (MachineKind)r.ReadByte();
+            c.Fuel = r.ReadInt32();
+        }
         return (c, spouse);
     }
 }

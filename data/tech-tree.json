@@ -28,6 +28,7 @@
     "culture": "Fine goods & art",
     "knowledge": "Knowledge & education",
     "military": "Arms & armour",
+    "machine": "Heavy machinery",
     "wonder": "Wonders"
   },
   "workshops": [
@@ -74,11 +75,11 @@
         { "id": "anvil", "name": "Anvil", "build": ["stone", "iron_ingot", "steel"] },
         { "id": "rolling_mill", "name": "Rolling & drawing mill", "build": ["planks", "iron_ingot", "steel"] } ],
       "later": ["nails", "hinges", "chains", "coinage"] },
-    { "id": "artificer", "name": "Artificer's Workshop", "color": "#4fc4b8", "about": "Precision mechanisms up to the colony's greatest machines.",
+    { "id": "artificer", "name": "Artificer's Workshop", "color": "#4fc4b8", "about": "Precision mechanisms up to the colony's greatest machines: steam engines, excavators and power wagons.",
       "stations": [
         { "id": "tinker_bench", "name": "Tinker's bench", "build": ["planks", "bronze"] },
         { "id": "assembly_frame", "name": "Assembly frame", "build": ["planks", "steel"] } ],
-      "later": ["music boxes", "clocks", "automatic looms", "conveyors", "airships"] },
+      "later": ["music boxes", "clocks", "automatic looms", "conveyors", "airships", "steam tractors", "ore crushers"] },
     { "id": "alchemy", "name": "Alchemist's Laboratory", "color": "#9a6cf0", "about": "Remedies first, then the arcane: quicksilver, glimmer, crystals and the Great Work.",
       "stations": [
         { "id": "alembic", "name": "Alembic", "build": ["stone", "glass"] },
@@ -214,6 +215,10 @@
     { "id": "iron_shield", "name": "Iron Shield", "category": "military", "weight": 5, "gear": "shield", "block": 40, "uses": ["shield: blocks two blows in five (not with two-handed arms)"], "model": "armor", "color": "#6b6b73" },
 
     { "id": "automaton", "name": "Automaton", "category": "wonder", "kind": "worker", "uses": ["tireless workers (unskilled labour)"], "model": "statue", "color": "#c7903a" },
+    { "id": "steam_engine", "name": "Steam Engine", "category": "mechanism", "weight": 40, "uses": ["heavy machinery"], "model": "gears", "color": "#7a4a2a" },
+    { "id": "drill_head", "name": "Drill Head", "category": "component", "weight": 15, "uses": ["excavators"], "model": "springs", "color": "#9aa0aa" },
+    { "id": "excavator", "name": "Excavator", "category": "machine", "kind": "machine", "uses": ["digs and carves stairs five times as fast as a miner, in any rock; burns charcoal"], "model": "crates", "color": "#c86a2a" },
+    { "id": "power_wagon", "name": "Power Wagon", "category": "machine", "kind": "machine", "uses": ["hauls eight loads a trip to stockpiles; burns charcoal"], "model": "crates", "color": "#b08a3a" },
     { "id": "power_armor", "name": "Ironclad Power Armour", "category": "wonder", "weight": 20, "gear": "body", "protect": 7, "uses": ["elite guard: takes 7 off every hit"], "model": "armor", "color": "#5c6b80" },
     { "id": "farseer_orb", "name": "Farseer Orb", "category": "wonder", "uses": ["see distant lands (exploration, diplomacy)", "Academy aux part (faster teaching)"], "model": "orb", "color": "#80c7ff" },
     { "id": "orrery", "name": "Grand Orrery", "category": "wonder", "uses": ["prestige", "Academy aux part (observatory)"], "model": "orrery", "color": "#e6b84d" },
@@ -300,6 +305,10 @@
     { "output": "aether_cell", "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["aether_ingot", "resonant_crystal", "wire*2"] },
     { "output": "automaton_core", "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["clockwork", "aether_cell", "runestones"] },
     { "output": "automaton", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["automaton_core", "steel_plate*3", "clockwork*2"] },
+    { "output": "steam_engine", "ticks": 600, "workshop": "artificer", "station": "assembly_frame", "education": "Literate", "inputs": ["iron_ingot*4", "steel_plate*2", "cogs*3"] },
+    { "output": "drill_head", "workshop": "forge", "station": "anvil", "education": "Literate", "inputs": ["steel*3"] },
+    { "output": "excavator", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Literate", "inputs": ["steam_engine", "drill_head", "steel_plate*4"] },
+    { "output": "power_wagon", "ticks": 600, "workshop": "artificer", "station": "assembly_frame", "education": "Literate", "inputs": ["steam_engine", "planks*4", "iron_ingot*2"] },
     { "output": "power_armor", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["plate_armor", "aether_cell", "clockwork"] },
 
     { "output": "tinctures", "workshop": "alchemy", "station": "alembic", "education": "Literate", "inputs": ["herbs*2", "glass"] },

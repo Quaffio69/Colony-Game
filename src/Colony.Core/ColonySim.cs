@@ -587,6 +587,26 @@ public sealed partial class ColonySim
         }
     }
 
+    /// <summary>Machines (excavator, power wagon) roll off the assembly frame, fuelled and set to their one trade.</summary>
+    internal void AddMachines(Recipe recipe, int units, TilePos at, int faction = 0)
+    {
+        var kind = Agents.MachineInfo.Of(recipe.Output.Id);
+        if (kind == Agents.MachineKind.None) throw new InvalidOperationException($"'{recipe.Output.Id}' is no machine");
+        for (int i = 0; i < units; i++) AddMachine(kind, at, faction);
+    }
+
+    /// <summary>Adds a machine of a kind to a colony (named "Excavator 2" ...), full of fuel.</summary>
+    public Colonist AddMachine(Agents.MachineKind kind, TilePos at, int faction = 0)
+    {
+        int n = _colonists.Count(c => c.Machine == kind) + _arriving.Count(c => c.Machine == kind) + 1;
+        string name = $"{Agents.MachineInfo.Name(kind)} {n}";
+        var c = AddColonist(name, at, automaton: true, faction: faction);
+        c.Machine = kind;
+        c.SetUpMachine();
+        Announce($"{name} rolls out of the workshop, fired up and ready", faction);
+        return c;
+    }
+
     private int _eventRoomsVersion = -1;
 
     /// <summary>

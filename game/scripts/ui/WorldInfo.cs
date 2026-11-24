@@ -53,6 +53,9 @@ public static class WorldInfo
                 string food = c.IsAutomaton ? "" : c.Starving ? " · starving" : c.Hungry ? " · hungry" : " · fed";
                 string mood = c.IsAutomaton ? "" : $" · mood {c.Happiness:P0}";
                 card.Add("♥", Tok("bad"), c.Downed ? "struck down" : $"health {c.Health}/{Colonist.MaxHealth}{food}{mood}", c.Downed || c.Starving ? "Bad" : "Text");
+                if (c.IsMachine)
+                    card.Add("☼", Tok("warn"), $"fuel {c.Fuel * 100 / Colonist.FuelCapacity}%" + (c.OutOfFuel ? " · out: it needs charcoal in reach" : c.LowOnFuel ? " · low: going for charcoal" : ""),
+                        c.OutOfFuel ? "Bad" : "Dim");
                 if (c.CarryingCount > 0) card.Add("•", ItemLook.Color(c.CarryingType), $"carrying {c.CarryingCount} {c.CarryingType.Name.ToLowerInvariant()}", "Dim");
                 card.Hint = "click: details · Colonists (C)";
                 break;

@@ -125,7 +125,7 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [x] Haulers carry more per trip: items have weights and a colonist lifts 30 kg (6 logs, 10 stone, 60 herbs), topped up from small piles beside; trees give fewer logs. Carts and heavy machinery are the way to carry more later.
 
 ### New features
-- [ ] Heavy machinery for digging, hauling etc., built in a workshop.
+- [x] Heavy machinery, built in a workshop: a steam excavator (digs 5x as fast) and a power wagon (8 loads a trip), burning charcoal. Machines are never drafted. Next: more machines (ore crusher, steam tractor), repairs and wear, conveyors.
 - [ ] Nobility: managers over aspects of production and people.
 - [ ] Colonist inventory: pack meals to eat away from stores.
 - [ ] Pollution.

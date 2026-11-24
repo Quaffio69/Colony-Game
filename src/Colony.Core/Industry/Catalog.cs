@@ -87,6 +87,7 @@ public static class Catalog
                     null => ItemKind.Good,
                     "education" => ItemKind.Education,
                     "worker" => ItemKind.Worker,
+                    "machine" => ItemKind.Machine,
                     var k => throw Bad($"item '{id}': unknown kind '{k}'"),
                 },
                 Model = Opt(e, "model") ?? "crates",
