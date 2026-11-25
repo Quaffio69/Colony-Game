@@ -27,6 +27,9 @@ public partial class WaterView : Node3D
 {
     // Meshing runs on worker threads from main-thread snapshots (Capture); finished meshes upload within a budget.
     private const double UploadBudgetMs = 1.5, CaptureBudgetMs = 1.0;
+    /// <summary>Wet water (a sheet thinning towards a draining edge can be a few thousandths of a level) is drawn at least
+    /// this deep, so it shows instead of vanishing into the ground's top face.</summary>
+    private const float MinDrawnDepth = 0.04f;
     private const float FarTiles = 256f;              // beyond this from the camera, changed sections wait...
     private const double FarRefreshSeconds = 3.0;     // ...this long between rebuilds
     private static readonly int MaxInFlight = Math.Max(2, System.Environment.ProcessorCount - 2);
@@ -395,7 +398,8 @@ public partial class WaterView : Node3D
                 var (floor, ceil, surface) = water.Span(x, y, k);
                 snap.Floor.Add(floor);
                 snap.Ceil.Add(ceil);
-                snap.Surface.Add(surface ?? float.NaN);
+                // The thinnest film the sim counts as wet is drawn at least MinDrawnDepth deep (clear of the ground's face).
+                snap.Surface.Add(surface is { } sf ? MathF.Max(sf, floor + MinDrawnDepth) : float.NaN);
                 var (fx, fy) = inner && surface != null ? water.FlowAt(x, y, floor) : (0f, 0f);
                 snap.FlowX.Add(fx);
                 snap.FlowY.Add(fy);
@@ -452,7 +456,6 @@ public partial class WaterView : Node3D
                 float h = w.Surface[s];
                 if (float.IsNaN(h)) continue;
                 float depth = h - floor;
-                if (depth < 0.02f) continue;
                 var flow = new Vector2(w.FlowX[s], w.FlowY[s]);
                 // Sides first: where the water beside is lower (or absent), and whether it pours over the edge.
                 bool pours = false;

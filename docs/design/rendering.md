@@ -83,7 +83,8 @@ The Dwarf Render kit integration (pixel art, glyph ids, ASCII zoom), the graphic
   zoom stays relative to what's on screen when levels are peeled away.
 
 - **Water rendering:** sections of 2x2 water blocks (32x32 columns, all levels). Each wet span gets a surface at
-  its height with corners averaged with neighbouring columns within half a level (smooth sloping rivers), and
+  its height (at least `MinDrawnDepth`, 0.04 levels, above its floor: the thinnest film the sim counts as wet still
+  shows) with corners averaged with neighbouring columns within half a level (smooth sloping rivers), and
   side faces where the water beside is lower (falls; foamy). A block's version only bumps when a span's water
   moves a sixteenth of a level from what was last drawn (hysteresis). Meshing runs on worker threads from main-thread
   span snapshots (`Capture`: a section plus a border column; every open cell is in some span, so solidity comes from
