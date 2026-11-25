@@ -158,8 +158,9 @@ public sealed class Water
 
     public int MassAt(TilePos p) => MassAt(p.X, p.Y, p.Z);
     public bool IsWet(TilePos p) => MassAt(p) >= MinMass;
-    /// <summary>A cell's water in sevenths (DF-style 1..7, 0 = dry).</summary>
-    public int Level(TilePos p) => Math.Min(7, (MassAt(p) * 7 + Full / 2) / Full);
+    /// <summary>A cell's water in sevenths (DF-style 1..7, 0 = dry): any wet cell (<see cref="MinMass"/>+) reads at least 1, so a
+    /// thin film (a sheet spreading over flat ground towards the map's draining border) doesn't read as "0/7".</summary>
+    public int Level(TilePos p) => MassAt(p) is var m and >= MinMass ? Math.Clamp((m * 7 + Full / 2) / Full, 1, 7) : 0;
 
     /// <summary>Height of the water surface (in levels) in the open space containing the cell, or null if it's dry.</summary>
     public float? SurfaceAt(int x, int y, int z)

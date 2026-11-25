@@ -515,3 +515,21 @@ public class WaterTests
         Assert.DoesNotContain(falls, f => f.X < 11); // the shelf itself is level: no falls on it
     }
 }
+
+public class WaterLevelTests
+{
+    [Fact]
+    public void AThinFilm_ReadsOneSeventh_NotZero()
+    {
+        var w = new VoxelWorld(32, 32, 16);
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 32; x++) for (int z = 0; z <= 2; z++) w.Set(x, y, z, TileType.Stone);
+        var sim = new ColonySim(w);
+        var cell = new TilePos(10, 10, 3);
+        Assert.Equal(0, sim.Water.Level(cell)); // dry
+        sim.Water.Add(cell, Fluids.Water.Full / 20); // a twentieth of a level: well under half a seventh
+        Assert.True(sim.Water.IsWet(cell));
+        Assert.Equal(1, sim.Water.Level(cell));
+        sim.Water.Add(cell, Fluids.Water.Full);
+        Assert.Equal(7, sim.Water.Level(cell));
+    }
+}
