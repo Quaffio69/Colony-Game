@@ -54,8 +54,13 @@ public static class WorldInfo
                 string mood = c.IsAutomaton ? "" : $" · mood {c.Happiness:P0}";
                 card.Add("♥", Tok("bad"), c.Downed ? "struck down" : $"health {c.Health}/{Colonist.MaxHealth}{food}{mood}", c.Downed || c.Starving ? "Bad" : "Text");
                 if (c.IsMachine)
-                    card.Add("☼", Tok("warn"), $"fuel {c.Fuel * 100 / Colonist.FuelCapacity}%" + (c.OutOfFuel ? " · out: it needs charcoal in reach" : c.LowOnFuel ? " · low: going for charcoal" : ""),
+                {
+                    card.Add("☼", Tok("warn"), $"fuel {c.Fuel * 100 / Colonist.FuelCapacity}%" + (c.OutOfFuel ? " · out: a driver needs charcoal in reach" : c.LowOnFuel ? " · low: its driver will stoke it" : ""),
                         c.OutOfFuel ? "Bad" : "Dim");
+                    card.Add("☺", Tok("hi"), c.Driver is { } d ? $"driven by {d.Name}" : c.ComingToDrive is { } w ? $"{w.Name} is coming to drive it" : "parked: a miner or hauler drives it when the work pays", "Dim");
+                }
+                else if (c.Vehicle is { } v)
+                    card.Add("☼", Tok("warn"), $"driving {v.Name} (fuel {v.Fuel * 100 / Colonist.FuelCapacity}%)", "Dim");
                 if (c.CarryingCount > 0) card.Add("•", ItemLook.Color(c.CarryingType), $"carrying {c.CarryingCount} {c.CarryingType.Name.ToLowerInvariant()}", "Dim");
                 card.Hint = "click: details · Colonists (C)";
                 break;

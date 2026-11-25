@@ -35,7 +35,7 @@ public static class StateHash
             sim.World.UnseenCells, sim.DevMode ? 1 : 0, sim.DevInstantOrders ? 1 : 0);
         foreach (var c in sim.Colonists)
             sum += Of(1, c.Id, Pos(c.Position), (long)c.Task, (long)c.State, c.Satiety, (long)(c.Rest * 1000), c.Faction, c.CarryingCount, c.Education,
-                c.Health, c.Downed ? 1 : 0, c.Drafted ? 1 : 0, c.Weapon?.Index ?? -1, c.Armour?.Index ?? -1, c.Shield?.Index ?? -1, (long)c.Machine, c.Fuel);
+                c.Health, c.Downed ? 1 : 0, c.Drafted ? 1 : 0, c.Weapon?.Index ?? -1, c.Armour?.Index ?? -1, c.Shield?.Index ?? -1, (long)c.Machine, c.Fuel, c.Vehicle?.Id ?? -1);
         foreach (var (p, pile) in sim.Items.All)
             sum += Of(2, Pos(p), pile.Type.Index, pile.Count, pile.Reserved);
         foreach (var (p, kind) in sim.Designations.All)

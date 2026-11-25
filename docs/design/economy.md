@@ -111,17 +111,39 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
 - **Heavy machinery (`Agents.MachineKind`, `Agents/ColonistMachine.cs`):** dwarven steam engines built at the artificer's
   assembly frame (Literate): a steam engine (4 iron ingots, 2 steel plate, 3 cogs), then the **excavator** (engine, a steel
   bucket forged from 3 steel, 4 steel plate) or the **power wagon** (engine, 4 planks, 2 iron ingots). Items of kind
-  "machine" (`ItemKind.Machine`) roll out of the workshop as machines (`ColonySim.AddMachines`/`AddMachine`): colonists
-  with `Machine` set and `IsAutomaton` (no needs, homes, families, schooling or drafting), named "Excavator 2" etc., with
-  one trade at priority 1 (`SetUpMachine`; `SetPriority` keeps every other work at 0). The excavator takes only dig and
-  stair orders and works them `Balance.ExcavatorDigSpeed` (5x) as fast in any rock, but crawls (`ExcavatorStepScale` 1.6);
-  the wagon only hauls, rolls faster (0.7) and carries `WagonLoads` (8) colonist loads: a haul to a stockpile reserves more
-  of the source pile plus room in the stockpile cells round the destination (`WagonReach` 3, same level and colony), and
-  at pickup gathers the same item from loose piles round it into more room (`ExtendLoad`, `PickUpSpill`, `DeliverSpill`;
-  every reservation is released on abandon). **Fuel:** charcoal. A firebox holds `FuelCharcoalLoad` (12) charcoal of
-  `FuelPerCharcoal` (10) work; a dig costs 2, a wagon trip 3. Below a quarter a machine goes for charcoal like a meal
-  (`TryRefuel`, the Eat task; `FinishMeal` stokes); empty, it stands idle ("out of fuel"). Fuel only burns while needs
-  run (sandboxes are free). Snapshot version 9 (kind, fuel), `StateHash`. **Look (`ColonistView`):** the excavator on
-  iron tracks, its house turning on a slew ring (cab, copper boiler, smokestack, glowing firebox, counterweight), a brass boom and stick with steam rams and a toothed bucket that scoops while it digs; the wagon
-  a plank bed on four wheels with a boiler up front and its load heaped in the bed; both turn to face where they drive and
-  stand 1.3x a person. Hover card: fuel. `--machines-demo` shows both at work.
+  "machine" (`ItemKind.Machine`) roll out of the workshop as machines (`ColonySim.AddMachines`/`AddMachine`): entities
+  with `Machine` set and `IsAutomaton`, named "Excavator 2" etc., that **never work by themselves** (no priorities;
+  `ColonySim.Machines` lists them, rebuilt when the roster changes). **Driven by colonists**, like a scaffold fetched for a
+  high job: a colonist taking a dig/stair order (Mining) or a haul (Hauling) may first claim a free machine of its colony in
+  its component (task `Board`, the job claimed or reserved meanwhile), walk to it, climb in (`MachineBoardTicks` 40) and
+  drive it on to the job (`FinishBoarding`). Aboard (`Vehicle`; the machine's `Driver`), it steps at the machine's pace,
+  the excavator digs `Balance.ExcavatorDigSpeed` (5x) as fast in any rock but crawls (`ExcavatorStepScale` 1.6), the wagon
+  rolls faster (0.7) and carries `WagonLoads` (8) colonist loads; the machine follows its driver (`SyncVehicle`). A driver
+  takes only the machine's trade (whatever its other priorities: it got in for that work, and gets out when it runs out)
+  and no scaffold jobs. It **parks** where it stands (`Park`) when nothing is worth driving to, or as soon as its task has
+  nothing to do with the machine (a meal, bed, a fight, a draft, struck down), then leaves machines be for
+  `MachineRestTicks` (300). **Is it worth fetching?** Judged on the run of work the machine would do before its driver gets
+  out, not one job: the excavator against digging by hand, counting the open unclaimed dig/stair orders within
+  `MachineClusterReach` (8) tiles and `ExcavatorClusterLevels` (2) levels of the job, capped at `ExcavatorSessionJobs` (40)
+  (`ExcavatorDigCost` vs `HandDigCost`: walk to it, climb in, crawl it over, then each job dug fast with a crawl between);
+  the wagon against carrying by hand, counting the haul's pile plus loose goods of its kind round it, capped at
+  `WagonSessionLoads` (3) wagon loads, a whole wagon load only into a stockpile (`WagonHaulCost` vs `HandHaulCost`). Steps
+  are straight-line (|dx| + |dy| + 2|dz|); the cheapest machine that beats walking wins, and the most a full session could
+  save is checked before the orders are counted. So a single far tile is dug by hand and the excavator stays put, while a
+  big excavation fetches it from across the map; and since a parked machine stands where its work was, it is beside the
+  next dig there. The same test without the climb in (`ExcavatorStays`) decides whether a driver crawls on to the next dig
+  or gets out, so the two never disagree; a wagon driver always drives on while there is hauling (it is faster than
+  walking). The wagon: a haul to a stockpile reserves more of the source pile plus room in the stockpile cells round the
+  destination (`WagonReach` 3, same level and colony), and at pickup gathers the same item from loose piles round it into
+  more room (`ExtendLoad`, `PickUpSpill`, `DeliverSpill`; every reservation is released on abandon). **Fuel:** charcoal. A
+  firebox holds `FuelCharcoalLoad` (12) charcoal of `FuelPerCharcoal` (10) work; a dig costs 2, a wagon trip 3. Below a
+  quarter the driver drives it to the nearest usable charcoal and stokes it (task `Stoke`, `TendVehicle`); empty with none
+  to be had, it is parked and left a while, and an empty machine is only fetched while charcoal lies somewhere. Fuel only
+  burns while needs run (sandboxes are free). Snapshot version 9 (kind, fuel), 12 (who drives which; a walk to a machine
+  is let go on settle), `StateHash`. **Look (`ColonistView`):** the excavator on iron tracks, its house turning on a slew
+  ring (cab, copper boiler, smokestack, glowing firebox, counterweight), a brass boom and stick with steam rams and a
+  toothed bucket that scoops while it digs; the wagon a plank bed on four wheels with a boiler up front and its driver's
+  load heaped in the bed; both turn to face where they are driven and stand 1.3x a person. A driver vanishes into its
+  machine: a small figure in its colour in the cab's roof hatch (on the wagon's footplate), its name on the machine's tag
+  ("Excavator 1 · Edric"). Hover card: fuel and who drives it; machines are left out of the work grid. `--machines-demo`
+  shows both at work.

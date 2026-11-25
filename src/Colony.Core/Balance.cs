@@ -126,6 +126,17 @@ public static class Balance
     /// <see cref="ExcavatorFuelPerDig"/>, a trip costs the wagon <see cref="WagonFuelPerTrip"/>: a load of charcoal digs
     /// ~60 tiles or hauls ~40 loads.</summary>
     public const int FuelPerCharcoal = 10, FuelCharcoalLoad = 12, ExcavatorFuelPerDig = 2, WagonFuelPerTrip = 3;
+    /// <summary>Machines are driven: ticks for a colonist to climb in and get the fire up (getting out is free).</summary>
+    public const int MachineBoardTicks = 40;
+    /// <summary>
+    /// Whether a machine is worth fetching is judged on the work it would do before its driver gets out, not one job:
+    /// the open dig orders within <see cref="MachineClusterReach"/> tiles (and <see cref="ExcavatorClusterLevels"/>
+    /// levels) of the job, at most <see cref="ExcavatorSessionJobs"/>; for the wagon, the loose goods of the kind round
+    /// the haul's pickup, at most <see cref="WagonSessionLoads"/> wagon loads.
+    /// </summary>
+    public const int MachineClusterReach = 8, ExcavatorClusterLevels = 2, ExcavatorSessionJobs = 40, WagonSessionLoads = 3;
+    /// <summary>Ticks a colonist that just got out of a machine leaves it be (so it doesn't hop straight back in).</summary>
+    public const int MachineRestTicks = 300;
 
     // ---- Wildlife (giant ant nests) ------------------------------------------------------------------------------
 

@@ -27,6 +27,22 @@ public sealed partial class ColonySim
     public IReadOnlyList<Colonist> Colonists => _colonists;
     public long Tick { get; private set; }
 
+    /// <summary>The machines among the colonists (excavators, power wagons), in colonist order; rebuilt when the roster changes.</summary>
+    internal IReadOnlyList<Colonist> Machines
+    {
+        get
+        {
+            if (_machinesRoster == _roster) return _machines;
+            _machines.Clear();
+            foreach (var c in _colonists)
+                if (c.IsMachine) _machines.Add(c);
+            _machinesRoster = _roster;
+            return _machines;
+        }
+    }
+    private readonly List<Colonist> _machines = new();
+    private int _roster, _machinesRoster = -1;
+
     /// <summary>
     /// Pathfinding nodes colonists may expand per tick before further searches wait for the next tick.
     /// Deterministic (counts nodes, not time), so it never changes outcomes between runs.
@@ -421,7 +437,7 @@ public sealed partial class ColonySim
     {
         var c = new Colonist(ColonistsEver++, name, position, education) { IsAutomaton = automaton, Faction = faction };
         if (_stepping) _arriving.Add(c); // joining mid-tick (e.g. an automaton finished): starts next tick
-        else _colonists.Add(c);
+        else { _colonists.Add(c); _roster++; }
         return c;
     }
 
@@ -474,6 +490,7 @@ public sealed partial class ColonySim
         c.Leave(this);
         c.DropGear(this); // the colony's arms stay with the colony
         _colonists.Remove(c);
+        _roster++;
     }
 
     private readonly List<(Colonist Colonist, string Message)> _dying = new();
@@ -497,6 +514,7 @@ public sealed partial class ColonySim
             if (c.Spouse is { } s && s.Spouse == c) s.Spouse = null;
             c.Spouse = null;
             _colonists.Remove(c);
+            _roster++;
             Deaths++;
             Announce(message, c.Faction);
         }
@@ -590,7 +608,7 @@ public sealed partial class ColonySim
         }
     }
 
-    /// <summary>Machines (excavator, power wagon) roll off the assembly frame, fuelled and set to their one trade.</summary>
+    /// <summary>Machines (excavator, power wagon) roll off the assembly frame fuelled, parked for a colonist to drive.</summary>
     internal void AddMachines(Recipe recipe, int units, TilePos at, int faction = 0)
     {
         var kind = Agents.MachineInfo.Of(recipe.Output.Id);
@@ -661,6 +679,7 @@ public sealed partial class ColonySim
         if (_arriving.Count > 0)
         {
             _colonists.AddRange(_arriving);
+            _roster++;
             _arriving.Clear();
         }
 
@@ -861,10 +880,12 @@ public sealed partial class ColonySim
         {
             var (c, spouse) = Colonist.SnapLoad(r);
             sim._colonists.Add(c);
+            sim._roster++;
             byId[c.Id] = c;
             spouses.Add((c, spouse));
         }
         foreach (var (c, spouse) in spouses) c.Spouse = spouse >= 0 ? byId[spouse] : null;
+        foreach (var c in sim._colonists) c.LinkVehicle(byId); // drivers back in their machines
         Net.SnapIO.Section(r, "factions");
         int nf = r.ReadInt32();
         for (int i = 0; i < nf; i++)

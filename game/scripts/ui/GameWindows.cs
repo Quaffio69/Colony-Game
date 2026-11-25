@@ -130,7 +130,8 @@ public partial class ColonistsWindow : GlyphWindow
     }
 
     public static string Doing(Colonist c) =>
-        c.IsChild && c.Task == ColonistTask.None ? "Playing"
+        c.IsMachine ? (c.Driver != null ? "Driven" : "Parked")
+        : c.IsChild && c.Task == ColonistTask.None ? "Playing"
         : c.CurrentWork is { } w ? Colonist.WorkNames[(int)w]
         : c.Task == ColonistTask.Sleep ? "Sleeping"
         : c.Task == ColonistTask.Eat ? "Eating"
@@ -404,7 +405,7 @@ public partial class InspectorWindow : GlyphWindow
         KV("Armour", c.Armour?.Name ?? "none", c.Armour != null ? "hi" : "faint");
         if (!c.TwoHanded) KV("Shield", c.Shield?.Name ?? "none", c.Shield != null ? "hi" : "faint");
         if (c.Drafted) KV("Drafted", "yes (Military, M)", "bad");
-        if (!c.IsChild)
+        if (!c.IsChild && !c.IsMachine)
         {
             Content.AddChild(G.Gap());
             Content.AddChild(new GlyphSection("Work (J to change)"));

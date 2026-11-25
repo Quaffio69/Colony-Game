@@ -494,12 +494,12 @@ public sealed record SetDrafted(int ColonistId, bool On) : Command
     public override string Apply(ColonySim sim)
     {
         var people = ColonistId < 0
-            ? sim.Colonists.Where(c => c.Faction == Player && !c.IsChild && !c.IsMachine).ToList() // machines dig and haul, they don't fight
+            ? sim.Colonists.Where(c => c.Faction == Player && !c.IsChild && !c.IsMachine).ToList() // machines are driven, they don't fight
             : sim.Colonists.Where(c => c.Id == ColonistId).ToList();
         if (people.Count == 0) return ColonistId < 0 ? "Nobody to draft" : "No such colonist";
         if (ColonistId >= 0 && sim.CanCommand(people[0], Player) is { } why) return why;
         if (ColonistId >= 0 && people[0].IsChild && On) return $"{people[0].Name} is a child";
-        if (ColonistId >= 0 && people[0].IsMachine && On) return $"{people[0].Name} is a machine: it only {(people[0].Machine == MachineKind.Excavator ? "digs" : "hauls")}";
+        if (ColonistId >= 0 && people[0].IsMachine && On) return $"{people[0].Name} is a machine: draft its driver";
         foreach (var c in people) c.SetDrafted(sim, On);
         return ColonistId < 0
             ? On ? $"Drafted {people.Count} colonists: send them with the squad tool (G)" : $"{people.Count} colonists stood down"

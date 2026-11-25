@@ -28,6 +28,9 @@ public partial class ColonistView : Node3D
         public Node3D Root = null!, Body = null!;
         public MeshInstance3D Load = null!, Weapon = null!, Shield = null!, Armour = null!, Bar = null!, Marker = null!, Scaffold = null!;
         public Node3D? Boom, Stick, Bucket; // the excavator's arm (scoops while it digs)
+        public MeshInstance3D? Seat; // a machine's driver, in its colour, while someone drives it
+        public Label3D Tag = null!;
+        public Colonist? ShownDriver;
         public float Heading; // a machine faces where it drives
         public ItemType? ShownWeapon, ShownShield, ShownArmour;
     }
@@ -76,7 +79,7 @@ public partial class ColonistView : Node3D
                 Scale = new Vector3(1, 0.3f, 1),
                 CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             });
-        v.Root.AddChild(new Label3D
+        v.Root.AddChild(v.Tag = new Label3D
         {
             Text = c.Name,
             Billboard = BaseMaterial3D.BillboardModeEnum.Enabled,
@@ -132,6 +135,14 @@ public partial class ColonistView : Node3D
         bool excavator = v.Colonist.Machine == MachineKind.Excavator;
         v.Body.Scale = Vector3.One * 1.3f; // heavy machinery: bigger than a person, still within its cell
         v.Body.AddChild(new MeshInstance3D { Mesh = excavator ? _excavatorMesh ??= BuildExcavator() : _wagonMesh ??= BuildWagon() });
+        // Its driver: head and shoulders out of the cab's roof hatch, or standing on the wagon's footplate behind the boiler.
+        v.Seat = new MeshInstance3D
+        {
+            Mesh = new CapsuleMesh { Radius = 0.065f, Height = 0.26f },
+            Position = excavator ? new Vector3(0.14f, 0.66f, -0.13f) : new Vector3(-0.34f, 0.47f, 0),
+            Visible = false,
+        };
+        v.Body.AddChild(v.Seat);
         if (!excavator) return;
         // Boom -> stick -> bucket, each a pivot turned about the side (z) axis, mounted beside the cab.
         v.Boom = new Node3D { Position = new Vector3(0.14f, 0.42f, 0.08f), Rotation = new Vector3(0, 0, BoomRest) };
@@ -315,6 +326,11 @@ public partial class ColonistView : Node3D
         foreach (var v in _views)
         {
             var c = v.Colonist;
+            if (c.Vehicle != null)
+            {
+                v.Root.Visible = false; // in its machine (drawn there, with its name on the machine's tag)
+                continue;
+            }
             var pos = Foot(c.Position);
             if (c.NextStep is { } next) pos = pos.Lerp(Foot(next), c.StepProgress);
 
@@ -340,11 +356,21 @@ public partial class ColonistView : Node3D
 
             if (c.IsMachine)
             {
-                // Machines turn to face where they drive (or what they dig), and the excavator's arm scoops while it digs.
-                Vector3? toward = c.NextStep is { } ns ? Foot(ns) - Foot(c.Position) : c.State == ColonistState.Working && c.JobTarget is { } jt ? SimSpace.TileCenter(jt) - pos : null;
+                // Machines turn to face where they're driven (or what they dig), and the excavator's arm scoops while it digs.
+                var op = c.Driver;
+                bool working = op is { State: ColonistState.Working } && !c.Downed;
+                Vector3? toward = c.NextStep is { } ns ? Foot(ns) - Foot(c.Position) : working && op!.JobTarget is { } jt ? SimSpace.TileCenter(jt) - pos : null;
                 if (toward is { } d && new Vector2(d.X, d.Z).LengthSquared() > 0.001f) v.Heading = Mathf.LerpAngle(v.Heading, Mathf.Atan2(-d.Z, d.X), Mathf.Min(1f, (float)delta * 8f));
                 v.Body.Rotation = new Vector3(0, v.Heading, 0);
-                if (v.Boom != null) Scoop(v, c.State == ColonistState.Working && !c.Downed, (float)delta);
+                if (v.Boom != null) Scoop(v, working && op!.Task == ColonistTask.Designation, (float)delta);
+                if (op != v.ShownDriver)
+                {
+                    v.ShownDriver = op;
+                    v.Tag.Text = op is null ? c.Name : $"{c.Name} · {op.Name}";
+                    v.Seat!.Visible = op != null;
+                    if (op != null)
+                        v.Seat.MaterialOverride = new StandardMaterial3D { AlbedoColor = Color.FromHsv(Colony.Core.Procedural.Noise.Hash(op.Id, 0, 0, 4242), 0.65f, 0.9f), Roughness = 0.6f };
+                }
             }
             v.Root.Position = pos;
             v.Root.Scale = Vector3.One * (c.IsChild ? 0.6f : 1f);
@@ -357,10 +383,11 @@ public partial class ColonistView : Node3D
             v.Body.Position = c.Downed ? new Vector3(-0.35f, 0.22f, 0) : new Vector3(0, scaffold > 0.01f ? scaffold * 1.02f : 0, 0);
             v.Weapon.Rotation = new Vector3(0, 0, swinging ? -1.2f * (1 - since / 8f) : 0.15f);
 
-            // Carried load: a box on the head, coloured by item type.
-            v.Load.Visible = c.CarryingCount > 0 && !c.Downed;
-            if (v.Load.Visible && (v.Load.MaterialOverride as StandardMaterial3D)?.AlbedoColor != ItemView.ItemColor(c.CarryingType))
-                v.Load.MaterialOverride = new StandardMaterial3D { AlbedoColor = ItemView.ItemColor(c.CarryingType) };
+            // Carried load: a box on the head, coloured by item type (a wagon's driver's load heaped in its bed).
+            var carrier = c.IsMachine ? c.Driver : c;
+            v.Load.Visible = carrier is { CarryingCount: > 0 } && !c.Downed;
+            if (v.Load.Visible && (v.Load.MaterialOverride as StandardMaterial3D)?.AlbedoColor != ItemView.ItemColor(carrier!.CarryingType))
+                v.Load.MaterialOverride = new StandardMaterial3D { AlbedoColor = ItemView.ItemColor(carrier.CarryingType) };
             ShowGear(v.Weapon, c.Weapon, ref v.ShownWeapon, metal: 0.7f);
             ShowGear(v.Shield, c.TwoHanded ? null : c.Shield, ref v.ShownShield, metal: 0.4f);
             ShowGear(v.Armour, c.Armour, ref v.ShownArmour, metal: 0.5f);

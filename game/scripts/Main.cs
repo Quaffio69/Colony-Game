@@ -804,7 +804,7 @@ public partial class Main : Node3D
         int ticks = int.TryParse(Arg("--machines-ticks"), out int t) ? t : 500;
         for (int i = 0; i < ticks; i++) _sim.Step();
         int stored = _sim.Stockpiles.Cells.Sum(s => _sim.Items.TryGet(s, out var p) && p.Type == Colony.Core.Items.ItemType.Stone ? p.Count : 0);
-        GD.Print($"[machines-demo] {ex.Name}: {ex.Describe()}, fuel {ex.Fuel}; {wagon.Name}: {wagon.Describe()}, carrying {wagon.CarryingCount}; stone stockpiled {stored}; orders left {_sim.Designations.Count}");
+        GD.Print($"[machines-demo] {ex.Name}: {ex.Describe()}, fuel {ex.Fuel}; {wagon.Name}: {wagon.Describe()}, carrying {wagon.Driver?.CarryingCount ?? 0}; stone stockpiled {stored}; orders left {_sim.Designations.Count}");
         _world.ViewLevel = g + 1;
         _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 7, c.Y, g + 1)), float.TryParse(Arg("--machines-zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z0) ? z0 : 14f, yaw: 215f, pitch: -42f);
     }

@@ -9,7 +9,7 @@ namespace Colony.Core.Agents;
 public enum ColonistState { Idle, Moving, Working }
 
 /// <summary>What a colonist is doing beyond walking: a designation, one leg of a haul trip, factory work, or a meal.</summary>
-public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver, Equip, Fight, Flee, Rally, ScaffoldFetch, TradePickup, TradeDeliver }
+public enum ColonistTask { None, Designation, HaulPickup, HaulDeliver, CraftFetch, CraftWork, CraftStore, Build, Eat, Sleep, FurnishPickup, FurnishDeliver, Equip, Fight, Flee, Rally, ScaffoldFetch, TradePickup, TradeDeliver, Board, Stoke }
 
 /// <summary>Broad kinds of work a colonist may prefer (see <see cref="Colonist.Labors"/>); each covers some <see cref="Work"/> types.</summary>
 public enum Labor { Designations, Hauling, Industry }
@@ -151,7 +151,7 @@ public sealed partial class Colonist
     public void SetPriority(Work work, int priority)
     {
         _priority[(int)work] = (byte)Math.Clamp(priority, 0, LowestPriority);
-        if (IsMachine && work != MachineInfo.WorkOf(Machine)) _priority[(int)work] = 0; // a machine has one trade
+        if (IsMachine) _priority[(int)work] = 0; // a machine is driven: no work of its own
         _searchedDesignations = -1; // look again with the new priorities
         _retryDelay = 0;
     }
@@ -182,6 +182,8 @@ public sealed partial class Colonist
         ColonistTask.CraftFetch or ColonistTask.CraftWork or ColonistTask.CraftStore => Work.Industry,
         ColonistTask.HaulPickup or ColonistTask.HaulDeliver or ColonistTask.FurnishPickup or ColonistTask.FurnishDeliver => Work.Hauling,
         ColonistTask.TradePickup or ColonistTask.TradeDeliver => Work.Trading,
+        ColonistTask.Board => _boardThen == ColonistTask.Designation ? WorkOf(_jobKind) : Work.Hauling,
+        ColonistTask.Stoke when _vehicle is { } v => MachineInfo.WorkOf(v.Machine),
         _ => null,
     };
     private DesignationKind _jobKind;
@@ -252,12 +254,6 @@ public sealed partial class Colonist
     private void FinishMeal(ColonySim sim)
     {
         int eaten = sim.Items.TakeReserved(_meal.Cell, _meal.Units);
-        if (IsMachine)
-        {
-            Fuel = Math.Min(FuelCapacity, Fuel + eaten * Balance.FuelPerCharcoal);
-            Finish();
-            return;
-        }
         Satiety += eaten * Needs.MealTicks * Needs.Nutrition(_meal.Type); // a loaf more than fills it: it lasts longer, nothing wasted
         if (eaten > 0 && _meal.Type == FavoriteFood) LastTreat = sim.Tick;
         if (Satiety > 0) StarvingTicks = 0;
@@ -265,7 +261,12 @@ public sealed partial class Colonist
     }
 
     /// <summary>Leaves the colony: lets go of every claim and drops what it carries.</summary>
-    internal void Leave(ColonySim sim) => Abandon(sim);
+    internal void Leave(ColonySim sim)
+    {
+        Abandon(sim);
+        Park(sim);
+        if (_claim is { } driver) driver.LoseVehicle(sim); // a machine broken up under its driver
+    }
 
     // ---- Likes ----------------------------------------------------------------------------------------------
     // Fixed for each colonist (from its id): small pleasures on top of its needs. Meeting one lifts its mood a little;
@@ -477,7 +478,10 @@ public sealed partial class Colonist
 
     public string Describe() =>
         Dead ? "dead" : Downed ? "struck down, recovering" : Task is ColonistTask.Equip or ColonistTask.Fight or ColonistTask.Flee or ColonistTask.Rally ? DescribeCombat()
-        : Drafted ? "drafted" : DescribeWork();
+        : Drafted ? "drafted" : IsMachine ? DescribeMachine()
+        : _aboard && Task == ColonistTask.None ? $"in {_vehicle!.Name}"
+        : _aboard && Task != ColonistTask.Stoke ? $"{DescribeWork()}, driving {_vehicle!.Name}"
+        : DescribeWork();
 
     private string DescribeWork() => (Task, State) switch
     {
@@ -496,8 +500,8 @@ public sealed partial class Colonist
         (ColonistTask.Build, ColonistState.Working) =>
             $"building a {_build.Name.ToLowerInvariant()}{_build.Where} ({WorkDone * 100 / Math.Max(1, WorkRequired)}%)",
         (ColonistTask.Build, _) => $"walking to build a {_build.Name.ToLowerInvariant()}",
-        (ColonistTask.Eat, ColonistState.Working) when IsMachine => "stoking its firebox with charcoal",
-        (ColonistTask.Eat, _) when IsMachine => "going for charcoal",
+        (ColonistTask.Board, _) => DescribeBoarding(),
+        (ColonistTask.Stoke, _) => DescribeStoke(),
         (ColonistTask.Eat, ColonistState.Working) => $"eating {ItemInfo.Name(_meal.Type).ToLowerInvariant()}",
         (ColonistTask.Eat, _) => $"going to eat {ItemInfo.Name(_meal.Type).ToLowerInvariant()}",
         (ColonistTask.Sleep, ColonistState.Working) => Home != null && _sleepRate > Housing.RestRate(null, this) ? "asleep in bed" : "asleep on the floor",
@@ -507,7 +511,6 @@ public sealed partial class Colonist
         (ColonistTask.FurnishDeliver, _) => $"carrying {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {_furnish.Home.Name}",
         (ColonistTask.TradePickup, _) => $"fetching {ItemInfo.Name(_trade.Line.Type).ToLowerInvariant()} sold to {_tradePartner}",
         (ColonistTask.TradeDeliver, _) => $"carrying {CarryingCount} {ItemInfo.Name(CarryingType).ToLowerInvariant()} to {_tradePartner}'s trade depot",
-        _ when OutOfFuel => "out of fuel: needs charcoal in reach",
         _ => "idle",
     };
 
@@ -521,8 +524,18 @@ public sealed partial class Colonist
 
     internal void Tick(ColonySim sim)
     {
+        if (IsMachine)
+        {
+            MachineTick(sim); // driven, not working
+            return;
+        }
+        TickPerson(sim);
+        CheckVehicle(sim);
+    }
+
+    private void TickPerson(ColonySim sim)
+    {
         ApplyGravity(sim);
-        if (_fuelRetry > 0) _fuelRetry--;
         TickHunger(sim);
         TickRest(sim);
         if (TickCombat(sim)) return; // down, drafted, fighting back or fleeing: that is the whole tick
@@ -531,6 +544,8 @@ public sealed partial class Colonist
             Abandon(sim); // cancelled, re-designated, or completed by someone else
         else if (Task == ColonistTask.ScaffoldFetch && !sim.Designations.IsClaimedBy(_scaffoldJob, Id))
             Abandon(sim); // the work it wanted the scaffold for went away
+        else if (Task == ColonistTask.Board && (_vehicle?._claim != this || _boardThen == ColonistTask.Designation && !sim.Designations.IsClaimedBy(_boardJob, Id)))
+            Abandon(sim); // the machine is gone, or the work it wanted the machine for
         else if (Task == ColonistTask.Build && _build.Removed)
             Abandon(sim); // the blueprint was cancelled (or its floor lost)
         else if (Task is ColonistTask.CraftFetch or ColonistTask.CraftWork && _craft.Machine.Removed)
@@ -545,8 +560,7 @@ public sealed partial class Colonist
                     return;
                 }
                 if (Hungry && sim.NeedsEnabled && _foodRetry == 0 && TryEat(sim)) return; // a meal before the next job
-                if (LowOnFuel && TryRefuel(sim)) return; // machines: charcoal before the next job
-                if (OutOfFuel && sim.NeedsEnabled) return; // ... and none at all without it
+                if (!TendVehicle(sim)) return; // drivers: charcoal for the machine before the next job
                 if (Tired && sim.NeedsEnabled && TrySleep(sim)) return; // and bed before work
                 if (IsChild) return; // children don't work (they eat and sleep above)
                 if (NothingNewSinceLastSearch(sim)) return;
@@ -587,8 +601,14 @@ public sealed partial class Colonist
                             return;
                         }
                         sim.CompleteDesignation(JobTarget!.Value);
-                        BurnFuel(sim, Balance.ExcavatorFuelPerDig);
+                        if (Drives == MachineKind.Excavator) BurnFuel(sim, Balance.ExcavatorFuelPerDig);
                         Finish();
+                        break;
+                    case ColonistTask.Board:
+                        FinishBoarding(sim);
+                        break;
+                    case ColonistTask.Stoke:
+                        FinishStoke(sim);
                         break;
                     case ColonistTask.HaulPickup:
                         PickUp(sim);
@@ -655,7 +675,7 @@ public sealed partial class Colonist
             var next = _path.Dequeue();
             if (Movement.MoveCost(sim.World, Position, next) is not { } cost) return MoveResult.Failed; // terrain changed under the path; replan
             NextStep = next;
-            _stepTicksTotal = cost * TicksPerFlatStep * MachineInfo.StepScale(Machine);
+            _stepTicksTotal = cost * TicksPerFlatStep * MachineInfo.StepScale(Drives);
             _stepTicksDone = 0;
         }
 
@@ -700,6 +720,18 @@ public sealed partial class Colonist
         int component = sim.Connectivity.ComponentOf(Position);
         if (component < 0) return;
 
+        if (_aboard)
+        {
+            // Driving: the machine's own trade while that pays (whatever its other priorities: it got in for this work).
+            if (DriveOn(sim, component)) return;
+            if (_deferred)
+            {
+                _searchedDesignations = -1;
+                return;
+            }
+            Park(sim); // nothing worth driving to: out, and on foot from here
+        }
+
         for (int priority = 1; priority <= LowestPriority && !_deferred; priority++)
         foreach (var labor in Labors)
         {
@@ -741,11 +773,13 @@ public sealed partial class Colonist
     private bool TryTakeJob(ColonySim sim, int component, int kinds)
     {
         var orders = sim.Designations;
-        var candidates = sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed, kinds, Filter(sim), scaffolds: sim.AnyScaffold);
+        bool driving = _aboard; // an excavator doesn't climb a scaffold
+        var candidates = sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed, kinds, Filter(sim), scaffolds: !driving && sim.AnyScaffold);
         // Jobs only a scaffold reaches crowd out the rest when there is no scaffold to fetch: look again without them.
         TilePos? scaffold = null;
         if (candidates.Exists(j => Array.IndexOf(j.Components, component) < 0) && (scaffold = NearestScaffold(sim, component)) is null)
             candidates = sim.JobBoard.Candidates(component, Position, orders, CandidatesPerSearch, _pathFailed, kinds, Filter(sim));
+        bool first = true;
         foreach (var job in candidates)
         {
             if (sim.PathBudgetExhausted)
@@ -755,8 +789,15 @@ public sealed partial class Colonist
             }
             if (Array.IndexOf(job.Components, component) < 0)
             {
-                if (scaffold is { } at && TryFetchScaffold(sim, job, at, component)) return true;
+                if (!driving && scaffold is { } at && TryFetchScaffold(sim, job, at, component)) return true;
                 continue;
+            }
+            if (first)
+            {
+                // The nearest job decides the machine: whether to drive on to it, or to fetch one for it.
+                first = false;
+                if (driving && !ExcavatorStays(sim, job)) return false;
+                if (!driving && TryFetchExcavator(sim, job, component)) return true;
             }
             var goals = new HashSet<TilePos>();
             foreach (var s in job.WorkSpots)
@@ -779,6 +820,7 @@ public sealed partial class Colonist
 
     private bool TryHaul(ColonySim sim, int component)
     {
+        bool first = true;
         foreach (var plan in Hauling.Plans(sim.Items, sim.Stockpiles, sim.Rooms, sim.Connectivity, Position, component, _pathFailed, sim.Constructions, Filter(sim)))
         {
             if (sim.PathBudgetExhausted)
@@ -786,30 +828,42 @@ public sealed partial class Colonist
                 _deferred = true;
                 return false;
             }
+            if (first)
+            {
+                first = false; // the nearest haul decides whether a wagon is worth fetching
+                if (TryFetchWagon(sim, plan, component)) return true;
+            }
             var path = Route(sim, ReachableAround(sim, plan.Source, component), plan.Source);
             if (path is null)
             {
                 _pathFailed.Add(plan.Source);
                 continue;
             }
-            if (!sim.Items.Reserve(plan.Source, plan.Amount)) continue;
-            if (!sim.Items.ReserveIncoming(plan.Destination, plan.Type, plan.Amount))
-            {
-                sim.Items.Unreserve(plan.Source, plan.Amount);
-                continue;
-            }
-            _haul = plan;
+            if (!ReserveHaul(sim, plan)) continue;
             ExtendLoad(sim, component);
-            _haulDestination = sim.Rooms.PartAt(plan.Destination) switch
-            {
-                { Built: false } => "a construction site",
-                { Role: PartRole.Input } => "a factory",
-                _ => "stockpile",
-            };
             Begin(ColonistTask.HaulPickup, plan.Source, path);
             return true;
         }
         return false;
+    }
+
+    /// <summary>Takes on a haul plan: its units at the source, room for them at the destination.</summary>
+    private bool ReserveHaul(ColonySim sim, HaulPlan plan)
+    {
+        if (!sim.Items.Reserve(plan.Source, plan.Amount)) return false;
+        if (!sim.Items.ReserveIncoming(plan.Destination, plan.Type, plan.Amount))
+        {
+            sim.Items.Unreserve(plan.Source, plan.Amount);
+            return false;
+        }
+        _haul = plan;
+        _haulDestination = sim.Rooms.PartAt(plan.Destination) switch
+        {
+            { Built: false } => "a construction site",
+            { Role: PartRole.Input } => "a factory",
+            _ => "stockpile",
+        };
+        return true;
     }
 
     /// <summary>
@@ -1240,6 +1294,7 @@ public sealed partial class Colonist
         {
             ColonistTask.CraftWork => _craft.Machine.Cells.Any(c => InReach(Position, c)), // machines can be several tiles long
             ColonistTask.Build => _build.InReach(Position),
+            ColonistTask.Board => _vehicle is { } v && InReach(Position, v.Position), // it may have fallen since
             _ => InReach(ReachFrom, target), // from the cell above when bringing a scaffold
         };
         if (!inReach)
@@ -1291,6 +1346,12 @@ public sealed partial class Colonist
             case ColonistTask.ScaffoldFetch:
                 StartWorking(HandleTicks);
                 break;
+            case ColonistTask.Board:
+                StartWorking(Balance.MachineBoardTicks);
+                break;
+            case ColonistTask.Stoke:
+                StartWorking(Needs.EatTicks);
+                break;
             case ColonistTask.HaulPickup:
             case ColonistTask.HaulDeliver:
             case ColonistTask.TradePickup:
@@ -1309,7 +1370,7 @@ public sealed partial class Colonist
         WorkDone = 0;
         // Mood sets the pace of real work (not of sleeping, eating or the long sleep sentinel).
         if (ticks != int.MaxValue && Task is not (ColonistTask.Eat or ColonistTask.Sleep)) ticks = (int)MathF.Round(ticks / WorkSpeed);
-        if (Machine == MachineKind.Excavator && Task == ColonistTask.Designation) ticks = Math.Max(1, (int)MathF.Round(ticks / Balance.ExcavatorDigSpeed));
+        if (Drives == MachineKind.Excavator && Task == ColonistTask.Designation) ticks = Math.Max(1, (int)MathF.Round(ticks / Balance.ExcavatorDigSpeed));
         WorkRequired = Math.Max(1, ticks);
     }
 
@@ -1325,7 +1386,7 @@ public sealed partial class Colonist
         }
         CarryingType = _haul.Type;
         int component = sim.Connectivity.ComponentOf(Position);
-        if (!IsMachine) taken += TopUp(sim, _haul.Source, _haul.Destination, _haul.Type, taken, component);
+        if (Drives != MachineKind.PowerWagon) taken += TopUp(sim, _haul.Source, _haul.Destination, _haul.Type, taken, component);
         CarryingCount = taken + spill;
         _haul = _haul with { Amount = taken };
 
@@ -1372,7 +1433,7 @@ public sealed partial class Colonist
     private void Deliver(ColonySim sim)
     {
         if (_spill.Count > 0) DeliverSpill(sim);
-        if (Machine == MachineKind.PowerWagon) BurnFuel(sim, Balance.WagonFuelPerTrip);
+        if (Drives == MachineKind.PowerWagon) BurnFuel(sim, Balance.WagonFuelPerTrip);
         Deliver(sim, _haul.Destination);
     }
 
@@ -1450,7 +1511,14 @@ public sealed partial class Colonist
             case ColonistTask.Equip:
                 sim.Items.Unreserve(_equip.Cell, 1);
                 break;
+            case ColonistTask.Board:
+                AbandonBoarding(sim);
+                break;
+            case ColonistTask.Stoke:
+                sim.Items.Unreserve(_stoke.Cell, _stoke.Units);
+                break;
         }
+        if (!_aboard) Park(sim); // a machine it was walking to is free again (aboard, it drives on)
         if (_carried.Count > 0)
         {
             foreach (var (item, n) in _carried) sim.Items.Drop(Position, item, n);
@@ -1594,6 +1662,8 @@ public sealed partial class Colonist
         _haulDestination = "stockpile";
         _scaffold = ScaffoldStep.None;
         _scaffoldSource = _scaffoldJob = default;
+        SettleMachine(); // still in a machine it was driving (that is durable); a machine it was walking to was let go above
+        if (_aboard) SyncVehicle();
         SettleCombat();
         JobTarget = null;
         NextStep = null;
@@ -1613,6 +1683,7 @@ public sealed partial class Colonist
         w.Write((byte)Machine);
         w.Write(Fuel);
         w.Write(MistSweeps);
+        w.Write(_aboard ? _vehicle!.Id : -1);
     }
 
     /// <summary>Reads a colonist; its spouse is linked afterwards (by id) and its home by the housing.</summary>
@@ -1640,6 +1711,7 @@ public sealed partial class Colonist
             c.Fuel = r.ReadInt32();
         }
         if (!Net.SnapIO.Before(11)) c.MistSweeps = r.ReadInt32();
+        if (!Net.SnapIO.Before(12)) c._loadedVehicle = r.ReadInt32(); // linked by id once all are read (LinkVehicle)
         return (c, spouse);
     }
 }

@@ -129,13 +129,13 @@ public partial class WorkWindow : GlyphWindow
 
     public override void Tick()
     {
-        string roster = string.Join(",", _ui.Mine.Select(c => c.Id + (c.IsChild ? "c" : "")));
+        string roster = string.Join(",", _ui.Mine.Where(c => !c.IsMachine).Select(c => c.Id + (c.IsChild ? "c" : "")));
         if (roster != _roster)
         {
             _roster = roster;
             G.Clear(Content);
             _rows.Clear();
-            foreach (var c in _ui.Mine)
+            foreach (var c in _ui.Mine.Where(c => !c.IsMachine)) // machines are driven: no work of their own
             {
                 var row = new GlyphRow();
                 row.AddThemeConstantOverride("separation", 0);
@@ -163,10 +163,10 @@ public partial class WorkWindow : GlyphWindow
 
     private void SetColumn(Work work)
     {
-        var first = _ui.Mine.FirstOrDefault(c => !c.IsChild);
+        var first = _ui.Mine.FirstOrDefault(c => !c.IsChild && !c.IsMachine);
         if (first == null) return;
         int value = PriorityCell.Next(first.Priority(work), +1);
-        foreach (var c in _ui.Mine) _ui.Tool.Issue(new SetWorkPriority(c.Id, work, value));
+        foreach (var c in _ui.Mine.Where(c => !c.IsMachine)) _ui.Tool.Issue(new SetWorkPriority(c.Id, work, value));
         foreach (var r in _rows) foreach (var cell in r.Cells) cell.QueueRedraw();
     }
 }
