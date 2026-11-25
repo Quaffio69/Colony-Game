@@ -279,7 +279,7 @@ public partial class GlyphWindow : GlyphPanel
         {
             _w = w;
             MouseFilter = MouseFilterEnum.Stop;
-            MouseExited += () => { _hover = -1; QueueRedraw(); };
+            MouseExited += () => { _hover = -1; QueueRedraw(); GlyphStatus.Tip = null; };
         }
         public TitleBar() : this(null!) { }
 
@@ -401,7 +401,7 @@ public partial class GlyphWindow : GlyphPanel
             MouseFilter = MouseFilterEnum.Stop;
             MouseDefaultCursorShape = x && y ? CursorShape.Fdiagsize : x ? CursorShape.Hsize : CursorShape.Vsize;
             MouseEntered += () => { _hover = true; QueueRedraw(); GlyphStatus.Tip = "Drag to resize"; };
-            MouseExited += () => { _hover = false; QueueRedraw(); };
+            MouseExited += () => { _hover = false; QueueRedraw(); if (GlyphStatus.Tip == "Drag to resize") GlyphStatus.Tip = null; };
         }
         public ResizeHandle() : this(null!, false, false) { }
 

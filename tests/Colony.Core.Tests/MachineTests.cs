@@ -118,6 +118,23 @@ public class MachineTests
     }
 
     [Fact]
+    public void AnExcavatorBehindAWall_IsJudgedByItsRealPath()
+    {
+        var sim = FlatSim(size: 64);
+        for (int x = 0; x <= 50; x++)
+        for (int z = 4; z <= 6; z++)
+            sim.World.Set(x, 7, z, TileType.Stone); // a wall: six tiles away as the crow flies, ~90 round by the path
+        var miner = sim.AddColonist("Miner", new TilePos(4, 4, 4));
+        var ex = sim.AddMachine(MachineKind.Excavator, new TilePos(4, 10, 4));
+        int dig = Balance.DigStone, jobs = 8;
+        Assert.True(Colonist.ExcavatorDigCost(6, 6, jobs, dig, true) < Colonist.HandDigCost(3, jobs, dig), "in a straight line it would pay");
+        var (_, driven) = Dig(sim, new TilePos(6, 2, 3), new TilePos(9, 3, 3), ex);
+        Assert.False(driven, "round the wall it doesn't: dug by hand");
+        Assert.Equal(new TilePos(4, 10, 4), ex.Position);
+        Assert.Null(miner.Vehicle);
+    }
+
+    [Fact]
     public void TheCostModel_CountsTheWholeDig_NotOneJob()
     {
         int dig = Balance.DigStone;
@@ -207,6 +224,44 @@ public class MachineTests
         Assert.True(cells >= 2);
         Assert.All(sim.Items.All, kv => Assert.Equal(0, kv.Value.Incoming)); // every reservation settled
         Assert.Null(wagon.Driver); // nothing left to haul: parked
+    }
+
+    [Fact]
+    public void ATrader_DrivesThePowerWagon_ToShipADeal()
+    {
+        var w = new VoxelWorld(96, 32, 12);
+        for (int z = 0; z <= 3; z++)
+        for (int y = 0; y < 32; y++)
+        for (int x = 0; x < 96; x++)
+            w.Set(x, y, z, TileType.Stone);
+        var sim = new ColonySim(w) { NeedsEnabled = false };
+        sim.AddFaction("Easthold", new TilePos(70, 16, 4));
+        sim.AddColonist("Trader", new TilePos(10, 16, 4));
+        sim.AddColonist("East", new TilePos(70, 16, 4), faction: 1);
+        var wagon = sim.AddMachine(MachineKind.PowerWagon, new TilePos(11, 14, 4));
+        var q = sim.Commands;
+        q.Execute(new AddStockpile(new TilePos(4, 4, 3), new TilePos(7, 7, 3)));
+        q.Execute(new AddTradeDepot(new TilePos(14, 20, 3), new TilePos(16, 22, 3)));
+        q.Execute(new AddTradeDepot(new TilePos(64, 20, 3), new TilePos(66, 22, 3)) { Player = 1 });
+        int stack = ItemInfo.StackLimit(ItemType.Plank), carry = ItemInfo.CarryLimit(ItemType.Plank), planks = 0;
+        foreach (var c in new[] { new TilePos(5, 5, 4), new TilePos(6, 5, 4), new TilePos(5, 6, 4), new TilePos(6, 6, 4) })
+        {
+            sim.Items.Drop(c, ItemType.Plank, stack);
+            planks += stack;
+        }
+        q.Execute(new ProposeTrade(1, new Trade.TradeTerms([new Trade.TradeTerm(0, "planks", planks)])));
+        var deal = Assert.Single(sim.Trades.All);
+        q.Execute(new AcceptTrade(deal.Id) { Player = 1 });
+
+        int most = 0;
+        for (int t = 0; t < 20_000 && deal.State != Trade.TradeState.Done; t++)
+        {
+            sim.Step();
+            if (wagon.Driver is { Task: ColonistTask.TradeDeliver } d) most = Math.Max(most, d.CarryingCount);
+        }
+        Assert.Equal(Trade.TradeState.Done, deal.State);
+        Assert.True(most > carry * 2, $"a trip shipped {most} planks in the wagon (a colonist carries {carry})");
+        Assert.All(sim.Items.All, kv => Assert.Equal(0, kv.Value.Incoming));
     }
 
     [Fact]

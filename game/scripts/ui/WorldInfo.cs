@@ -109,7 +109,7 @@ public static class WorldInfo
             case PickPile pp when sim.Items.TryGet(pp.Cell, out var pile):
                 (card.Glyph, card.Color, card.Title, card.Sub) = (ItemLook.Glyph(pile.Type), ItemLook.Color(pile.Type), pile.Type.Name, $"{pile.Count} here");
                 showsPile = true;
-                card.Hint = "click: details";
+                card.Hint = "";
                 break;
             case PickNest pn:
             {
@@ -128,7 +128,6 @@ public static class WorldInfo
         if (pick is not PickTile) card.Add("·", Tok("faint"), $"on {ground.ToLowerInvariant()}, level {Level(sim, tile.Z)}", "Faint");
         AddBuilt(ui, card, cell);
         AddFacts(ui, card, tile, cell, showsSite, showsPile, showsFarm);
-        if (card.Hint.Length == 0 && pick is PickTile) card.Hint = "click: keep it in Inspect";
         return card;
     }
 

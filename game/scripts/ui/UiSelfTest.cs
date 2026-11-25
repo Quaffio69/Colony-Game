@@ -213,6 +213,21 @@ public partial class UiSelfTest : Node
             bool early = m.TipShowing;
             for (int i = 0; i < 120 && !m.TipShowing; i++) await Frames(1);
             Check($"resting on it shows its tooltip after a delay (at once: {early})", !early && m.TipShowing);
+            // A tip whose control forgets to clear it (as some did: set on every move, never on leave) still goes once the
+            // mouse is off that control.
+            var world = GetViewport().GetVisibleRect().Size / 2;
+            var leaky = new Control { MouseFilter = Control.MouseFilterEnum.Stop, Size = new Vector2(40, 40), Name = "LeakyTip" };
+            m.Overlay.AddChild(leaky);
+            leaky.GlobalPosition = world + new Vector2(160, -20);
+            await Frames(2);
+            Move(over, world + new Vector2(180, 0), false);
+            await Frames(2);
+            GlyphStatus.Tip = "a stale tip"; // set while on it, and nobody clears it on leave
+            await Frames(2);
+            Move(world + new Vector2(180, 0), world, false);
+            await Frames(3);
+            leaky.QueueFree();
+            Check($"a tip goes when the mouse leaves its control, cleared or not (now: {GlyphStatus.Tip ?? "none"})", GlyphStatus.Tip == null && !m.TipShowing);
         }
 
         // Ctrl+Tab cycles focus.
@@ -269,11 +284,13 @@ public partial class UiSelfTest : Node
         await Frames();
         Move(mid - Vector2.One, mid, false);
         await Frames(2);
+        var under = _ui.Main.Tool.Hovered is { } ht ? _ui.Main.Selection.PickFor(ht, _ui.Me) : null;
+        bool interesting = SelectionView.Selectable(under);
         Mouse(mid, true);
         Mouse(mid, false);
         await Frames(3);
-        Check($"a click selects what is under it ({_ui.Main.Selection.Current?.GetType().Name}) and opens Inspect",
-            _ui.Main.Selection.Current != null && _ui.Window("inspect")!.IsShown);
+        Check($"a click selects what is under it only if it is of interest ({under?.GetType().Name}: {(interesting ? "opens" : "no")} Inspect)",
+            (_ui.Main.Selection.Current != null) == interesting && _ui.Window("inspect")!.IsShown == interesting);
         Mouse(mid, true, MouseButton.Right);
         Mouse(mid, false, MouseButton.Right);
         await Frames();

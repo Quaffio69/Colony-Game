@@ -339,6 +339,45 @@ public partial class GlyphManager : Control
     }
 
 
+    private string? _anchoredTip;
+    private Control? _tipAnchor;
+
+    /// <summary>
+    /// A tip belongs to the control the mouse was on when it was set (the nearest one that takes the mouse, so a row's
+    /// labels count as the row). Controls clear their tips on leave, but not all do (some set them on every move, and a row
+    /// rebuilt under the mouse never hears it leave): once the mouse is off that control, or it is gone, the tip goes.
+    /// </summary>
+    private void DropStaleTip()
+    {
+        var hovered = Receiver(GetViewport().GuiGetHoveredControl());
+        if (GlyphStatus.Tip is not { Length: > 0 } tip)
+        {
+            _anchoredTip = null;
+            _tipAnchor = null;
+            return;
+        }
+        if (tip != _anchoredTip)
+        {
+            _anchoredTip = tip;
+            _tipAnchor = hovered; // null: set from code, not by hovering (e.g. --tip): left alone
+            return;
+        }
+        if (_tipAnchor == null) return;
+        if (IsInstanceValid(_tipAnchor) && _tipAnchor.IsVisibleInTree() && hovered == _tipAnchor) return;
+        if (GlyphStatus.Banner == tip) GlyphStatus.Banner = null;
+        GlyphStatus.Tip = null;
+        _anchoredTip = null;
+        _tipAnchor = null;
+    }
+
+    /// <summary>The control that takes the mouse for <paramref name="c"/>: itself, or the nearest ancestor that stops it.</summary>
+    private static Control? Receiver(Control? c)
+    {
+        for (var n = c; n != null; n = n.GetParent() as Control)
+            if (n.MouseFilter == Control.MouseFilterEnum.Stop) return n;
+        return c;
+    }
+
     /// <summary>Seconds the mouse rests on a control before its tip shows at the cursor.</summary>
     private const double TipDelay = 0.35;
     /// <summary>Widest a tooltip grows before it wraps (columns).</summary>
@@ -352,6 +391,7 @@ public partial class GlyphManager : Control
     private void UpdateBanner()
     {
         double now = Time.GetTicksMsec() / 1000.0;
+        DropStaleTip();
         string? text = GlyphStatus.Banner;
         if (string.IsNullOrEmpty(text) && GlyphStatus.Tip is { Length: > 0 } tip)
         {

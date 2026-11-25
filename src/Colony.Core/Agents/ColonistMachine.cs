@@ -127,7 +127,7 @@ public sealed partial class Colonist
         {
             ColonistTask.None or ColonistTask.Stoke => true,
             ColonistTask.Designation => v.Machine == MachineKind.Excavator,
-            ColonistTask.HaulPickup or ColonistTask.HaulDeliver => v.Machine == MachineKind.PowerWagon,
+            ColonistTask.HaulPickup or ColonistTask.HaulDeliver or ColonistTask.TradePickup or ColonistTask.TradeDeliver => v.Machine == MachineKind.PowerWagon,
             _ => false, // a meal, bed, a fight, a draft...
         };
         if (!fits || Downed || Drafted || v.Downed) Park(sim);
@@ -196,6 +196,11 @@ public sealed partial class Colonist
         _aboard = true;
         SyncVehicle();
         int component = sim.Connectivity.ComponentOf(Position);
+        if (_boardThen == ColonistTask.None)
+        {
+            Finish(); // fetched for a deal: aboard, it looks for its work again (DriveOn)
+            return;
+        }
         if (_boardThen == ColonistTask.HaulPickup) ExtendLoad(sim, component); // a wagon load: more of the pile, room round the stop
         var target = _boardThen == ColonistTask.HaulPickup ? _haul.Source : _boardJob;
         Task = _boardThen; // the job's own claims from here on (Abandon releases them as that task)
@@ -213,17 +218,25 @@ public sealed partial class Colonist
     private void AbandonBoarding(ColonySim sim)
     {
         if (_boardThen == ColonistTask.Designation) sim.Designations.Release(_boardJob, Id);
-        else
+        else if (_boardThen == ColonistTask.HaulPickup)
         {
             sim.Items.Unreserve(_haul.Source, _haul.Amount);
             sim.Items.ReleaseIncoming(_haul.Destination, _haul.Amount);
         }
     }
 
-    /// <summary>A driver with work to do (the machine's own trade only): false when there is none worth driving to.</summary>
-    private bool DriveOn(ColonySim sim, int component) => _vehicle!.Machine == MachineKind.Excavator
-        ? Does(Work.Mining) && TryTakeJob(sim, component, MiningKinds)
-        : Does(Work.Hauling) && TryHaul(sim, component);
+    /// <summary>
+    /// A driver with work to do (the machine's own trade only: digging, or for the wagon hauling and shipping deals, in
+    /// its priority order): false when there is none worth driving to.
+    /// </summary>
+    private bool DriveOn(ColonySim sim, int component)
+    {
+        if (_vehicle!.Machine == MachineKind.Excavator) return Does(Work.Mining) && TryTakeJob(sim, component, MiningKinds);
+        bool trade = Does(Work.Trading), haul = Does(Work.Hauling);
+        if (trade && (!haul || Priority(Work.Trading) <= Priority(Work.Hauling)))
+            return TryTrade(sim, component) || haul && !_deferred && TryHaul(sim, component);
+        return haul && TryHaul(sim, component) || trade && !_deferred && TryTrade(sim, component);
+    }
 
     /// <summary>The designation kinds the excavator works (dig and stairs).</summary>
     private static readonly int MiningKinds = Enumerable.Range(0, (int)DesignationKind.Sow + 1)
@@ -298,69 +311,156 @@ public sealed partial class Colonist
         return Math.Min(n, cap);
     }
 
+    // Two passes. Straight-line steps shortlist the cheapest machine that could pay at all (a full session of work
+    // checked before the orders or goods are counted); only that one is then measured by pathfinding (its trip to the
+    // work, and the walk to it; the walk to the work by hand is the path the colonist planned anyway), at most two or
+    // three searches, counted against the shared per-tick path budget. A machine the measurement turns down is not
+    // measured again for the same work for a while (_machineNo), so idle colonists don't search for it over and over.
+
+    /// <summary>A machine measured and turned down for some work, until a tick.</summary>
+    private (int Machine, TilePos Work, long Until) _machineNo = (-1, default, 0);
+
+    private bool TurnedDown(ColonySim sim, Colonist m, TilePos work) =>
+        _machineNo.Machine == m.Id && _machineNo.Work == work && sim.Tick < _machineNo.Until;
+
+    private void TurnDown(ColonySim sim, Colonist m, TilePos work) => _machineNo = (m.Id, work, sim.Tick + Balance.MachineRestTicks);
+
+    /// <summary>Steps of a path just planned by <see cref="Route"/> (a long trip's first leg, plus a straight line from its end).</summary>
+    private int RouteSteps(List<TilePos> path, TilePos near) =>
+        path.Count + (_plannedTrip != null && path.Count > 0 ? Steps(path[^1], near) : 0);
+
+    /// <summary>Steps from <paramref name="from"/> to any of <paramref name="goals"/> by pathfinding (null: no way); plans nothing.</summary>
+    private int? MeasureSteps(ColonySim sim, TilePos from, HashSet<TilePos> goals, TilePos near)
+    {
+        if (goals.Count == 0) return null;
+        if (goals.Contains(from)) return 0;
+        var saved = _plannedTrip;
+        sim.PathSearches++;
+        var path = PlanPath(sim, goals, near, from);
+        int? steps = path is null ? null : RouteSteps(path, near);
+        _plannedTrip = saved;
+        return steps;
+    }
+
     /// <summary>
-    /// Before walking to a dig: an excavator worth fetching for it (the cheapest of those it may drive), and if so it
-    /// claims the job and sets off to the machine.
+    /// Before walking to a dig (<paramref name="walk"/>: the steps of the path it planned to it): an excavator worth
+    /// fetching for it, and if so it claims the job and sets off to the machine. False with <see cref="_deferred"/> set
+    /// when the path budget ran out before it could measure.
     /// </summary>
-    private bool TryFetchExcavator(ColonySim sim, Job job, int component)
+    private bool TryFetchExcavator(ColonySim sim, Job job, int component, int walk)
     {
         if (!MayFetchMachine(sim) || !Does(Work.Mining) || WorkOf(job.Kind) != Work.Mining) return false;
-        int dig = sim.WorkTicks(job.Target, job.Kind), walk = Steps(Position, job.Target);
+        int dig = sim.WorkTicks(job.Target, job.Kind);
         int jobs = -1;
         Colonist? best = null;
         float bestCost = float.MaxValue;
         foreach (var m in sim.Machines)
         {
-            if (m.Machine != MachineKind.Excavator || !MayDrive(sim, m, component)) continue;
+            if (m.Machine != MachineKind.Excavator || !MayDrive(sim, m, component) || TurnedDown(sim, m, job.Target)) continue;
             int toMachine = Steps(Position, m.Position), drive = Steps(m.Position, job.Target);
-            // The most it could save (a full session of digs) is checked before counting the orders round the job.
             if (ExcavatorDigCost(toMachine, drive, Balance.ExcavatorSessionJobs, dig, true) >= HandDigCost(walk, Balance.ExcavatorSessionJobs, dig)) continue;
             if (jobs < 0) jobs = MiningOrdersNear(sim, job.Target, Filter(sim), Balance.ExcavatorSessionJobs);
             float cost = ExcavatorDigCost(toMachine, drive, jobs, dig, true);
             if (cost < HandDigCost(walk, jobs, dig) && cost < bestCost) (best, bestCost) = (m, cost);
         }
         if (best is null) return false;
-        var path = Route(sim, ReachableAround(sim, best.Position, component), best.Position);
-        if (path is null || !sim.Designations.Claim(job.Target, Id)) return false;
+        if (sim.PathBudgetExhausted)
+        {
+            _deferred = true;
+            return false;
+        }
+        // Measured: its crawl to the dig, then the walk to it (planned last: that is the path it sets off on).
+        var path = MeasureSteps(sim, best.Position, ReachableAround(sim, job.Target, component), job.Target) is { } crawl
+            ? Route(sim, ReachableAround(sim, best.Position, component), best.Position) is { } p
+              && ExcavatorDigCost(RouteSteps(p, best.Position), crawl, jobs, dig, true) < HandDigCost(walk, jobs, dig) ? p : null
+            : null;
+        if (path is null)
+        {
+            TurnDown(sim, best, job.Target);
+            return false;
+        }
+        if (!sim.Designations.Claim(job.Target, Id)) return false;
         _jobKind = job.Kind;
         BeginBoarding(best, ColonistTask.Designation, job.Target, path);
         return true;
     }
 
-    /// <summary>Driving the excavator: whether the next dig is worth crawling to, rather than getting out and walking.</summary>
-    private bool ExcavatorStays(ColonySim sim, Job job)
+    /// <summary>Driving the excavator: whether the next dig (<paramref name="steps"/> along the path planned to it) is worth crawling to.</summary>
+    private bool ExcavatorStays(ColonySim sim, Job job, int steps)
     {
-        int dig = sim.WorkTicks(job.Target, job.Kind), d = Steps(Position, job.Target);
+        int dig = sim.WorkTicks(job.Target, job.Kind);
         int jobs = MiningOrdersNear(sim, job.Target, Filter(sim), Balance.ExcavatorSessionJobs);
-        return ExcavatorDigCost(0, d, jobs, dig, board: false) < HandDigCost(d, jobs, dig);
+        return ExcavatorDigCost(0, steps, jobs, dig, board: false) < HandDigCost(steps, jobs, dig);
     }
 
     /// <summary>
-    /// Before walking to a haul's pickup: a power wagon worth fetching for it and what lies round it (the cheapest of
-    /// those it may drive), and if so it reserves the haul and sets off to the wagon.
+    /// A power wagon worth fetching to carry goods from <paramref name="source"/> to <paramref name="dest"/> (it walks
+    /// <paramref name="walk"/> steps to the source by hand), and the path to it; null when walking does better.
+    /// <paramref name="unitsFor"/> counts the goods there are to carry, up to a cap (asked only once a wagon could pay).
     /// </summary>
-    private bool TryFetchWagon(ColonySim sim, HaulPlan plan, int component)
+    private List<TilePos>? WagonWorthFetching(ColonySim sim, int component, TilePos source, TilePos dest, int walk,
+        int hand, int wagon, Func<int, int> unitsFor, out Colonist? chosen)
+    {
+        chosen = null;
+        int most = Balance.WagonSessionLoads * wagon, units = -1, haul = Steps(source, dest);
+        float bestCost = float.MaxValue;
+        foreach (var m in sim.Machines)
+        {
+            if (m.Machine != MachineKind.PowerWagon || !MayDrive(sim, m, component) || TurnedDown(sim, m, source)) continue;
+            int toWagon = Steps(Position, m.Position), drive = Steps(m.Position, source);
+            if (WagonHaulCost(toWagon, drive, haul, most, wagon, true) >= HandHaulCost(walk, haul, most, hand)) continue;
+            if (units < 0) units = unitsFor(most);
+            float cost = WagonHaulCost(toWagon, drive, haul, units, wagon, true);
+            if (cost < HandHaulCost(walk, haul, units, hand) && cost < bestCost) (chosen, bestCost) = (m, cost);
+        }
+        if (chosen is null) return null;
+        if (sim.PathBudgetExhausted)
+        {
+            _deferred = true;
+            chosen = null;
+            return null;
+        }
+        // Measured: the haul itself, the wagon's drive to the pickup, then the walk to the wagon (the path it sets off on).
+        var c = chosen;
+        List<TilePos>? path = null;
+        if (MeasureSteps(sim, source, ReachableAround(sim, dest, component), dest) is { } h
+            && MeasureSteps(sim, c.Position, ReachableAround(sim, source, component), source) is { } drive2
+            && Route(sim, ReachableAround(sim, c.Position, component), c.Position) is { } p
+            && WagonHaulCost(RouteSteps(p, c.Position), drive2, h, units, wagon, true) < HandHaulCost(walk, h, units, hand))
+            path = p;
+        if (path is null)
+        {
+            TurnDown(sim, c, source);
+            chosen = null;
+        }
+        return path;
+    }
+
+    /// <summary>Before walking to a haul's pickup: a power wagon worth fetching for it and what lies round it; if so it reserves the haul and sets off to the wagon.</summary>
+    private bool TryFetchWagon(ColonySim sim, HaulPlan plan, int component, int walk)
     {
         if (!MayFetchMachine(sim) || !Does(Work.Hauling)) return false;
         int hand = ItemInfo.CarryLimit(plan.Type);
         int wagon = sim.Stockpiles.Contains(plan.Destination) ? hand * Balance.WagonLoads : hand; // only stockpiles take a whole wagon load
-        int units = -1, haul = Steps(plan.Source, plan.Destination), walk = Steps(Position, plan.Source);
-        Colonist? best = null;
-        float bestCost = float.MaxValue;
-        foreach (var m in sim.Machines)
-        {
-            if (m.Machine != MachineKind.PowerWagon || !MayDrive(sim, m, component)) continue;
-            int toWagon = Steps(Position, m.Position), drive = Steps(m.Position, plan.Source);
-            int most = Balance.WagonSessionLoads * wagon;
-            if (WagonHaulCost(toWagon, drive, haul, most, wagon, true) >= HandHaulCost(walk, haul, most, hand)) continue;
-            if (units < 0) units = GoodsNear(sim, plan, most);
-            float cost = WagonHaulCost(toWagon, drive, haul, units, wagon, true);
-            if (cost < HandHaulCost(walk, haul, units, hand) && cost < bestCost) (best, bestCost) = (m, cost);
-        }
-        if (best is null) return false;
-        var path = Route(sim, ReachableAround(sim, best.Position, component), best.Position);
+        var path = WagonWorthFetching(sim, component, plan.Source, plan.Destination, walk, hand, wagon, cap => GoodsNear(sim, plan, cap), out var m);
         if (path is null || !ReserveHaul(sim, plan)) return false;
-        BeginBoarding(best, ColonistTask.HaulPickup, plan.Source, path);
+        BeginBoarding(m!, ColonistTask.HaulPickup, plan.Source, path);
+        return true;
+    }
+
+    /// <summary>
+    /// Before walking to goods owed on a deal: a power wagon worth fetching to deliver what is still owed of that line
+    /// (as much as the colony holds). If so it sets off to the wagon and, aboard, looks for its work again (nothing is
+    /// reserved meanwhile: the deal may be shipped by someone else first).
+    /// </summary>
+    private bool TryFetchWagonForTrade(ColonySim sim, Trade.TradeLine line, TilePos source, TilePos dest, int component, int walk)
+    {
+        if (!MayFetchMachine(sim) || !Does(Work.Trading)) return false;
+        int hand = ItemInfo.CarryLimit(line.Type);
+        var path = WagonWorthFetching(sim, component, source, dest, walk, hand, hand * Balance.WagonLoads,
+            cap => Math.Min(cap, Math.Min(line.Unclaimed, sim.Items.UnitsOf(line.Type))), out var m);
+        if (path is null) return false;
+        BeginBoarding(m!, ColonistTask.None, source, path);
         return true;
     }
 
@@ -459,6 +559,9 @@ public sealed partial class Colonist
         _machineRest = 0;
         _fuelRetry = 0;
         _stoke = default;
+        _machineNo = (-1, default, 0);
+        _tradeGoods.Clear();
+        _tradeRoom.Clear();
     }
 
     // ---- The power wagon's big loads ---------------------------------------------------------------------------

@@ -182,7 +182,7 @@ public sealed partial class Colonist
         ColonistTask.CraftFetch or ColonistTask.CraftWork or ColonistTask.CraftStore => Work.Industry,
         ColonistTask.HaulPickup or ColonistTask.HaulDeliver or ColonistTask.FurnishPickup or ColonistTask.FurnishDeliver => Work.Hauling,
         ColonistTask.TradePickup or ColonistTask.TradeDeliver => Work.Trading,
-        ColonistTask.Board => _boardThen == ColonistTask.Designation ? WorkOf(_jobKind) : Work.Hauling,
+        ColonistTask.Board => _boardThen switch { ColonistTask.Designation => WorkOf(_jobKind), ColonistTask.HaulPickup => Work.Hauling, _ => Work.Trading },
         ColonistTask.Stoke when _vehicle is { } v => MachineInfo.WorkOf(v.Machine),
         _ => null,
     };
@@ -792,13 +792,6 @@ public sealed partial class Colonist
                 if (!driving && scaffold is { } at && TryFetchScaffold(sim, job, at, component)) return true;
                 continue;
             }
-            if (first)
-            {
-                // The nearest job decides the machine: whether to drive on to it, or to fetch one for it.
-                first = false;
-                if (driving && !ExcavatorStays(sim, job)) return false;
-                if (!driving && TryFetchExcavator(sim, job, component)) return true;
-            }
             var goals = new HashSet<TilePos>();
             foreach (var s in job.WorkSpots)
                 if (sim.Connectivity.ComponentOf(s) == component) goals.Add(s);
@@ -808,6 +801,17 @@ public sealed partial class Colonist
             {
                 _pathFailed.Add(job.Target);
                 continue;
+            }
+            if (first)
+            {
+                // The nearest job decides the machine (by the path just planned to it): drive on to it, or fetch one for it.
+                first = false;
+                var trip = _plannedTrip;
+                int walk = RouteSteps(path, job.Target);
+                if (driving && !ExcavatorStays(sim, job, walk)) return false;
+                if (!driving && TryFetchExcavator(sim, job, component, walk)) return true;
+                if (_deferred) return false;
+                _plannedTrip = trip; // measuring planned other paths
             }
             if (!orders.Claim(job.Target, Id)) continue;
 
@@ -828,16 +832,19 @@ public sealed partial class Colonist
                 _deferred = true;
                 return false;
             }
-            if (first)
-            {
-                first = false; // the nearest haul decides whether a wagon is worth fetching
-                if (TryFetchWagon(sim, plan, component)) return true;
-            }
             var path = Route(sim, ReachableAround(sim, plan.Source, component), plan.Source);
             if (path is null)
             {
                 _pathFailed.Add(plan.Source);
                 continue;
+            }
+            if (first)
+            {
+                first = false; // the nearest haul decides whether a wagon is worth fetching
+                var trip = _plannedTrip;
+                if (TryFetchWagon(sim, plan, component, RouteSteps(path, plan.Source))) return true;
+                if (_deferred) return false;
+                _plannedTrip = trip;
             }
             if (!ReserveHaul(sim, plan)) continue;
             ExtendLoad(sim, component);
@@ -869,7 +876,9 @@ public sealed partial class Colonist
     /// <summary>
     /// Trading: goods this colony owes on an agreed deal, from the nearest pile in its own stores to a cell of the
     /// buyer's trade depot with room (nearest first), as much as one load carries. The line is claimed as it goes
-    /// (<see cref="Trade.Trades.Claim"/>) so traders share the work; giving up hands it back.
+    /// (<see cref="Trade.Trades.Claim"/>) so traders share the work; giving up hands it back. Driving a power wagon, a load
+    /// is many: more from the store piles of it round the pickup, into the buyer's depot cells round the drop
+    /// (<see cref="WagonReach"/>). On foot, it may first fetch a wagon if the rest of the line makes that pay.
     /// </summary>
     private bool TryTrade(ColonySim sim, int component)
     {
@@ -878,6 +887,7 @@ public sealed partial class Colonist
             long dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
             return dx * dx + dy * dy + 4 * dz * dz;
         }
+        bool first = true;
         foreach (var (deal, line) in sim.Trades.Owed(Faction).ToList())
         {
             int buyer = deal.Other(Faction);
@@ -892,13 +902,12 @@ public sealed partial class Colonist
             if (dest is not { } to) continue; // their depot is full, missing or out of reach: try later
             TilePos? source = null;
             best = long.MaxValue;
-            int available = 0;
             foreach (var (p, pile) in sim.Items.All)
             {
                 if (pile.Type != line.Type || pile.Available <= 0 || _pathFailed.Contains(p) || sim.Connectivity.ComponentOf(p) != component) continue;
                 if (!Trade.Trades.Sendable(sim, p, pile.Type, Faction)) continue;
                 long d = Dist(p, Position);
-                if (d < best || d == best && CompareCells(p, source!.Value) < 0) (best, source, available) = (d, p, pile.Available);
+                if (d < best || d == best && CompareCells(p, source!.Value) < 0) (best, source) = (d, p);
             }
             if (source is not { } from) continue; // nothing of it in store yet: the deal waits
             if (sim.PathBudgetExhausted)
@@ -906,19 +915,22 @@ public sealed partial class Colonist
                 _deferred = true;
                 return false;
             }
-            int amount = Math.Min(Math.Min(line.Unclaimed, available), Math.Min(ItemInfo.CarryLimit(line.Type), sim.Items.RoomAt(to, line.Type)));
             var path = Route(sim, ReachableAround(sim, from, component), from);
             if (path is null)
             {
                 _pathFailed.Add(from);
                 continue;
             }
-            if (!sim.Items.Reserve(from, amount)) continue;
-            if (!sim.Items.ReserveIncoming(to, line.Type, amount))
+            if (first)
             {
-                sim.Items.Unreserve(from, amount);
-                continue;
+                first = false; // the first deal it can ship decides whether a wagon is worth fetching
+                var trip = _plannedTrip;
+                if (TryFetchWagonForTrade(sim, line, from, to, component, RouteSteps(path, from))) return true;
+                if (_deferred) return false;
+                _plannedTrip = trip;
             }
+            int amount = ReserveTrade(sim, line, buyer, from, to, component);
+            if (amount == 0) continue;
             sim.Trades.Claim(line, amount);
             _trade = (deal, line, from, to, amount);
             _tradePartner = sim.Factions[buyer].Name;
@@ -928,12 +940,85 @@ public sealed partial class Colonist
         return false;
     }
 
+    /// <summary>Goods reserved for a trade trip (the pickup pile first; a wagon gathers from piles round it).</summary>
+    private readonly List<(TilePos Cell, int Amount)> _tradeGoods = new();
+    /// <summary>Room reserved for them in the buyer's depot (the drop cell first; a wagon fills cells round it).</summary>
+    private readonly List<(TilePos Cell, int Amount)> _tradeRoom = new();
+
+    /// <summary>Cells round <paramref name="c"/> on its level, ring by ring out to <paramref name="reach"/> (the cell itself first).</summary>
+    private static IEnumerable<TilePos> Rings(TilePos c, int reach)
+    {
+        yield return c;
+        for (int r = 1; r <= reach; r++)
+        for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++)
+            if (Math.Max(Math.Abs(dx), Math.Abs(dy)) == r) yield return c.Offset(dx, dy, 0);
+    }
+
+    /// <summary>
+    /// Reserves one trip of a deal line: room in the buyer's depot, then goods from our stores to fill it (as much as is
+    /// still owed and it can carry). Returns the units, 0 if none (nothing is left reserved then).
+    /// </summary>
+    private int ReserveTrade(ColonySim sim, Trade.TradeLine line, int buyer, TilePos from, TilePos to, int component)
+    {
+        _tradeGoods.Clear();
+        _tradeRoom.Clear();
+        int reach = Drives == MachineKind.PowerWagon ? WagonReach : 0;
+        int want = Math.Min(line.Unclaimed, CarryCapacity(line.Type)), room = 0, goods = 0;
+        foreach (var c in Rings(to, reach))
+        {
+            if (room >= want) break;
+            if (c != to && (!sim.Stockpiles.IsDepot(c) || sim.Stockpiles.OwnerOf(c) != buyer || sim.Connectivity.ComponentOf(c) != component)) continue;
+            int n = Math.Min(want - room, sim.Items.RoomAt(c, line.Type));
+            if (n <= 0 || !sim.Items.ReserveIncoming(c, line.Type, n)) continue;
+            _tradeRoom.Add((c, n));
+            room += n;
+        }
+        foreach (var c in Rings(from, reach))
+        {
+            if (goods >= room) break;
+            if (!sim.Items.TryGet(c, out var pile) || pile.Type != line.Type || pile.Available <= 0) continue;
+            if (c != from && (sim.Connectivity.ComponentOf(c) != component || !Trade.Trades.Sendable(sim, c, pile.Type, Faction))) continue;
+            int n = Math.Min(room - goods, pile.Available);
+            if (!sim.Items.Reserve(c, n)) continue;
+            _tradeGoods.Add((c, n));
+            goods += n;
+        }
+        TrimTradeRoom(sim, room - goods);
+        return goods;
+    }
+
+    /// <summary>Gives back <paramref name="units"/> of the depot room reserved for a trade (last cells first).</summary>
+    private void TrimTradeRoom(ColonySim sim, int units)
+    {
+        for (int i = _tradeRoom.Count - 1; units > 0 && i >= 0; i--)
+        {
+            var (c, n) = _tradeRoom[i];
+            int back = Math.Min(n, units);
+            sim.Items.ReleaseIncoming(c, back);
+            _tradeRoom[i] = (c, n - back);
+            units -= back;
+        }
+        _tradeRoom.RemoveAll(r => r.Amount == 0);
+    }
+
+    /// <summary>Lets go of a trade trip's reservations: goods not yet picked up and depot room not yet filled.</summary>
+    private void ReleaseTrade(ColonySim sim)
+    {
+        foreach (var (c, n) in _tradeGoods) sim.Items.Unreserve(c, n);
+        foreach (var (c, n) in _tradeRoom) sim.Items.ReleaseIncoming(c, n);
+        _tradeGoods.Clear();
+        _tradeRoom.Clear();
+    }
+
     private void TradePickUp(ColonySim sim)
     {
-        int taken = sim.Items.TakeReserved(_trade.Source, _trade.Amount);
+        int taken = 0;
+        foreach (var (c, n) in _tradeGoods) taken += sim.Items.TakeReserved(c, n);
+        _tradeGoods.Clear();
         if (taken < _trade.Amount)
         {
-            sim.Items.ReleaseIncoming(_trade.Destination, _trade.Amount - taken);
+            TrimTradeRoom(sim, _trade.Amount - taken);
             sim.Trades.Unclaim(_trade.Line, _trade.Amount - taken);
         }
         if (taken == 0)
@@ -956,10 +1041,17 @@ public sealed partial class Colonist
 
     private void TradeDeliver(ColonySim sim)
     {
-        int added = sim.Items.Deliver(_trade.Destination, CarryingType, CarryingCount);
-        if (added < CarryingCount) sim.Items.Drop(Position, CarryingType, CarryingCount - added); // spills beside the depot: still theirs to collect
         int count = CarryingCount;
+        foreach (var (c, n) in _tradeRoom)
+        {
+            int put = Math.Min(n, CarryingCount);
+            if (put < n) sim.Items.ReleaseIncoming(c, n - put); // Deliver releases what it is handed; the rest of the room goes back
+            CarryingCount -= sim.Items.Deliver(c, CarryingType, put);
+        }
+        _tradeRoom.Clear();
+        if (CarryingCount > 0) sim.Items.Drop(Position, CarryingType, CarryingCount); // spills beside the depot: still theirs to collect
         CarryingCount = 0;
+        if (Drives == MachineKind.PowerWagon) BurnFuel(sim, Balance.WagonFuelPerTrip);
         sim.Trades.Delivered(sim, _trade.Deal, _trade.Line, count);
         Finish();
     }
@@ -1476,12 +1568,11 @@ public sealed partial class Colonist
                 ReleaseSpill(sim, source: false);
                 break;
             case ColonistTask.TradePickup:
-                sim.Items.Unreserve(_trade.Source, _trade.Amount);
-                sim.Items.ReleaseIncoming(_trade.Destination, _trade.Amount);
+                ReleaseTrade(sim);
                 sim.Trades.Unclaim(_trade.Line, _trade.Amount);
                 break;
             case ColonistTask.TradeDeliver:
-                sim.Items.ReleaseIncoming(_trade.Destination, _trade.Amount);
+                ReleaseTrade(sim);
                 sim.Trades.Unclaim(_trade.Line, _trade.Amount); // the load is dropped below; still owed
                 break;
             case ColonistTask.CraftFetch:
@@ -1561,11 +1652,14 @@ public sealed partial class Colonist
     /// across the map would otherwise be one search of tens of thousands of nodes (a frame-long stall), and a
     /// failed one, retried whenever the world changed, a stall that repeats while the colonist never sets off.
     /// </para>
-    private List<TilePos>? PlanPath(ColonySim sim, HashSet<TilePos> goals, TilePos near)
+    private List<TilePos>? PlanPath(ColonySim sim, HashSet<TilePos> goals, TilePos near) => PlanPath(sim, goals, near, Position);
+
+    /// <summary>The same from any cell (machines measure the trip from where they are parked).</summary>
+    private List<TilePos>? PlanPath(ColonySim sim, HashSet<TilePos> goals, TilePos near, TilePos from)
     {
         _plannedTrip = null;
         var connectivity = sim.Connectivity;
-        var chain = connectivity.RegionChain(Position, goals);
+        var chain = connectivity.RegionChain(from, goals);
         if (chain is null) return null;
         if (chain.Count > LegRegions + LegRegions / 2)
         {
@@ -1575,7 +1669,7 @@ public sealed partial class Colonist
             const int lpad = 2;
             var lbox = TileBox.Capture(sim.World, lmin.X - lpad, lmin.Y - lpad, lmin.Z - lpad,
                 lmax.X - lmin.X + 2 * lpad, lmax.Y - lmin.Y + 2 * lpad, lmax.Z - lmin.Z + 2 * lpad);
-            var path = Pathfinder.FindPathToward(lbox, sim.World.Width, sim.World.Depth, Position,
+            var path = Pathfinder.FindPathToward(lbox, sim.World.Width, sim.World.Depth, from,
                 p => connectivity.RegionOf(p) == stop, near, LegMaxNodes, p => leg.Contains(connectivity.RegionOf(p)));
             if (path is not null) _plannedTrip = (goals, near);
             return path;
@@ -1594,9 +1688,9 @@ public sealed partial class Colonist
         {
             var box = TileBox.Capture(sim.World, min.X - pad, min.Y - pad, min.Z - pad,
                 max.X - min.X + 2 * pad, max.Y - min.Y + 2 * pad, max.Z - min.Z + 2 * pad);
-            return Pathfinder.FindPathToAny(box, sim.World.Width, sim.World.Depth, Position, goals, near, allowed: InCorridor);
+            return Pathfinder.FindPathToAny(box, sim.World.Width, sim.World.Depth, from, goals, near, allowed: InCorridor);
         }
-        return Pathfinder.FindPathToAny(sim.World, Position, goals, near, allowed: InCorridor);
+        return Pathfinder.FindPathToAny(sim.World, from, goals, near, allowed: InCorridor);
     }
 
     /// <summary>Regions per leg of a long trip (trips up to 1.5x this go in one search).</summary>

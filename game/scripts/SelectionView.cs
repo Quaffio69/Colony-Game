@@ -99,11 +99,18 @@ public partial class SelectionView : Node3D
         AddChild(_box);
     }
 
-    /// <summary>Selects what is at (or standing on) the clicked tile; null clears.</summary>
+    /// <summary>
+    /// Selects what is at (or standing on) the clicked tile, if it is something of interest (a colonist or machine, a nest,
+    /// a room, a zone, a blueprint); a bare tile or a pile of goods clears the selection instead (the hover card names those).
+    /// </summary>
     public void PickAt(TilePos? tile, int player)
     {
-        Set(tile is { } t ? Find(t, player) : null);
+        var pick = tile is { } t ? Find(t, player) : null;
+        Set(Selectable(pick) ? pick : null);
     }
+
+    /// <summary>Whether a click selects this (and opens Inspect): not a bare tile or a pile.</summary>
+    public static bool Selectable(Pick? pick) => pick is not (null or PickTile or PickPile);
 
     public void Select(Pick? pick) => Set(pick);
 

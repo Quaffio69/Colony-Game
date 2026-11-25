@@ -119,7 +119,8 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   drive it on to the job (`FinishBoarding`). Aboard (`Vehicle`; the machine's `Driver`), it steps at the machine's pace,
   the excavator digs `Balance.ExcavatorDigSpeed` (5x) as fast in any rock but crawls (`ExcavatorStepScale` 1.6), the wagon
   rolls faster (0.7) and carries `WagonLoads` (8) colonist loads; the machine follows its driver (`SyncVehicle`). A driver
-  takes only the machine's trade (whatever its other priorities: it got in for that work, and gets out when it runs out)
+  takes only the machine's trade (the excavator digging; the wagon hauling and shipping deals, in its priority order:
+  whatever its other priorities, it got in for that work, and gets out when it runs out)
   and no scaffold jobs. It **parks** where it stands (`Park`) when nothing is worth driving to, or as soon as its task has
   nothing to do with the machine (a meal, bed, a fight, a draft, struck down), then leaves machines be for
   `MachineRestTicks` (300). **Is it worth fetching?** Judged on the run of work the machine would do before its driver gets
@@ -128,14 +129,22 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   (`ExcavatorDigCost` vs `HandDigCost`: walk to it, climb in, crawl it over, then each job dug fast with a crawl between);
   the wagon against carrying by hand, counting the haul's pile plus loose goods of its kind round it, capped at
   `WagonSessionLoads` (3) wagon loads, a whole wagon load only into a stockpile (`WagonHaulCost` vs `HandHaulCost`). Steps
-  are straight-line (|dx| + |dy| + 2|dz|); the cheapest machine that beats walking wins, and the most a full session could
-  save is checked before the orders are counted. So a single far tile is dug by hand and the excavator stays put, while a
+  are measured in two passes: straight-line (|dx| + |dy| + 2|dz|) shortlists the cheapest machine that could pay at all (the
+  most a full session could save is checked before the orders are counted), then only that one is measured by pathfinding
+  (its trip to the work, the walk to it, and for the wagon the haul; the walk to the work by hand is the path the colonist
+  planned anyway; `MeasureSteps`, `RouteSteps`, a long trip's first leg plus a straight line), at most three searches on
+  the shared per-tick path budget (a decision waits a tick rather than spike a frame). A machine the measurement turns
+  down is not measured again for that work for `MachineRestTicks` (`_machineNo`), so a machine behind a wall is judged by
+  the way round it. So a single far tile is dug by hand and the excavator stays put, while a
   big excavation fetches it from across the map; and since a parked machine stands where its work was, it is beside the
   next dig there. The same test without the climb in (`ExcavatorStays`) decides whether a driver crawls on to the next dig
   or gets out, so the two never disagree; a wagon driver always drives on while there is hauling (it is faster than
   walking). The wagon: a haul to a stockpile reserves more of the source pile plus room in the stockpile cells round the
   destination (`WagonReach` 3, same level and colony), and at pickup gathers the same item from loose piles round it into
-  more room (`ExtendLoad`, `PickUpSpill`, `DeliverSpill`; every reservation is released on abandon). **Fuel:** charcoal. A
+  more room (`ExtendLoad`, `PickUpSpill`, `DeliverSpill`; every reservation is released on abandon). Shipping a deal, a
+  wagon load reserves room in the buyer's depot cells round the drop and goods from our store piles round the pickup
+  (`ReserveTrade`, `_tradeGoods`, `_tradeRoom`); a trader on foot may fetch the wagon first if what is still owed of the
+  line makes it pay (`TryFetchWagonForTrade`: nothing is reserved on the walk; aboard, it looks again). **Fuel:** charcoal. A
   firebox holds `FuelCharcoalLoad` (12) charcoal of `FuelPerCharcoal` (10) work; a dig costs 2, a wagon trip 3. Below a
   quarter the driver drives it to the nearest usable charcoal and stokes it (task `Stoke`, `TendVehicle`); empty with none
   to be had, it is parked and left a while, and an empty machine is only fetched while charcoal lies somewhere. Fuel only
