@@ -139,6 +139,9 @@ public partial class Main : Node3D
         var falls = new FallView { Name = "FallView" };
         AddChild(falls);
         falls.Initialize(_sim, _world, _rig);
+        var mistView = new MistView { Name = "MistView" };
+        AddChild(mistView);
+        mistView.Initialize(_sim, _world, _rig);
 
         _ui = new GameUi(this) { Name = "GameUi" };
         AddChild(_ui);
@@ -428,7 +431,7 @@ public partial class Main : Node3D
             {
                 s_devArgsDone = true;
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--house-demo", "--falls-demo", "--mine-demo", "--machines-demo", "--ticks" }.Any(a => Arg(a) != null))
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--house-demo", "--falls-demo", "--mist-demo", "--mine-demo", "--machines-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
                 if (Arg("--dig-demo") is { } digDemo) DigDemo(digDemo);
                 if (Arg("--stairs-demo") != null) StairsDemo();
@@ -442,6 +445,7 @@ public partial class Main : Node3D
                 if (Arg("--storage-demo") is { } storageDemo) StorageDemo(storageDemo);
                 if (Arg("--house-demo") is { } houseDemo) HouseDemo(houseDemo);
                 if (Arg("--falls-demo") != null) FallsDemo();
+                if (Arg("--mist-demo") != null) MistDemo();
                 if (Arg("--ants-demo") is { } antsDemo) AntsDemo(antsDemo);
                 if (Arg("--trade-demo") != null) TradeDemo();
                 if (Arg("--mine-demo") is { } mineDemo) MineDemo(mineDemo);
@@ -1099,6 +1103,31 @@ public partial class Main : Node3D
     }
 
     /// <summary>
+    /// <summary>
+    /// --mist-demo: a tall mesa beside the colony, a step at its foot, and springs on top pouring off both: many big falls,
+    /// played on until their mist (<see cref="Colony.Core.Fluids.Mist"/>) has built into banks round the foot.
+    /// </summary>
+    private void MistDemo()
+    {
+        var c = _sim.Colonists.First(k => k.Faction == Player).Position;
+        int g = _sim.World.SurfaceLevel(c.X, c.Y);
+        int x0 = c.X + 8, y0 = c.Y - 12;
+        for (int y = y0 - 10; y <= y0 + 34; y++)
+        for (int x = x0 - 14; x <= x0 + 30; x++)
+        {
+            for (int z = g - 2; z <= g; z++) _sim.World.Set(new TilePos(x, y, z), TileType.Soil);
+            for (int z = g - 6; z <= g + 14; z++) _sim.Flora.Remove(new TilePos(x, y, z), out _); // trees rooted on any slope
+            for (int z = g + 1; z <= g + 14; z++) _sim.World.Set(new TilePos(x, y, z), TileType.Air);
+        }
+        for (int y = y0; y <= y0 + 24; y++)
+        for (int x = x0 + 8; x <= x0 + 20; x++)
+        for (int z = g + 1; z <= g + (x < x0 + 11 ? 4 : 11); z++) _sim.World.Set(new TilePos(x, y, z), TileType.Stone);
+        for (int k = 0; k < 4; k++) _sim.Water.AddSpring(new TilePos(x0 + 16, y0 + 3 + k * 6, g + 12), 600, head: 1);
+        for (int t = 0; t < 2400; t++) _sim.Step();
+        GD.Print($"Mist demo: {_sim.Mist.ActiveCells} misty cells, {_sim.Mist.Total} mist in all");
+        _rig.Focus(SimSpace.TileCenter(new TilePos(x0 + 6, y0 + 12, g + 1)), 34f, yaw: 235f, pitch: -42f);
+    }
+
     /// <summary>
     /// --trade-demo (with --colonies=2 or more): a trade depot by each colony's people, an agreed deal under way (our
     /// logs for their berries) and a fresh offer from the next colony waiting on us; opens Trade (F6). Commands only, so

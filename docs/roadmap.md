@@ -25,7 +25,9 @@ What is done and what is next, milestone by milestone.
 - [x] Water: shallow-water flow over column spans (smooth surfaces, caves and tunnels too), parallel
       deterministic two-pass steps on awake blocks, generated rivers/lakes settled at load, springs by catchment,
       `WaterView` smooth sloping surfaces with flow-streamed ripples; walls (dams, canals), water wheels, pumps,
-      colony power pool, irrigation.
+      colony power pool, irrigation; waterfalls (curtains, splash, spray) and waterfall mist (`Fluids.Mist`: a sim field
+      that builds up under big falls, drifts on the wind and lifts the mood of colonists in it; `MistView` banks).
+- [ ] Next for mist: a beauty system reading `Mist` (and other scenery) for rooms and homes; rainbows in sunlit mist.
 - [ ] Next for water: siphons, wading/swimming
       and drowning (water blocking deep cells), axles and separate power networks, powered workshops,
       floodgates/sluices, aquifers, freezing, wells, meandering river courses (they follow the 4-tile drainage).

@@ -121,7 +121,7 @@ public partial class ColonistsWindow : GlyphWindow
                 _ui.Main.Selection.Select(new PickColonist(colonist)); // and show it in Inspect
                 foreach (var r in _rows) r.Row.Selected = r.C.Id == _selected;
             };
-            row.MouseEntered += () => GlyphStatus.Tip = $"{colonist.Name}: {colonist.Describe()} · likes {colonist.DescribeLikes(_ui.Sim.Tick)} · click to find";
+            row.MouseEntered += () => GlyphStatus.Tip = $"{colonist.Name}: {colonist.Describe()} · likes {colonist.DescribeLikes(_ui.Sim.Tick)}{(colonist.MistBonus > 0 ? " · enjoyed the falls' mist today" : "")} · click to find";
             row.MouseExited += () => GlyphStatus.Tip = null;
             row.Selected = c.Id == _selected;
             Content.AddChild(row);

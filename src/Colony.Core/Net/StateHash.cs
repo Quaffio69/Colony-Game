@@ -45,6 +45,7 @@ public static class StateHash
         foreach (var (p, rack) in sim.Stockpiles.Racks)
             sum += Of(10, Pos(p), rack.Levels, rack.Facing);
         sum += Of(11, sim.Regrowth.Count, sim.Regrowth.Greened);
+        sum += Of(15, sim.Mist.ActiveCells, sim.Mist.Total);
         foreach (var r in sim.Rooms.All)
             sum += Of(5, r.Id, r.Cells.Count, r.Parts.Count, r.Faction, r.Parts.Sum(p => p.Limit));
         foreach (var bp in sim.Constructions.All)

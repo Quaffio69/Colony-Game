@@ -159,6 +159,17 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   cell per step / `FlowPerPower` (hang it in a waterfall: wheels may mount on a wall); pumps lift water from
   their cell to the cell ahead and one level up; power is one colony-wide pool for now (pumps run at the
   share the wheels cover). Farm plots within 2 tiles of water grow 1.5x as fast (`Farms.Irrigated`).
+- **Waterfall mist (`Fluids.Mist`):** a coarse field (4x4-column cells: density 0..4000, `Full` = 1000, and the level
+  it hangs at). Falls of 1.5+ levels (`Water.Falls`) feed the cell they land in: sqrt(strength) x drop (up to 12) x
+  `Balance.MistPerFallLevel` a second, so a trickle hazes its foot and a river over a cliff raises banks. Each water
+  step re-reads one of 40 bands of block rows (a fall's feed is re-measured every 8 s and stands meanwhile; ~0.13 ms
+  a step on a 2048 map with 2800 awake water blocks); every 5 steps (1 s) the field spreads: feed added, `MistDecay`
+  per mille lost, `MistSpread` per mille passed to the 4 neighbours weighted by `Mist.Wind` (a hash of the time, a new
+  heading every 150 s), settling at their ground (up a step, down a ledge, never into rock). Only cells holding mist
+  are touched (a sorted list: canonical order, deterministic). Densities add up, so many big falls make wide, thick
+  banks; stopped falls thin away within a minute. Colonists in mist (`Mist.At` >= `Felt`) count its seconds toward
+  the day's mood (people.md). Saved in snapshots (v11) and in `StateHash`. Drawn by `MistView` (rendering.md); a
+  future beauty system can read the same field.
 
 - **Cave-ins (DF-style):** a solid tile is supported if face-adjacent solid tiles connect it to z=0. After a
   dig (`ColonySim.CompleteDesignation` -> `World.CaveIns`), each unsupported neighbouring mass falls as one

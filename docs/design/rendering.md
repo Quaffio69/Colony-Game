@@ -100,3 +100,14 @@ The Dwarf Render kit integration (pixel art, glyph ids, ASCII zoom), the graphic
   running down, lacy for trickles), a splash puff and spray droplets, all animated in the shader; falls of 1.5+ levels
   also give off mist (`mist(_dr).gdshader`: 4 camera-facing puffs a fall on staggered loops, rising, swelling and
   drifting out and downwind, their density Bayer-dithered so it stays opaque pixel-art haze). `--falls-demo`.
+  **Mist banks** (`MistView`, `mist_cloud(_dr).gdshader`) are drawn from the sim's mist field (`Fluids.Mist`, see
+  world.md), so they build up, drift and thin with it: round the camera (range 2x rig distance, 48-256 tiles) 4x a
+  second, each misty 4x4 cell gets up to 3 camera-facing puffs (more as it thickens, each fading in over its own
+  density range, stacked higher), eased toward the field (no popping). Puffs loop in the shader (16-24 s: fade in, swell,
+  rise, drift on the `wind` uniform, which the CPU eases when the sim's wind veers); each shifts the Bayer pattern by
+  its seed so overlaps fill different pixels (thick mist accumulates), with opacity capped (0.46 a puff) so the
+  thickest banks stay see-through; puffs near the camera thin away; faded-out puffs collapse to no fragments. Above
+  the cut and unseen cavern cells are skipped. One MultiMesh, one bulk buffer upload a refresh, nothing while there
+  is no mist (bench: within noise at every zoom at 1440p). Mist writes glyph group `GlyphAtlas.Mist` (11), which
+  the post pass leaves un-inked (no outlines or edge darkening on dithered haze), and a little emission (pale in
+  shade). `--mist-demo`.

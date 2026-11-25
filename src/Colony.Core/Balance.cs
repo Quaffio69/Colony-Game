@@ -79,6 +79,15 @@ public static class Balance
     /// <summary>Share of the way a colonist's happiness moves each day toward that day's mood (home, food, living
     /// standard, likes), so good days build up and one bad day only dents it. Was 1 (mood reset daily).</summary>
     public const float MoodChange = 0.35f;
+    /// <summary>Waterfall mist (<see cref="Fluids.Mist"/>): a day's mood rises up to this much for colonists who spent
+    /// <see cref="MistMoodSeconds"/> of it standing in mist (pro rata below), so a home or workshop by the falls is a
+    /// pleasant one.</summary>
+    public const float MistMood = 0.06f;
+    public const int MistMoodSeconds = 40;
+    /// <summary>Mist a fall feeds its landing cell each second per level it drops (times the square root of its strength, 0..1; drops count
+    /// up to 12 levels). Per mille of the mist lost each second, and passed on to the neighbouring cells: about 12
+    /// tiles of mist round a lone 3-level fall, banks across the valley under many big ones.</summary>
+    public const int MistPerFallLevel = 9, MistDecay = 45, MistSpread = 300;
 
     // ---- Orders ----------------------------------------------------------------------------------------------------
 

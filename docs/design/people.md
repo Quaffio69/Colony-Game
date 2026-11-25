@@ -11,7 +11,8 @@ Hunger, rest, mood and population; homes, layouts and fixtures; families; work p
   'food' = meals per unit (berries/glowcaps 1, bread 4), "need: X" uses give `ItemDef.Need`. Once a day `Society`
   uses up the consumable goods (dress, health; per-head rates in `Needs.Goods`) from usable piles, plainest first;
   `Met` per need, `Standard` smoothed. Mood (`Colonist.Happiness`) moves 35% of the way each day (`Balance.MoodChange`) toward the day's: half home (`Housing.Score`), a fifth belly,
-  the rest the goods standard; `WorkSpeed` 0.85-1.15. Unhappy (< 0.25, i.e. homeless counts) 5 days running: the
+  the rest the goods standard, plus likes met and up to `Balance.MistMood` (0.06) for `MistMoodSeconds` (40 s) of the day
+  spent in waterfall mist (`Colonist.MistBonus`; the hover card and colonist tooltip say so); `WorkSpeed` 0.85-1.15. Unhappy (< 0.25, i.e. homeless counts) 5 days running: the
   unhappiest, newest first, leaves, one a day; neither unhappiness nor starvation takes a colony below
   `Needs.NeverBelow` (7): hardship thins, never empties (no death spirals, by design). Settlers arrive in waves (day 3, then
   every 3 days) while there are >= 3 days of food and nobody starves: pop x (2% + 10% x mood) a day, capped by free

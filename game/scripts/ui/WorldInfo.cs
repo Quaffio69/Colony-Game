@@ -185,6 +185,8 @@ public static class WorldInfo
         }
         if (sim.Water.MassAt(cell) >= Colony.Core.Fluids.Water.MinMass)
             card.Add("≈", Tok("water"), $"water {sim.Water.Level(cell)}/7" + (sim.Water.Pressure(cell) is var pr and > 0.05f ? $", pressed by {pr:0.0}" : ""));
+        if (sim.Mist.At(cell) is var mist and >= Colony.Core.Fluids.Mist.Felt)
+            card.Add("~", Tok("water2"), (mist >= Colony.Core.Fluids.Mist.Full ? "thick waterfall mist" : "waterfall mist") + " · lifts the mood of people who linger", "Dim");
         if (sim.Waterworks.At(cell) is { } thing)
             card.Add("☼", Tok("water"), thing switch
             {

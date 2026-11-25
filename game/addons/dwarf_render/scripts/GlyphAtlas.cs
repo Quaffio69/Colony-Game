@@ -23,6 +23,7 @@ public static class GlyphAtlas
 	public const int Sky = 0;
 	public const int Oak = 1, Pine = 2, Birch = 3, Bush = 4;          // foliage (outline pass treats 1..4 as leaves)
 	public const int Prop = 5, Dwarf = 6, Trunk = 7, Torch = 8, Creature = 9, Item = 10;
+	public const int Mist = 11;                                        // haze (waterfall mist): the outline pass skips it
 	public const int Generic = 16;
 	public const int Grass = 17, Dirt = 18, Path = 19, Sand = 20, Stone = 21, DeepStone = 22, Boulder = 23,
 	                 Ore = 24, Wood = 25, Plank = 26, Water = 27, Brick = 28, Ember = 29, Metal = 30, Crystal = 31;
@@ -43,6 +44,7 @@ public static class GlyphAtlas
 		[Torch]     = new("torch",    " .'^*%#@", "!!!!!!!!"),
 		[Creature]  = new("creature", " .:oO0@@", "MMMMMMMM"),
 		[Item]      = new("item",     " .:*o%$@", "********"),
+		[Mist]      = new("mist",     "  ..::~~", "~~~~~~~~"),
 		[Generic]   = new("generic",  " .:-=+#@", "########"),
 		[Grass]     = new("grass",    " .,'\"vwW", "`,.\",.',"),
 		[Dirt]      = new("dirt",     " .,:;+o%", ".,.,.,`."),

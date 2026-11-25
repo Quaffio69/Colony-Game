@@ -76,6 +76,7 @@ float lin_depth(float d, vec2 uv, mat4 inv_proj) {
 // (The kit first assumed the older 7-bit packing, which read every id as twice its value.)
 float obj_id(float a) { if (a > 0.5) a = 1.0 - a; return floor(a * 127.0 + 0.5); }
 bool is_fol(float a) { float id = obj_id(a); return id >= 0.5 && id <= 4.5; }
+bool is_mist(float a) { return abs(obj_id(a) - 11.0) < 0.5; } // GlyphAtlas.Mist: dithered haze, never inked
 
 float outer_axis(float d, float da, float db, float thr) {
 	bool farther = (da - d > thr) || (db - d > thr);
@@ -100,19 +101,20 @@ void fragment() {
 	bool sky = is_sky(dC);
 	mat4 ip = INV_PROJECTION_MATRIX;
 	mat3 v2w = mat3(INV_VIEW_MATRIX);
+	bool hazy = !sky && is_mist(texture(nr_tex, uv).a); // mist pixels: no inking, no edge darkening
 
 	if (fog_amount > 0.0 && !sky) {
 		float f = smoothstep(-32.0, 56.0, lin_depth(dC, uv, ip) - fog_ref);
 		col = mix(col, fog_color, f * fog_amount);
 	}
-	if (edge_darken > 0.0) {
+	if (edge_darken > 0.0 && !hazy) {
 		vec3 avg = (lin_to_srgb(texture(screen_tex, cuv + vec2(px.x, 0.0)).rgb) + lin_to_srgb(texture(screen_tex, cuv - vec2(px.x, 0.0)).rgb) +
 		            lin_to_srgb(texture(screen_tex, cuv + vec2(0.0, px.y)).rgb) + lin_to_srgb(texture(screen_tex, cuv - vec2(0.0, px.y)).rgb)) * 0.25;
 		col *= 1.0 - edge_darken * 0.45 * smoothstep(0.04, 0.25, length(col - avg));
 	}
 
 	// --- Outlines (second-difference depth test; world normals; foliage-aware) ---
-	if (outline_on && !sky) {
+	if (outline_on && !sky && !hazy) {
 		float d = lin_depth(dC, uv, ip);
 		vec4 nC = texture(nr_tex, uv);
 		vec3 n = normalize(v2w * (nC.xyz * 2.0 - 1.0));

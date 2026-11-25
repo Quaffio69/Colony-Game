@@ -283,6 +283,11 @@ public sealed partial class Colonist
     public Labor PreferredWork { get; }
     internal long LastTreat = long.MinValue / 2;
     internal int WorkTicks, PreferredTicks; // today's work, and how much of it was the preferred kind
+    /// <summary>Mist sweeps (seconds) today spent standing in waterfall mist (<see cref="Fluids.Mist"/>).</summary>
+    internal int MistSweeps;
+
+    /// <summary>Mood from waterfall mist today: up to <see cref="Balance.MistMood"/> after <see cref="Balance.MistMoodSeconds"/> in it.</summary>
+    public float MistBonus => Balance.MistMood * Math.Min(1f, MistSweeps / (float)Balance.MistMoodSeconds);
 
     private static T Pick<T>(IReadOnlyList<T> options, int id, int salt) =>
         options[(int)(Procedural.Noise.Hash(id, salt, 91, 4243) * (options.Count - 1e-3f))];
@@ -1607,6 +1612,7 @@ public sealed partial class Colonist
         SnapSaveCombat(w);
         w.Write((byte)Machine);
         w.Write(Fuel);
+        w.Write(MistSweeps);
     }
 
     /// <summary>Reads a colonist; its spouse is linked afterwards (by id) and its home by the housing.</summary>
@@ -1633,6 +1639,7 @@ public sealed partial class Colonist
             c.Machine = (MachineKind)r.ReadByte();
             c.Fuel = r.ReadInt32();
         }
+        if (!Net.SnapIO.Before(11)) c.MistSweeps = r.ReadInt32();
         return (c, spouse);
     }
 }

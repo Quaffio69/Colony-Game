@@ -2,7 +2,7 @@
 // swells, drifts out from the cliff and with a light breeze, and fades; INSTANCE_CUSTOM.a staggers the loops. The puff
 // is a camera-facing quad (built here, so skip_vertex_transform) whose soft, noisy density is dithered with a 4x4 Bayer
 // pattern instead of blended: opaque, so the pixel-art pass sees it, and it reads as pixel-art haze.
-// Dwarf Render variant: toon-lit, the water glyph in ROUGHNESS.
+// Dwarf Render variant: toon-lit, the mist glyph group in ROUGHNESS (the outline pass leaves it be).
 // Instance basis: +Z = out from the cliff, +X = along it. INSTANCE_CUSTOM: r = strength, b = seed, a = loop phase.
 shader_type spatial;
 render_mode cull_disabled, skip_vertex_transform;
@@ -66,8 +66,9 @@ void fragment() {
 	if (v_world.y > cut_height + 0.002 || density() < bayer4(FRAGCOORD.xy)) {
 		discard;
 	}
-	ALBEDO = mist;
-	ROUGHNESS = 27.0 / 127.0; // glyph group: water (GlyphAtlas.Water)
+	ALBEDO = mist * 0.7;
+	EMISSION = dr_srgb_to_linear(mist) * 0.35; // lit from within a little: pale in shade, not dark
+	ROUGHNESS = 11.0 / 127.0; // glyph group: mist (GlyphAtlas.Mist: no outlines)
 	METALLIC = 0.0;
 	SPECULAR = 0.0;
 	v_sky = 1.0;

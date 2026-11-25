@@ -74,6 +74,8 @@ public sealed partial class ColonySim
 
     /// <summary>Water in the world (rivers, lakes, floods): a compressible cellular fluid.</summary>
     public Fluids.Water Water { get; }
+    /// <summary>Mist off the waterfalls (drawn by the game; lifts the mood of colonists in it).</summary>
+    public Fluids.Mist Mist { get; }
     /// <summary>Water wheels, pumps and power.</summary>
     public Fluids.Waterworks Waterworks { get; } = new();
     /// <summary>Walls, wheels and pumps waiting to be built.</summary>
@@ -107,6 +109,7 @@ public sealed partial class ColonySim
         Rooms = new Rooms(world);
         Farms = new Farms(world);
         Water = new Fluids.Water(world);
+        Mist = new Fluids.Mist(world);
         Constructions = new Constructions(world) { IsOccupied = c => Waterworks.Occupied(c) || Stockpiles.Racks.ContainsKey(c), IsStorage = c => Stockpiles.Contains(c) };
         Items.CapacityAt = Stockpiles.CapacityAt;
         Stockpiles.RackLost = (c, rack) => Items.Drop(c, ItemType.Plank, Constructions.Cost(StructureKind.Rack, rack.Levels).Count);
@@ -709,6 +712,7 @@ public sealed partial class ColonySim
     {
         Water.Join();
         Waterworks.Tick(Water, World);
+        Mist.Sample(this); // reads the falls of the step just landed
         _waterworksDue = false;
     }
 
@@ -815,6 +819,7 @@ public sealed partial class ColonySim
         Net.SnapIO.Section(w, "wildlife"); Wildlife.SnapSave(w);
         Net.SnapIO.Section(w, "regrowth"); Regrowth.SnapSave(w);
         Net.SnapIO.Section(w, "trades"); Trades.SnapSave(w);
+        Net.SnapIO.Section(w, "mist"); Mist.SnapSave(w);
         Net.SnapIO.Section(w, "sim");
         w.Write(Tick); w.Write(PathSearches); w.Write(CaveInCount); w.Write(ItemsProduced); w.Write(ColonistsEver);
         w.Write(_families); w.Write(_eventRoomsVersion); w.Write(_waterworksDue); w.Write(NeedsEnabled); w.Write(Deaths);
@@ -876,6 +881,7 @@ public sealed partial class ColonySim
         Net.SnapIO.Section(r, "wildlife"); sim.Wildlife.SnapLoad(r);
         if (!Net.SnapIO.Before(3)) { Net.SnapIO.Section(r, "regrowth"); sim.Regrowth.SnapLoad(r); }
         if (!Net.SnapIO.Before(4)) { Net.SnapIO.Section(r, "trades"); sim.Trades.SnapLoad(r); }
+        if (!Net.SnapIO.Before(11)) { Net.SnapIO.Section(r, "mist"); sim.Mist.SnapLoad(r); }
         Net.SnapIO.Section(r, "sim");
         sim.Tick = r.ReadInt64(); sim.PathSearches = r.ReadInt64(); sim.CaveInCount = r.ReadInt32(); sim.ItemsProduced = r.ReadInt64();
         sim.ColonistsEver = r.ReadInt32(); sim._families = r.ReadInt32(); sim._eventRoomsVersion = r.ReadInt32();
