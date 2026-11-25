@@ -32,7 +32,7 @@ public static class StateHash
     public static ulong Compute(ColonySim sim)
     {
         ulong sum = Of(sim.Tick, sim.Colonists.Count, sim.Designations.Count, sim.Stockpiles.Count, sim.Rooms.All.Count, sim.Constructions.Count,
-            sim.World.UnseenCells);
+            sim.World.UnseenCells, sim.DevMode ? 1 : 0, sim.DevInstantOrders ? 1 : 0);
         foreach (var c in sim.Colonists)
             sum += Of(1, c.Id, Pos(c.Position), (long)c.Task, (long)c.State, c.Satiety, (long)(c.Rest * 1000), c.Faction, c.CarryingCount, c.Education,
                 c.Health, c.Downed ? 1 : 0, c.Drafted ? 1 : 0, c.Weapon?.Index ?? -1, c.Armour?.Index ?? -1, c.Shield?.Index ?? -1, (long)c.Machine, c.Fuel);

@@ -27,7 +27,7 @@ public partial class ColonistView : Node3D
         public Colonist Colonist = null!;
         public Node3D Root = null!, Body = null!;
         public MeshInstance3D Load = null!, Weapon = null!, Shield = null!, Armour = null!, Bar = null!, Marker = null!, Scaffold = null!;
-        public MeshInstance3D? Drill; // the excavator's drill bit (spins while it digs)
+        public Node3D? Boom, Stick, Bucket; // the excavator's arm (scoops while it digs)
         public float Heading; // a machine faces where it drives
         public ItemType? ShownWeapon, ShownShield, ShownArmour;
     }
@@ -115,7 +115,7 @@ public partial class ColonistView : Node3D
 
     // ---- Heavy machinery: dwarven steam engines on tracks and wheels (facing +x, turned by Heading) ----------------
 
-    private static Mesh? _excavatorMesh, _wagonMesh, _drillMesh;
+    private static Mesh? _excavatorMesh, _wagonMesh, _boomMesh, _stickMesh, _bucketMesh;
 
     private static StandardMaterial3D Mat(string hex, float metal = 0f, float rough = 0.6f) =>
         new() { AlbedoColor = Color.FromHtml(hex), Metallic = metal, Roughness = rough };
@@ -123,18 +123,50 @@ public partial class ColonistView : Node3D
     private static StandardMaterial3D Glow(string hex) =>
         new() { AlbedoColor = Color.FromHtml(hex), EmissionEnabled = true, Emission = Color.FromHtml(hex), EmissionEnergyMultiplier = 2.5f };
 
+    /// <summary>The excavator's arm at rest (radians about the side axis): the boom raised, the stick hanging forward,
+    /// the bucket curled in.</summary>
+    private const float BoomRest = 0.75f, StickRest = -1.95f, BucketRest = -0.5f;
+
     private void AddMachineBody(View v)
     {
         bool excavator = v.Colonist.Machine == MachineKind.Excavator;
         v.Body.Scale = Vector3.One * 1.3f; // heavy machinery: bigger than a person, still within its cell
         v.Body.AddChild(new MeshInstance3D { Mesh = excavator ? _excavatorMesh ??= BuildExcavator() : _wagonMesh ??= BuildWagon() });
         if (!excavator) return;
-        v.Drill = new MeshInstance3D { Mesh = _drillMesh ??= BuildDrill(), Position = new Vector3(0.5f, 0.4f, 0), Rotation = new Vector3(0, 0, -Mathf.Pi / 2) };
-        v.Body.AddChild(v.Drill);
+        // Boom -> stick -> bucket, each a pivot turned about the side (z) axis, mounted beside the cab.
+        v.Boom = new Node3D { Position = new Vector3(0.14f, 0.42f, 0.08f), Rotation = new Vector3(0, 0, BoomRest) };
+        v.Boom.AddChild(new MeshInstance3D { Mesh = _boomMesh ??= BuildBoom() });
+        v.Stick = new Node3D { Position = new Vector3(BoomLength, 0, 0), Rotation = new Vector3(0, 0, StickRest) };
+        v.Stick.AddChild(new MeshInstance3D { Mesh = _stickMesh ??= BuildStick() });
+        v.Bucket = new Node3D { Position = new Vector3(StickLength, 0, 0), Rotation = new Vector3(0, 0, BucketRest) };
+        v.Bucket.AddChild(new MeshInstance3D { Mesh = _bucketMesh ??= BuildBucket() });
+        v.Stick.AddChild(v.Bucket);
+        v.Boom.AddChild(v.Stick);
+        v.Body.AddChild(v.Boom);
     }
 
-    /// <summary>The steam excavator: iron tracks, a riveted chassis, a copper boiler with brass bands, a smokestack, a glowing
-    /// firebox at the back and a brass arm holding the drill out front.</summary>
+    private const float BoomLength = 0.5f, StickLength = 0.36f;
+
+    /// <summary>The dig cycle: the boom dips, the stick drags the bucket in through the face and the bucket curls up with
+    /// its load, then all rise again. Idle, the arm settles back to rest.</summary>
+    private void Scoop(View v, bool digging, float delta)
+    {
+        float boom = BoomRest, stick = StickRest, bucket = BucketRest;
+        if (digging)
+        {
+            float phase = _time * 2.6f + v.Colonist.Id;
+            boom -= 0.28f * (0.5f + 0.5f * Mathf.Sin(phase));
+            stick += 0.45f * Mathf.Sin(phase + 1.2f);
+            bucket += 0.8f * (0.5f + 0.5f * Mathf.Sin(phase + 2.3f));
+        }
+        float k = digging ? 1f : Mathf.Min(1f, delta * 4f);
+        v.Boom!.Rotation = new Vector3(0, 0, Mathf.Lerp(v.Boom.Rotation.Z, boom, k));
+        v.Stick!.Rotation = new Vector3(0, 0, Mathf.Lerp(v.Stick.Rotation.Z, stick, k));
+        v.Bucket!.Rotation = new Vector3(0, 0, Mathf.Lerp(v.Bucket.Rotation.Z, bucket, k));
+    }
+
+    /// <summary>The steam excavator's tracks and house: iron tracks under a slew ring, a riveted deck with the driver's cab
+    /// up front, a copper boiler and smokestack behind it, a glowing firebox and an iron counterweight at the back.</summary>
     private static Mesh BuildExcavator()
     {
         var iron = Mat("#3a3634", 0.4f, 0.7f);
@@ -142,32 +174,68 @@ public partial class ColonistView : Node3D
         var copper = Mat("#b8733a", 0.8f, 0.35f);
         var brass = Mat("#d0a040", 0.85f, 0.3f);
         var soot = Mat("#262222", 0.3f, 0.8f);
+        var glass = Mat("#ffd890", 0.2f, 0.2f);
         var p = new MeshKit.Parts();
         foreach (float z in new[] { -0.27f, 0.27f })
         {
-            p.Add(MeshKit.Box(0.9f, 0.2f, 0.18f), 0, 0.1f, z, iron); // tracks
-            foreach (float x in new[] { -0.32f, 0f, 0.32f }) p.Add(MeshKit.Cyl(0.08f, 0.2f, 10), MeshKit.AlongZ(x, 0.1f, z), brass); // road wheels
+            p.Add(MeshKit.Box(0.86f, 0.2f, 0.17f), 0, 0.1f, z, iron); // tracks
+            foreach (float x in new[] { -0.3f, 0f, 0.3f }) p.Add(MeshKit.Cyl(0.08f, 0.19f, 10), MeshKit.AlongZ(x, 0.1f, z), brass); // road wheels
         }
-        p.Add(MeshKit.Box(0.72f, 0.12f, 0.46f), 0, 0.26f, 0, chassis);
-        p.Add(MeshKit.Cyl(0.2f, 0.4f, 14), -0.1f, 0.52f, 0, copper); // boiler
-        foreach (float y in new[] { 0.4f, 0.62f }) p.Add(MeshKit.Cyl(0.215f, 0.035f, 14), -0.1f, y, 0, brass);
-        p.Add(MeshKit.Ball(0.2f, 0.16f, 14), -0.1f, 0.72f, 0, copper); // dome
-        p.Add(MeshKit.Cyl(0.05f, 0.34f, 8), -0.26f, 0.86f, 0.12f, soot); // smokestack
-        p.Add(MeshKit.Cone(0.05f, 0.09f, 0.08f, 8), -0.26f, 1.06f, 0.12f, soot);
-        p.Add(MeshKit.Box(0.04f, 0.09f, 0.16f), -0.37f, 0.38f, 0, Glow("#ff7a2a")); // firebox
-        p.Add(MeshKit.Box(0.4f, 0.08f, 0.09f), MeshKit.At(0.26f, 0.44f, 0, 0, 0, -0.12f), brass); // arm
-        p.Add(MeshKit.Box(0.1f, 0.14f, 0.14f), 0.44f, 0.41f, 0, chassis); // drill housing
+        p.Add(MeshKit.Cyl(0.24f, 0.06f, 16), 0, 0.23f, 0, brass); // slew ring
+        p.Add(MeshKit.Box(0.66f, 0.1f, 0.5f), -0.04f, 0.31f, 0, chassis); // deck
+        p.Add(MeshKit.Box(0.26f, 0.28f, 0.22f), 0.14f, 0.5f, -0.13f, chassis); // cab
+        p.Add(MeshKit.Box(0.27f, 0.03f, 0.23f), 0.14f, 0.655f, -0.13f, iron); // cab roof
+        p.Add(MeshKit.Box(0.012f, 0.1f, 0.16f), 0.275f, 0.54f, -0.13f, glass); // windows, lit from inside
+        p.Add(MeshKit.Box(0.14f, 0.1f, 0.012f), 0.15f, 0.54f, -0.245f, glass);
+        p.Add(MeshKit.Cyl(0.13f, 0.3f, 14), -0.17f, 0.51f, 0.08f, copper); // boiler
+        foreach (float y in new[] { 0.42f, 0.6f }) p.Add(MeshKit.Cyl(0.142f, 0.03f, 14), -0.17f, y, 0.08f, brass);
+        p.Add(MeshKit.Ball(0.13f, 0.1f, 14), -0.17f, 0.66f, 0.08f, copper); // dome
+        p.Add(MeshKit.Cyl(0.04f, 0.3f, 8), -0.26f, 0.8f, -0.1f, soot); // smokestack
+        p.Add(MeshKit.Cone(0.04f, 0.075f, 0.07f, 8), -0.26f, 0.98f, -0.1f, soot);
+        p.Add(MeshKit.Box(0.16f, 0.16f, 0.46f), -0.32f, 0.44f, 0, iron); // counterweight
+        p.Add(MeshKit.Box(0.012f, 0.06f, 0.14f), -0.405f, 0.42f, 0, Glow("#ff7a2a")); // firebox
+        p.Add(MeshKit.Box(0.1f, 0.12f, 0.14f), 0.16f, 0.41f, 0.08f, iron); // boom foot
         return MeshKit.Compose(p);
     }
 
-    /// <summary>The drill bit: a steel cone with a spiral of brass flutes (spun about its axis while digging).</summary>
-    private static Mesh BuildDrill()
+    /// <summary>The boom (from its foot pivot along +x): twin iron beams with a brass steam ram underneath.</summary>
+    private static Mesh BuildBoom()
     {
+        var iron = Mat("#4a4440", 0.5f, 0.55f);
+        var brass = Mat("#d0a040", 0.85f, 0.3f);
         var steel = Mat("#a8b0b8", 0.9f, 0.25f);
+        var p = new MeshKit.Parts();
+        p.Add(MeshKit.Box(BoomLength, 0.08f, 0.1f), BoomLength / 2, 0, 0, iron);
+        p.Add(MeshKit.Cyl(0.035f, 0.22f, 8), MeshKit.At(0.16f, -0.07f, 0, 0, 0, -Mathf.Pi / 2 + 0.2f), brass); // ram
+        p.Add(MeshKit.Cyl(0.018f, 0.18f, 6), MeshKit.At(0.33f, -0.04f, 0, 0, 0, -Mathf.Pi / 2 + 0.2f), steel); // its rod
+        p.Add(MeshKit.Cyl(0.05f, 0.12f, 10), MeshKit.AlongZ(BoomLength, 0, 0), brass); // knuckle
+        return MeshKit.Compose(p);
+    }
+
+    /// <summary>The stick (dipper arm) from the boom's knuckle along +x, with a small ram for the bucket.</summary>
+    private static Mesh BuildStick()
+    {
+        var iron = Mat("#4a4440", 0.5f, 0.55f);
         var brass = Mat("#d0a040", 0.85f, 0.3f);
         var p = new MeshKit.Parts();
-        p.Add(MeshKit.Cone(0.11f, 0.0f, 0.3f, 10), 0, 0.15f, 0, steel);
-        for (int i = 0; i < 3; i++) p.Add(MeshKit.Box(0.02f, 0.2f, 0.17f - i * 0.05f), MeshKit.At(0, 0.06f + i * 0.08f, 0, 0, i * 1.1f, 0), brass);
+        p.Add(MeshKit.Box(StickLength, 0.065f, 0.08f), StickLength / 2, 0, 0, iron);
+        p.Add(MeshKit.Cyl(0.026f, 0.2f, 8), MeshKit.At(0.18f, 0.055f, 0, 0, 0, -Mathf.Pi / 2), brass); // bucket ram
+        p.Add(MeshKit.Cyl(0.04f, 0.1f, 10), MeshKit.AlongZ(StickLength, 0, 0), brass); // bucket pin
+        return MeshKit.Compose(p);
+    }
+
+    /// <summary>The bucket hanging from its pin: a steel scoop (back, floor, two cheeks) open to +x with three teeth.</summary>
+    private static Mesh BuildBucket()
+    {
+        var steel = Mat("#8a9098", 0.85f, 0.35f);
+        var teeth = Mat("#c8ccd2", 0.9f, 0.2f);
+        var p = new MeshKit.Parts();
+        p.Add(MeshKit.Box(0.025f, 0.16f, 0.2f), 0, -0.06f, 0, steel); // back
+        p.Add(MeshKit.Box(0.17f, 0.025f, 0.2f), 0.075f, -0.14f, 0, steel); // floor
+        foreach (float z in new[] { -0.1f, 0.1f })
+            p.Add(MeshKit.Box(0.17f, 0.16f, 0.02f), 0.075f, -0.06f, z, steel); // cheeks
+        foreach (float z in new[] { -0.065f, 0f, 0.065f })
+            p.Add(MeshKit.Cone(0.022f, 0.002f, 0.06f, 6), MeshKit.At(0.185f, -0.14f, z, 0, 0, -Mathf.Pi / 2), teeth);
         return MeshKit.Compose(p);
     }
 
@@ -250,7 +318,7 @@ public partial class ColonistView : Node3D
             var pos = Foot(c.Position);
             if (c.NextStep is { } next) pos = pos.Lerp(Foot(next), c.StepProgress);
 
-            if (c.State == ColonistState.Working && c.JobTarget is { } t && !c.Downed)
+            if (c.State == ColonistState.Working && c.JobTarget is { } t && !c.Downed && !c.IsMachine)
             {
                 // Lean into the work with a rhythmic swing.
                 var toward = (SimSpace.TileCenter(t) - pos - new Vector3(0, 0.5f, 0)).Normalized();
@@ -272,11 +340,11 @@ public partial class ColonistView : Node3D
 
             if (c.IsMachine)
             {
-                // Machines turn to face where they drive (or what they dig), and the drill spins while it bites.
+                // Machines turn to face where they drive (or what they dig), and the excavator's arm scoops while it digs.
                 Vector3? toward = c.NextStep is { } ns ? Foot(ns) - Foot(c.Position) : c.State == ColonistState.Working && c.JobTarget is { } jt ? SimSpace.TileCenter(jt) - pos : null;
                 if (toward is { } d && new Vector2(d.X, d.Z).LengthSquared() > 0.001f) v.Heading = Mathf.LerpAngle(v.Heading, Mathf.Atan2(-d.Z, d.X), Mathf.Min(1f, (float)delta * 8f));
                 v.Body.Rotation = new Vector3(0, v.Heading, 0);
-                if (v.Drill != null && c.State == ColonistState.Working) v.Drill.Rotation = new Vector3(_time * 18f, 0, -Mathf.Pi / 2);
+                if (v.Boom != null) Scoop(v, c.State == ColonistState.Working && !c.Downed, (float)delta);
             }
             v.Root.Position = pos;
             v.Root.Scale = Vector3.One * (c.IsChild ? 0.6f : 1f);

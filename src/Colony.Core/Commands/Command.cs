@@ -622,3 +622,25 @@ public sealed record SetOrderPriority(TilePos A, TilePos B, int Priority) : Comm
         return "";
     }
 }
+
+// ---- Dev mode ----------------------------------------------------------------------------------------------
+
+/// <summary>Turns dev mode on or off (single-player games only): instant, free construction, no schooling needed, and
+/// with <see cref="InstantOrders"/> work orders done at once (see <see cref="ColonySim.DevMode"/>).</summary>
+public sealed record SetDevMode(bool On, bool InstantOrders) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        if (On && sim.Factions.Count > 1) return "Dev mode is for single-player games";
+        sim.SetDevMode(On, InstantOrders);
+        return !On ? "Dev mode off" : InstantOrders ? "Dev mode: everything builds and digs at once, for free" : "Dev mode: everything builds at once, for free";
+    }
+}
+
+/// <summary>Dev mode: drops <see cref="Count"/> of a catalog item (by id) at a cell; machines and automatons roll out
+/// there, and "colonist" brings settlers.</summary>
+public sealed record DevSpawn(TilePos At, string ItemId, int Count) : Command
+{
+    public override string Apply(ColonySim sim) =>
+        !sim.DevMode ? "Spawning needs dev mode" : sim.DevSpawn(At, ItemId, Count, Player);
+}

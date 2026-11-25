@@ -917,7 +917,7 @@ public sealed partial class Colonist
         foreach (var machine in FreeMachinesBiggestFirst(room))
         {
             var recipe = machine.Recipe!;
-            if (recipe.Education > Education || IsAutomaton && recipe.Kind == ItemKind.Education) continue;
+            if (recipe.Education > Education && !sim.DevMode || IsAutomaton && recipe.Kind == ItemKind.Education) continue; // dev mode: no schooling needed
             if (Rooms.AtLimit(sim, machine)) continue; // stocked up to its limit
             if (MachineSpots(sim, machine, component).Count == 0) continue;
             var full = machine.Batch;

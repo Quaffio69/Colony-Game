@@ -309,8 +309,12 @@ public partial class WorldView : Node3D
 
     // ---- Sections ------------------------------------------------------------------------------------
 
+    /// <summary>Main-thread ms the last level change took here (--level-sweep).</summary>
+    public double LevelMs { get; private set; }
+
     private void ApplyViewLevel()
     {
+        long t0 = Stopwatch.GetTimestamp();
         _appliedViewLevel = _viewLevel;
         _terrainMaterial.SetShaderParameter("cut_height", (float)(_viewLevel + 1));
         foreach (var s in _sections)
@@ -320,6 +324,7 @@ public partial class WorldView : Node3D
                 LinkFar(s);
             }
         RebuildCapFull();
+        LevelMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
     }
 
     private void Enqueue(int section)
@@ -705,7 +710,7 @@ public partial class WorldView : Node3D
         _capLevel = level;
         _cap.Position = new Vector3(World.Width / 2f, level + 1, World.Depth / 2f);
         _capMaterial.SetShaderParameter("level", (float)level);
-        FillCap(0, 0, World.Width, World.Depth);
+        CutCap.FillAll(World, level, _capData);
         _capDirty.Clear();
         UploadCap();
     }
@@ -717,43 +722,11 @@ public partial class WorldView : Node3D
         {
             var chunk = World.Chunks[key];
             int x0 = chunk.Origin.X, y0 = chunk.Origin.Y;
-            FillCap(x0, y0, Math.Min(Chunk.Size, World.Width - x0), Math.Min(Chunk.Size, World.Depth - y0));
+            CutCap.Fill(World, _capLevel, x0, y0, Math.Min(Chunk.Size, World.Width - x0), Math.Min(Chunk.Size, World.Depth - y0), _capData);
         }
         bool changed = _capDirty.Count > 0;
         _capDirty.Clear();
         if (changed) UploadCap();
-    }
-
-    private TileType[] _capBox = [];
-
-    /// <summary>Fills the cap texels of a rectangle, reading the levels below, at and above the cut with a ring round it.</summary>
-    private void FillCap(int x0, int y0, int sx, int sy)
-    {
-        int bx = sx + 2, by = sy + 2, plane = bx * by;
-        if (_capBox.Length < plane * 3) _capBox = new TileType[plane * 3];
-        var box = _capBox;
-        World.CopyBox(x0 - 1, y0 - 1, _capLevel - 1, bx, by, 3, box);
-        World.MaskUnseen(x0 - 1, y0 - 1, _capLevel - 1, bx, by, 3, box); // unseen cavern air: rock, as far as anyone knows
-        // Off the map's sides counts as rock (no view in from there); CopyBox leaves it air, so fill the ring in.
-        for (int z = 0; z < 3; z++)
-        for (int y = 0; y < by; y++)
-        for (int x = 0; x < bx; x++)
-            if ((uint)(x0 - 1 + x) >= (uint)World.Width || (uint)(y0 - 1 + y) >= (uint)World.Depth) box[z * plane + y * bx + x] = TileType.Stone;
-        bool bottom = _capLevel == 0; // under the world: rock
-        for (int y = 0; y < sy; y++)
-        for (int x = 0; x < sx; x++)
-        {
-            int i = plane + (y + 1) * bx + x + 1;
-            var t = box[i];
-            byte texel = 0;
-            if (TileInfo.IsSolid(t) && TileInfo.IsSolid(box[i + plane]))
-            {
-                bool hidden = (bottom || TileInfo.IsSolid(box[i - plane])) && TileInfo.IsSolid(box[i - 1]) && TileInfo.IsSolid(box[i + 1])
-                              && TileInfo.IsSolid(box[i - bx]) && TileInfo.IsSolid(box[i + bx]);
-                texel = hidden ? (byte)TileInfo.Hidden : (byte)World.LookAt(x0 + x, y0 + y, _capLevel, t);
-            }
-            _capData[(y0 + y) * World.Width + x0 + x] = texel;
-        }
     }
 
     private void UploadCap()

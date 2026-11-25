@@ -81,7 +81,7 @@ public static class CommandCodec
         CancelWalls, DebugCompleteAll, PaintRoom, EraseRoom, PlacePart, RemoveParts, CycleRecipe, PlaceStructure,
         RemoveStructures, PlaceEdge, RemoveEdge, EdgeLine, PlaceOutline, ClearWalls, Covers, SetWorkPriority, SetHomePolicy,
         SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy, SettleGame, SetDrafted, SquadMove, SquadAttack, DebugSpawnNest, PlaceRacks, Demolish,
-        AddTradeDepot, ProposeTrade, CounterTrade, AcceptTrade, RejectTrade, SetMachineLimit, PlaceHouse, SetOrderPriority,
+        AddTradeDepot, ProposeTrade, CounterTrade, AcceptTrade, RejectTrade, SetMachineLimit, PlaceHouse, SetOrderPriority, SetDevMode, DevSpawn,
     }
 
     private static void Terms(BinaryWriter w, Trade.TradeTerms t)
@@ -168,6 +168,8 @@ public static class CommandCodec
             case PlaceOutline x: Head(Tag.PlaceOutline); P(w, x.A); P(w, x.B); w.Write(x.Material); break;
             case PlaceHouse x: Head(Tag.PlaceHouse); P(w, x.A); P(w, x.B); w.Write(x.Storeys); w.Write(x.Wall); w.Write(x.Floor); w.Write(x.Roof); break;
             case SetOrderPriority x: Head(Tag.SetOrderPriority); P(w, x.A); P(w, x.B); w.Write((byte)x.Priority); break;
+            case SetDevMode x: Head(Tag.SetDevMode); w.Write(x.On); w.Write(x.InstantOrders); break;
+            case DevSpawn x: Head(Tag.DevSpawn); P(w, x.At); w.Write(x.ItemId); w.Write(x.Count); break;
             case ClearWalls x: Head(Tag.ClearWalls); P(w, x.A); P(w, x.B); break;
             case Covers x: Head(Tag.Covers); w.Write((byte)x.Kind); P(w, x.A); P(w, x.B); w.Write(x.Material); w.Write(x.Remove); break;
             case SetWorkPriority x: Head(Tag.SetWorkPriority); w.Write(x.ColonistId); w.Write((byte)x.Work); w.Write(x.Priority); break;
@@ -222,6 +224,8 @@ public static class CommandCodec
             Tag.PlaceOutline => new PlaceOutline(P(r), P(r), r.ReadInt32()),
             Tag.PlaceHouse => new PlaceHouse(P(r), P(r), r.ReadInt32(), r.ReadInt32(), r.ReadInt32(), r.ReadInt32()),
             Tag.SetOrderPriority => new SetOrderPriority(P(r), P(r), r.ReadByte()),
+            Tag.SetDevMode => new SetDevMode(r.ReadBoolean(), r.ReadBoolean()),
+            Tag.DevSpawn => new DevSpawn(P(r), r.ReadString(), r.ReadInt32()),
             Tag.ClearWalls => new ClearWalls(P(r), P(r)),
             Tag.Covers => new Covers((StructureKind)r.ReadByte(), P(r), P(r), r.ReadInt32(), r.ReadBoolean()),
             Tag.SetWorkPriority => new SetWorkPriority(r.ReadInt32(), (Work)r.ReadByte(), r.ReadInt32()),

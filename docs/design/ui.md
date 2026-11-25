@@ -32,7 +32,7 @@ The window system, controls, game windows, hotkeys, mouse, selection, notices an
   (events + cave-ins, sticks to the bottom), Housing H, Work J, Inspect V (home/workshop under the cursor), Military M
   (fighters: health, gear, draft switches; nearby nests with Look/Attack), Trade F6 (`UI.TradeWindow`: offers and deals
   with Accept/Counter/Decline/Withdraw and delivery progress; an offer composer: give from your stores, ask from
-  theirs, click to add, − + (Shift: tens)), Tests & demos
+  theirs, click to add, − + (Shift: tens)), Dev mode F7 (`UI.DevWindow`, see below), Tests & demos
   F1, Appearance F2 (theme, frame, corners, font, size, spacing, UI scale, glass/shadows/chips), Help F3 (keys, debug).
   Home key looks at the colony; G drafts everyone and turns on squad orders (`DesignationTool.SquadOrders`: click ground
   to march, a nest to attack; G/RMB/Esc: done), Shift+G stands everyone down. **Orders ribbon** (`UI.OrdersRibbon`): a
@@ -58,5 +58,13 @@ The window system, controls, game windows, hotkeys, mouse, selection, notices an
   the box size or why it can't be placed), the box size at the cursor while dragging, a Paused pill, and toasts for the
   colony's events (alerts red; click: Chronicle). Window shadows are a tight contact shadow (the old 34 px one smeared
   a dark band under windows). **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
-  map size; `Main.NewColony` reloads the scene), Multiplayer (disabled), Appearance, Tests, Quit; opened by Esc when
-  nothing is left to close (the game does not start on it yet); the sim waits while it is up.
+  map size; `Main.NewColony` reloads the scene), Save, Load, Multiplayer, Dev mode (switches it on and opens its window),
+  Appearance, Tests, Quit; opened by Esc when nothing is left to close (the game does not start on it yet); the sim
+  waits while it is up.
+- **Dev mode** (`ColonySim.DevMode`, `ColonySimDev.cs`; commands `SetDevMode(On, InstantOrders)` and `DevSpawn(At, ItemId,
+  Count)`, so saves replay it; single-player games only): every blueprint stands the tick it is placed, with no
+  materials (structures via `CompleteConstruction`, never a wall on a colonist; room parts via `Rooms.InstantBuild`);
+  with "orders done at once" up to `DevOrdersPerTick` (4096) unclaimed orders a tick are carried out, top level first;
+  recipes and room status ignore schooling. The window (F7) switches it, sets how many to spawn (1/10/50/200) and lists
+  colonist, automaton, machines, then every good by category: pick one and the `Spawn` tool drops it where you click
+  (machines roll out fuelled). `--dev` starts a game with it on. Snapshot 10, `StateHash`.

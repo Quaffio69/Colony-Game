@@ -109,8 +109,8 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   plant is cut back to `GatheredGrowth`, not removed, so regrowth can drive future yields.
 
 - **Heavy machinery (`Agents.MachineKind`, `Agents/ColonistMachine.cs`):** dwarven steam engines built at the artificer's
-  assembly frame (Literate): a steam engine (4 iron ingots, 2 steel plate, 3 cogs), then the **excavator** (engine, a drill
-  head forged from 3 steel, 4 steel plate) or the **power wagon** (engine, 4 planks, 2 iron ingots). Items of kind
+  assembly frame (Literate): a steam engine (4 iron ingots, 2 steel plate, 3 cogs), then the **excavator** (engine, a steel
+  bucket forged from 3 steel, 4 steel plate) or the **power wagon** (engine, 4 planks, 2 iron ingots). Items of kind
   "machine" (`ItemKind.Machine`) roll out of the workshop as machines (`ColonySim.AddMachines`/`AddMachine`): colonists
   with `Machine` set and `IsAutomaton` (no needs, homes, families, schooling or drafting), named "Excavator 2" etc., with
   one trade at priority 1 (`SetUpMachine`; `SetPriority` keeps every other work at 0). The excavator takes only dig and
@@ -122,6 +122,6 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   `FuelPerCharcoal` (10) work; a dig costs 2, a wagon trip 3. Below a quarter a machine goes for charcoal like a meal
   (`TryRefuel`, the Eat task; `FinishMeal` stokes); empty, it stands idle ("out of fuel"). Fuel only burns while needs
   run (sandboxes are free). Snapshot version 9 (kind, fuel), `StateHash`. **Look (`ColonistView`):** the excavator on
-  iron tracks with a copper boiler, smokestack, glowing firebox and a brass arm whose drill spins while it digs; the wagon
+  iron tracks, its house turning on a slew ring (cab, copper boiler, smokestack, glowing firebox, counterweight), a brass boom and stick with steam rams and a toothed bucket that scoops while it digs; the wagon
   a plank bed on four wheels with a boiler up front and its load heaped in the bed; both turn to face where they drive and
   stand 1.3x a person. Hover card: fuel. `--machines-demo` shows both at work.

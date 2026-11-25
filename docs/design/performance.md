@@ -6,7 +6,9 @@ How the game stays fast on 2048x2048x384 maps: meshing, reachability, jobs, path
 
 - **Rendering:** 32x32x16 sections, greedy-meshed (`Meshing.SectionMesher`) on the thread pool from
   main-thread `TileBox` snapshots; uploads are budgeted per frame. The view-level slice is a shader
-  discard plus a texture-driven cap quad, so changing level never re-meshes. 4x MSAA.
+  discard plus a texture-driven cap quad, so changing level never re-meshes. The cap texture (`Meshing.CutCap`, one byte
+  per column: what the cut shows, or fog) is refilled for the whole map on each level change in 32-row bands across
+  threads, in Core (optimized): 6 ms on a 2048 map, where the game-assembly loop took 110 ms a level (`--level-sweep`). 4x MSAA.
 - **Reachability:** `Navigation.Connectivity` labels per-chunk regions, links them, and union-finds
   components; only changed chunks relabel. "Is this job reachable?" is a component compare.
 - **Jobs:** `Orders.JobBoard` caches each designation's work spots and their components; colonists only

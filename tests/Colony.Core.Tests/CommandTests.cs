@@ -24,7 +24,7 @@ public class CommandTests
         new SetPolicyTier(1, 4, 3), new SetPolicyPerResident(0, 2, 1.25f), new SetPolicyShared(3, true), new AddPolicy(),
         new PlaceRacks(A, B, 2), new Demolish(A, B), new AddTradeDepot(A, B) { Player = 1 },
         new ProposeTrade(2, new Trade.TradeTerms([new Trade.TradeTerm(0, "planks", 20), new Trade.TradeTerm(2, "iron_ingot", 3)])),
-        new CounterTrade(5, new Trade.TradeTerms([new Trade.TradeTerm(1, "bread", 9)])) { Player = 1 }, new AcceptTrade(5), new RejectTrade(6) { Player = 2 }, new SetMachineLimit(A, 50), new SetOrderPriority(A, B, 1) { Player = 2 },
+        new CounterTrade(5, new Trade.TradeTerms([new Trade.TradeTerm(1, "bread", 9)])) { Player = 1 }, new AcceptTrade(5), new RejectTrade(6) { Player = 2 }, new SetMachineLimit(A, 50), new SetOrderPriority(A, B, 1) { Player = 2 }, new SetDevMode(true, false), new DevSpawn(A, "excavator", 2) { Player = 1 },
     }.Select(c => new object[] { c });
 
     [Theory]

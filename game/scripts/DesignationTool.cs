@@ -43,6 +43,8 @@ public partial class DesignationTool : Node3D
         None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, FarmFlax, Block, Demolish, Cancel,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
         Room, Part, Structure, Edge, Floor, Roof, Rack, TradeDepot, House,
+        // Dev mode: drop an item, machine or colonist with a click (see SpawnItem)
+        Spawn,
     }
 
     private const ToolMode LastOrder = ToolMode.Cancel;
@@ -340,6 +342,17 @@ public partial class DesignationTool : Node3D
     public void SelectRack()
     {
         Mode = ToolMode.Rack;
+        EndSelection();
+    }
+
+    /// <summary>Dev mode: what a click with the spawn tool drops (a catalog item id, or "colonist"), and how many.</summary>
+    public string SpawnItem { get; private set; } = "";
+    public int SpawnCount { get; private set; } = 1;
+
+    public void SelectSpawn(string itemId, int count)
+    {
+        (SpawnItem, SpawnCount) = (itemId, count);
+        Mode = ToolMode.Spawn;
         EndSelection();
     }
 
@@ -699,6 +712,12 @@ public partial class DesignationTool : Node3D
                         : new System.Numerics.Vector2(edge.Cell.X + 0.5f, edge.Cell.Y + 1);
                     UpdateBox();
                 }
+                Handled();
+                break;
+
+            // Dev mode: a click drops what the spawn tool holds on the floor there.
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when Mode == ToolMode.Spawn:
+                if (Hovered is { } drop) Issue(new Colony.Core.Commands.DevSpawn(drop.Offset(0, 0, 1), SpawnItem, SpawnCount));
                 Handled();
                 break;
 

@@ -7,7 +7,7 @@ namespace Colony.Core.Agents;
 public enum MachineKind : byte
 {
     None,
-    /// <summary>A tracked steam excavator with a drill arm: takes only dig and stair orders, and works them several times faster.</summary>
+    /// <summary>A tracked steam excavator with a boom, stick and bucket: takes only dig and stair orders, and works them several times faster.</summary>
     Excavator,
     /// <summary>A steam power wagon: hauls only, carrying many loads a trip and unloading into the stockpile cells round its stop.</summary>
     PowerWagon,

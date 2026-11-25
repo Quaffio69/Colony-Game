@@ -216,7 +216,7 @@
 
     { "id": "automaton", "name": "Automaton", "category": "wonder", "kind": "worker", "uses": ["tireless workers (unskilled labour)"], "model": "statue", "color": "#c7903a" },
     { "id": "steam_engine", "name": "Steam Engine", "category": "mechanism", "weight": 40, "uses": ["heavy machinery"], "model": "gears", "color": "#7a4a2a" },
-    { "id": "drill_head", "name": "Drill Head", "category": "component", "weight": 15, "uses": ["excavators"], "model": "springs", "color": "#9aa0aa" },
+    { "id": "excavator_bucket", "name": "Excavator Bucket", "category": "component", "weight": 15, "uses": ["excavators"], "model": "springs", "color": "#9aa0aa" },
     { "id": "excavator", "name": "Excavator", "category": "machine", "kind": "machine", "uses": ["digs and carves stairs five times as fast as a miner, in any rock; burns charcoal"], "model": "crates", "color": "#c86a2a" },
     { "id": "power_wagon", "name": "Power Wagon", "category": "machine", "kind": "machine", "uses": ["hauls eight loads a trip to stockpiles; burns charcoal"], "model": "crates", "color": "#b08a3a" },
     { "id": "power_armor", "name": "Ironclad Power Armour", "category": "wonder", "weight": 20, "gear": "body", "protect": 7, "uses": ["elite guard: takes 7 off every hit"], "model": "armor", "color": "#5c6b80" },
@@ -306,8 +306,8 @@
     { "output": "automaton_core", "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["clockwork", "aether_cell", "runestones"] },
     { "output": "automaton", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["automaton_core", "steel_plate*3", "clockwork*2"] },
     { "output": "steam_engine", "ticks": 600, "workshop": "artificer", "station": "assembly_frame", "education": "Literate", "inputs": ["iron_ingot*4", "steel_plate*2", "cogs*3"] },
-    { "output": "drill_head", "workshop": "forge", "station": "anvil", "education": "Literate", "inputs": ["steel*3"] },
-    { "output": "excavator", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Literate", "inputs": ["steam_engine", "drill_head", "steel_plate*4"] },
+    { "output": "excavator_bucket", "workshop": "forge", "station": "anvil", "education": "Literate", "inputs": ["steel*3"] },
+    { "output": "excavator", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Literate", "inputs": ["steam_engine", "excavator_bucket", "steel_plate*4"] },
     { "output": "power_wagon", "ticks": 600, "workshop": "artificer", "station": "assembly_frame", "education": "Literate", "inputs": ["steam_engine", "planks*4", "iron_ingot*2"] },
     { "output": "power_armor", "ticks": 900, "workshop": "artificer", "station": "assembly_frame", "education": "Magister", "inputs": ["plate_armor", "aether_cell", "clockwork"] },
 

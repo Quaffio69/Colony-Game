@@ -130,7 +130,7 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [ ] Colonist inventory: pack meals to eat away from stores.
 - [ ] Pollution.
 - [ ] Simple people models with simple animations per action.
-- [ ] Dev mode as a dedicated mode with cheat tools (takes over Enter-completes-all and the debug spawns).
+- [x] Dev mode (main menu, F7): instant free construction, orders done at once, no schooling gates, spawn any item, machine or colonist. Single-player only. Next: fold in Enter-completes-all and the debug nest spawn.
 
 ### Direction
 - [ ] Tone down the colony-sim side, lean more toward an automation game (affects needs, moods and families versus

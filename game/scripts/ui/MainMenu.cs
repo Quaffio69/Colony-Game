@@ -80,6 +80,15 @@ public partial class MainMenu : Control
             save.Disabled = !_ui.Main.Shareable || _ui.Main.Client != null;
             Item("Load game", "", () => Go("load"), "Pick up a saved game (F9 loads the newest)");
             Item(_ui.Main.Online ? "Multiplayer (online)" : "Multiplayer", "", () => Go("multiplayer"), "Several players' colonies in one world: host a game or join one");
+            var sim = _ui.Sim;
+            bool solo = sim.Factions.Count == 1 && !_ui.Main.Online;
+            var dev = Item(sim.DevMode ? "Dev mode (on)" : "Dev mode", "", () =>
+            {
+                if (!sim.DevMode) _ui.Tool.Issue(new Colony.Core.Commands.SetDevMode(true, true));
+                Show(false);
+                _ui.OpenWindow("dev");
+            }, solo ? "Build anything to test it: instant, free construction, orders done at once, spawn items and machines (F7)" : "Dev mode is for single-player games");
+            dev.Disabled = !solo;
             _box.AddChild(G.Gap(0.5f));
             Item("Appearance", "", () => { Show(false); _ui.OpenWindow("appearance"); }, "Themes, fonts and effects (F2)");
             if (GameInfo.DevBuild) Item("Tests & demos", "", () => { Show(false); _ui.OpenWindow("tests"); }, "Developer: run tests, build demos (F1)");

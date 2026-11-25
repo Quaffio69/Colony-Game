@@ -170,6 +170,7 @@ public static class Tools
             "Materials: the last wall, floor and roof picked. Nothing is planned if anything is in the way (shown red)",
             [("Drag", "a box"), ("[ ]", "storeys"), ("Shift", "remove"), ("RMB", "done")]),
         ToolMode.TradeDepot => new("$", Tok("accent"), "Trade depot", "Depot", "Where other colonies' traders deliver what you buy; haulers carry it on to your stockpiles", BoxKeys),
+        ToolMode.Spawn => new("+", Tok("warn"), $"Spawn: {SpawnName(t)}", "Spawn", "Dev mode: drops it on the floor you click", [("Click", "drop"), ("RMB", "done")]),
         _ => new("?", Tok("dim"), m.ToString(), m.ToString(), "", BoxKeys),
     };
 
@@ -193,6 +194,10 @@ public static class Tools
         return new(PartGlyph(part), PartInfo.Role(part) == PartRole.Machine ? Tok("warn") : Tok("dim"), PartInfo.Name(part, size), part.Name,
             $"{fw}×{fd}, {cost} {material.Name.ToLowerInvariant()}: {role}", keys);
     }
+
+    private static string SpawnName(DesignationTool t) =>
+        t.SpawnItem == "colonist" ? G.Plural(t.SpawnCount, "colonist", "colonists")
+        : Catalog.TryItem(t.SpawnItem, out var item) ? $"{t.SpawnCount} × {item.Name.ToLowerInvariant()}" : t.SpawnItem;
 
     public static string PartGlyph(PartType part) => PartInfo.Role(part) switch { PartRole.Machine => "÷", PartRole.Auxiliary => "☼", PartRole.Input => "↓", _ => "↑" };
 

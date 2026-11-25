@@ -448,7 +448,7 @@ public sealed class Rooms
         foreach (var m in machines)
         {
             var r = m.Recipe!;
-            if (!sim.Colonists.Any(c => c.Faction == room.Faction && c.Education >= r.Education))
+            if (!sim.DevMode && !sim.Colonists.Any(c => c.Faction == room.Faction && c.Education >= r.Education))
                 return $"{r.Name.ToLowerInvariant()} needs a {Catalog.EducationName(r.Education)} worker";
             if (r.Kind == Items.ItemKind.Education && sim.StudentsAvailable(r, room.Faction) == 0)
                 return $"no colonists ready to become {r.Name}";

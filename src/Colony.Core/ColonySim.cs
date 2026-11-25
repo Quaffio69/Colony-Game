@@ -651,6 +651,7 @@ public sealed partial class ColonySim
         Tick++;
         _tickNodeStart = Pathfinder.NodesExpanded;
         if (_waterworksDue) RunWaterworks(); // the step begun at the end of the last tick lands first
+        DevStep(); // dev mode: what was just planned stands at once
         Farms.Tick(Tick, Flora, Designations, Water);
         Regrowth.Tick(this);
         CheckEvents();
@@ -821,6 +822,7 @@ public sealed partial class ColonySim
         foreach (var c in _recentCaveIns) { Net.SnapIO.Write(w, c.Origin); w.Write(c.Tiles); w.Write(c.Drop); w.Write(c.Tick); }
         w.Write(_events.Count);
         foreach (var e in _events) { w.Write(e.Tick); w.Write(e.Text); w.Write(e.Faction); }
+        w.Write(DevMode); w.Write(DevInstantOrders);
         Net.SnapIO.Section(w, "end");
     }
 
@@ -882,6 +884,7 @@ public sealed partial class ColonySim
         for (int i = 0; i < ncv; i++) sim._recentCaveIns.Add(new CaveIn(Net.SnapIO.ReadPos(r), r.ReadInt32(), r.ReadInt32(), r.ReadInt64()));
         int ne = r.ReadInt32();
         for (int i = 0; i < ne; i++) sim._events.Add(new SimEvent(r.ReadInt64(), r.ReadString(), r.ReadInt32()));
+        if (!Net.SnapIO.Before(10)) { sim.DevMode = r.ReadBoolean(); sim.DevInstantOrders = r.ReadBoolean(); }
         Net.SnapIO.Section(r, "end");
         Lap("colonists to end");
         sim.RebuildDerived();

@@ -44,7 +44,7 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   (`Designations.WorkTicks(kind, tile, rock, belowZero)`). Hand-built worlds (no geology) are all slate, no bedrock.
 - **Fog of war (stateless):** solid ground with no open cell on any of its six sides is unexplored
   (`VoxelWorld.IsHidden`; the map's sides and bottom count as closed). Mesh faces only exist next to open cells, so
-  only the cut surface needs it: `WorldView.FillCap` reads the levels below, at and above the cut with a ring and writes
+  only the cut surface needs it: `Meshing.CutCap` reads the levels below, at and above the cut with a ring and writes
   `TileInfo.Hidden` (palette entry 30, near-black, no glyphs) for unexplored texels; the cap re-patches when chunks on
   those three levels change. Hover and Inspect call it "Unexplored rock". Orders may still be placed on it.
 - **Caverns (`Geology.CavernSpan`, `WorldGenerator.CarveCaverns`):** up to three cavern layers below level zero (7%, 19%,

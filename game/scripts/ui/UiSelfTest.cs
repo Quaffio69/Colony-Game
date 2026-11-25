@@ -332,6 +332,29 @@ public partial class UiSelfTest : Node
         Check($"dragging the wall tool away from its edge walls round a box ({pieces} pieces: {tool.LastAction})",
             pieces > 4 && tool.LastAction?.StartsWith("Walls:") == true);
         while (tool.CancelPlacement()) { }
+
+        // Dev mode: F7 opens it; switched on, the spawn tool drops what it holds with a click.
+        var sim = _ui.Sim;
+        Key(Godot.Key.F7);
+        await Frames();
+        Check("F7 opens Dev mode", _ui.Window("dev")!.IsShown);
+        tool.Issue(new Colony.Core.Commands.SetDevMode(true, false));
+        await Frames(2);
+        Check("dev mode switches on", sim.DevMode);
+        foreach (var w in m.Windows.Where(w => w.IsShown).ToList()) w.Close();
+        tool.SelectSpawn("planks", 10);
+        int planks = sim.Items.All.Where(kv => kv.Value.Type == Colony.Core.Items.ItemType.Plank).Sum(kv => kv.Value.Count);
+        Move(mid - Vector2.One, mid, false);
+        await Frames(3);
+        Mouse(mid, true);
+        Mouse(mid, false);
+        await Frames(2);
+        int after = sim.Items.All.Where(kv => kv.Value.Type == Colony.Core.Items.ItemType.Plank).Sum(kv => kv.Value.Count);
+        Check($"a click with the spawn tool drops 10 planks ({tool.LastAction})", after == planks + 10);
+        while (tool.CancelPlacement()) { }
+        tool.Issue(new Colony.Core.Commands.SetDevMode(false, false));
+        await Frames();
+        Check("dev mode switches off", !sim.DevMode);
     }
 
     private static T? FindFirst<T>(Node root) where T : class

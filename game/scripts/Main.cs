@@ -421,6 +421,7 @@ public partial class Main : Node3D
                 GetViewport().WarpMouse(new Vector2(mouseX, mouseY));
             if (Arg("--tip") is { Length: > 0 } tip) UI.GlyphStatus.Tip = tip.Replace("\\n", "\n"); // the tooltip box, at the mouse
             if (int.TryParse(Arg("--play-as"), out int playAs)) PlayAs(playAs);
+            if (Arg("--dev") != null) Tool.Issue(new Colony.Core.Commands.SetDevMode(true, true)); // dev mode from the start
             if (Arg("--ui-selftest") != null) AddChild(new UiSelfTest(_ui));
             // World-editing flags apply once, to the first world (not again when the test menu reloads the scene).
             if (!s_devArgsDone)
@@ -491,6 +492,7 @@ public partial class Main : Node3D
             }
             return;
         }
+        if (Arg("--level-sweep") is { } sweep) { LevelSweep(sweep, delta); return; }
         if (Arg("--bench-zooms") is { Length: > 0 } zooms) { ZoomSweep(zooms, delta); return; }
         if (Arg("--orbit-check") != null) return; // OrbitCheck runs (and quits) instead
 
@@ -550,6 +552,35 @@ public partial class Main : Node3D
     /// --bench-zooms=8,30,120,...: after the world is built, steps the camera through rig distances (40 frames to settle,
     /// 90 measured each) and prints frame time, draws, primitives and the renderer's state per zoom, then quits.
     /// </summary>
+    private int _levelSweepStep = -1, _levelSweepFrom;
+    private readonly List<(int Level, double Frame, double World)> _levelSweep = new();
+    private readonly List<double> _levelSweepRest = new();
+
+    /// <summary>
+    /// --level-sweep[=N] (with --bench): once the world is built, steps the view down a level every other frame, N levels
+    /// (default 40), and prints each change's frame time, the world view's share of it, and the worst, then quits.
+    /// </summary>
+    private void LevelSweep(string arg, double delta)
+    {
+        int levels = int.TryParse(arg, out int n) && n > 0 ? n : 40;
+        if (_levelSweepStep < 0) { _levelSweepStep = 0; _levelSweepFrom = _world.ViewLevel; if (Arg("--no-vsync") != null) { DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled); Engine.MaxFps = 0; } }
+        else if (_levelSweepStep % 2 == 1) _levelSweep.Add((_world.ViewLevel, delta * 1000.0, _world.LevelMs)); // the frame that applied it
+        else if (_levelSweepStep > 0) _levelSweepRest.Add(delta * 1000.0); // a frame with no change, for comparison
+        if (_levelSweepStep / 2 >= levels || _world.ViewLevel <= 0)
+        {
+            var frames = _levelSweep.Select(s => s.Frame).OrderBy(f => f).ToArray();
+            foreach (var s in _levelSweep) GD.Print($"[levels] {WorldInfo.Level(_sim, s.Level),5}: frame {s.Frame,6:0.0} ms, world view {s.World,6:0.0} ms");
+            if (frames.Length > 0)
+                GD.Print($"[levels] {frames.Length} level changes from {WorldInfo.Level(_sim, _levelSweepFrom)} on {WorldWidth}x{WorldDepth}x{WorldHeight}: " +
+                         $"frame avg {frames.Average():0.0} ms, p95 {frames[(int)(frames.Length * 0.95)]:0.0}, max {frames[^1]:0.0}; world view avg {_levelSweep.Average(s => s.World):0.0} ms; frames between changes avg {(_levelSweepRest.Count > 0 ? _levelSweepRest.Average() : 0):0.0} ms");
+            _benchActive = false;
+            GetTree().Quit();
+            return;
+        }
+        if (_levelSweepStep % 2 == 0) _world.ViewLevel--;
+        _levelSweepStep++;
+    }
+
     private void ZoomSweep(string list, double delta)
     {
         var zooms = list.Split(',').Select(z => float.Parse(z, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
@@ -771,7 +802,7 @@ public partial class Main : Node3D
         int stored = _sim.Stockpiles.Cells.Sum(s => _sim.Items.TryGet(s, out var p) && p.Type == Colony.Core.Items.ItemType.Stone ? p.Count : 0);
         GD.Print($"[machines-demo] {ex.Name}: {ex.Describe()}, fuel {ex.Fuel}; {wagon.Name}: {wagon.Describe()}, carrying {wagon.CarryingCount}; stone stockpiled {stored}; orders left {_sim.Designations.Count}");
         _world.ViewLevel = g + 1;
-        _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 7, c.Y, g + 1)), float.TryParse(Arg("--zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z0) ? z0 : 14f, yaw: 215f, pitch: -42f);
+        _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 7, c.Y, g + 1)), float.TryParse(Arg("--machines-zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z0) ? z0 : 14f, yaw: 215f, pitch: -42f);
     }
 
     /// <summary>
