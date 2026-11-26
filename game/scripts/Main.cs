@@ -128,6 +128,7 @@ public partial class Main : Node3D
 
         _tool = GetNode<DesignationTool>("DesignationTool");
         _tool.Initialize(_sim, _world);
+        _tool.StructurePreview = _waterView.ShowPreview;
         Player = _tool.Player = Math.Clamp(s_player, 0, _sim.Factions.Count - 1); // kept across test-world visits
 
         _rig = GetNode<CameraRig>("CameraRig");
@@ -882,7 +883,8 @@ public partial class Main : Node3D
         foreach (var b in _sim.Conveyors.All)
             GD.Print($"[conveyor-demo] belt {b.Id}: {b.Length} tiles, {b.Status}, {b.Packets} on it, {b.Delivered} delivered; {_sim.Conveyors.Explain(_sim, b)}");
         _world.ViewLevel = g + 4;
-        _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 11, c.Y, g + 1)), float.TryParse(Arg("--conveyor-zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z0) ? z0 : 22f, yaw: 205f, pitch: -48f);
+        var focus = Arg("--conveyor-focus") == "climb" ? climb[1] : new TilePos(c.X + 11, c.Y, g + 1);
+        _rig.Focus(SimSpace.TileCenter(focus), float.TryParse(Arg("--conveyor-zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z0) ? z0 : 22f, yaw: float.TryParse(Arg("--conveyor-yaw"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float y0) ? y0 : 205f, pitch: -48f);
     }
 
     /// <summary>

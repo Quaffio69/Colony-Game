@@ -608,6 +608,33 @@ public partial class WaterView : Node3D
         }
     }
 
+    private Node3D? _preview;
+    private (StructureKind Kind, TilePos Cell, int Facing, bool Ok)? _previewed;
+    private readonly Material _previewOk = Overlay.Material(new Color(0.3f, 1f, 0.4f, 0.45f));
+    private readonly Material _previewBad = Overlay.Material(new Color(1f, 0.3f, 0.25f, 0.45f));
+
+    /// <summary>
+    /// The wheel or pump the player is about to place, drawn as its model turned the way it will face (green where it
+    /// can go, red where it cannot), so the orientation shows before the click; null hides it.
+    /// </summary>
+    public void ShowPreview((StructureKind Kind, TilePos Cell, int Facing, bool Ok)? what)
+    {
+        if (what is { Kind: not (StructureKind.WaterWheel or StructureKind.Pump) }) what = null;
+        if (Nullable.Equals(what, _previewed)) return;
+        _previewed = what;
+        if (_preview != null)
+        {
+            RemoveChild(_preview);
+            _preview.QueueFree();
+            _preview = null;
+        }
+        if (what is not { } w) return;
+        var ghost = w.Ok ? _previewOk : _previewBad;
+        _preview = w.Kind == StructureKind.WaterWheel ? WheelNode(w.Cell, w.Facing, ghost).Node : PumpNode(w.Cell, w.Facing, ghost);
+        _preview.Name = "PlacementPreview";
+        AddChild(_preview);
+    }
+
     /// <summary>Godot yaw for a facing (0..3: +x, +y, -x, -y in sim space).</summary>
     private static float Yaw(int facing) => -facing * Mathf.Pi / 2;
 

@@ -218,6 +218,19 @@ public partial class ConveyorView : Node3D
         return new Transform3D(new Basis(x * len, up, side), a);
     }
 
+    /// <summary>
+    /// The joint plate's basis on a turning ramp: its square stays square seen from above (edges along the two runs) and is
+    /// sheared so its top follows the plane through the entry, the centre and the exit.
+    /// </summary>
+    private static Basis SlopedPlate(Vector3 entry, Vector3 centre, Vector3 exit)
+    {
+        var a = (centre - entry) * 2; // one unit across, rising with the run in
+        var b = (exit - centre) * 2;  // one unit across, rising with the run out
+        var up = b.Cross(a);
+        if (up.Y < 0) { (a, b) = (b, a); up = -up; }
+        return new Basis(a, up.Normalized(), b);
+    }
+
     /// <summary>Per belt: each tile's centre and the point where it hands over to the next (the shared edge), for the goods.</summary>
     private readonly Dictionary<int, (Vector3[] Centre, Vector3[] Hand)> _geo = new();
 
@@ -274,10 +287,17 @@ public partial class ConveyorView : Node3D
                 if (exit is { } x) { _runList.Add(Piece(centre, x)); _runTint.Add(tint); }
                 // A level plate under the centre where the belt turns, starts or ends (on a slope the runs meet cleanly).
                 bool level = MathF.Abs((entry?.Y ?? centre.Y) - centre.Y) < 0.01f && MathF.Abs((exit?.Y ?? centre.Y) - centre.Y) < 0.01f;
-                bool turns = entry is { } en && exit is { } ex && MathF.Abs((en - centre).Dot(ex - centre)) < 0.01f;
+                bool turns = entry is { } en && exit is { } ex && MathF.Abs(((en - centre) with { Y = 0 }).Dot((ex - centre) with { Y = 0 })) < 0.01f;
                 if (level && (turns || entry is null || exit is null) && !(liftBelow && liftAbove))
                 {
                     _jointList.Add(new Transform3D(Basis.Identity, centre));
+                    _jointTint.Add(tint);
+                }
+                else if (turns)
+                {
+                    // A ramp that turns: its two halves lie in one tilted plane (in at one edge, out a level away at the
+                    // other), so the plate is sheared into that plane and closes the corner between them.
+                    _jointList.Add(new Transform3D(SlopedPlate(entry!.Value, centre, exit!.Value), centre));
                     _jointTint.Add(tint);
                 }
                 if (i == 0)

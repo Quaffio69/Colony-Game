@@ -157,7 +157,9 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   `ColonySim.CompleteConstruction`). Walls stack on wall blueprints, so dams rise level by level; a wall is
   `TileType.Wall` (digs back out as stone). `Fluids.Waterworks`: a wheel's power = water flowing through its
   cell per step / `FlowPerPower` (hang it in a waterfall: wheels may mount on a wall); pumps lift water from
-  their cell to the cell ahead and one level up; power is one pool per colony (its wheels, pumps and conveyor belts; all run at the
+  their cell to the cell ahead and one level up. While placing one, its model stands at the cursor as a green (or red)
+  ghost turned the way the click will build it (R turns it; a wheel hung on a wall takes the wall's line:
+  `DesignationTool.StructurePreview` → `WaterView.ShowPreview`); power is one pool per colony (its wheels, pumps and conveyor belts; all run at the
   share the wheels cover). Farm plots within 2 tiles of water grow 1.5x as fast (`Farms.Irrigated`).
 - **Waterfall mist (`Fluids.Mist`):** a coarse field (4x4-column cells: density 0..4000, `Full` = 1000, and the level
   it hangs at). Falls of 1.5+ levels (`Water.Falls`) feed the cell they land in: sqrt(strength) x drop (up to 12) x

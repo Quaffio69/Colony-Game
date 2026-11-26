@@ -368,6 +368,13 @@ public partial class InspectorWindow : GlyphWindow
         _follow.Visible = Sel.Current is PickColonist;
         _follow.Text = Sel.Follow ? " Following " : " Follow ";
         _settings.Visible = StockpileOf(Sel.Current) is { } own && own.Faction == _ui.Me;
+        // The panel is rebuilt every tick; not while the pointer is on one of its buttons (it would flicker and lose
+        // clicks), unless it shows something else now or a button was just pressed (so the change it made shows).
+        bool afterPress = _refreshNow || (_pressTick >= 0 && sim.Tick != _pressTick);
+        if (Equals(pick, _shown) && !afterPress && PointerOnButtonIn(Content)) return;
+        if (!_refreshNow) _pressTick = -1; // the refresh after the next sim tick (online, a command lands later) is done
+        _refreshNow = false;
+        _shown = pick;
         G.Clear(Content);
         switch (pick)
         {
@@ -387,6 +394,27 @@ public partial class InspectorWindow : GlyphWindow
             case PickNest n: NestPanel(n.Nest); break;
             case PickBelt b: BeltPanel(b.Belt); break;
             case PickTile t: TilePanel(t.Tile); break;
+        }
+        WatchPresses(Content);
+    }
+
+    private Pick? _shown;
+    private bool _refreshNow;
+    private long _pressTick = -1;
+
+    /// <summary>A press on any of the panel's buttons refreshes it at once and again after the next sim tick.</summary>
+    private void WatchPresses(Node n)
+    {
+        foreach (var child in n.GetChildren())
+        {
+            if (child is BaseButton b)
+                b.Pressed += () =>
+                {
+                    _refreshNow = true;
+                    _pressTick = _ui.Sim.Tick;
+                    Callable.From(Tick).CallDeferred();
+                };
+            WatchPresses(child);
         }
     }
 

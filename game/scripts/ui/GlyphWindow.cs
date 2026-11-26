@@ -198,6 +198,22 @@ public partial class GlyphWindow : GlyphPanel
     /// <summary>Updates live values a few times a second while the window is shown.</summary>
     public virtual void Tick() { }
 
+    /// <summary>
+    /// True while the mouse is on a button inside <paramref name="area"/> (or holds one down there): a window that rebuilds
+    /// those rows every tick skips the rebuild then, or the button under the pointer is freed and remade (its hover
+    /// flickers, and a click whose press and release straddle a rebuild is lost).
+    /// </summary>
+    protected bool PointerOnButtonIn(Node area)
+    {
+        if (!IsInsideTree()) return false;
+        bool button = false;
+        for (Node? n = GetViewport().GuiGetHoveredControl(); n != null && n != this; n = n.GetParent())
+        {
+            button |= n is BaseButton;
+            if (n == area) return button;
+        }
+        return false;
+    }
 
     public void Rebuild()
     {

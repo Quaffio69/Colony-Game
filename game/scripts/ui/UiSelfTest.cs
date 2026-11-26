@@ -380,6 +380,20 @@ public partial class UiSelfTest : Node
             pieces > 4 && tool.LastAction?.StartsWith("Walls:") == true);
         while (tool.CancelPlacement()) { }
 
+        // Placing a water wheel shows its model turned the way it will be built; R turns it; putting the tool down hides it.
+        tool.SelectStructure(Colony.Core.Orders.StructureKind.WaterWheel);
+        Move(mid - Vector2.One, mid, false);
+        await Frames(3);
+        Node3D? Preview() => GetTree().Root.FindChild("PlacementPreview", true, false) as Node3D;
+        float yaw = Preview()?.Rotation.Y ?? float.NaN;
+        Check("placing a water wheel shows it at the cursor", Preview() != null);
+        Key(Godot.Key.R);
+        await Frames(3);
+        Check($"R turns the wheel's preview ({yaw:0.00} -> {Preview()?.Rotation.Y:0.00})", Preview() is { } turned && MathF.Abs(turned.Rotation.Y - yaw) > 0.1f);
+        while (tool.CancelPlacement()) { }
+        await Frames(3);
+        Check("putting the tool down hides the preview", Preview() == null);
+
         // Dev mode: F7 opens it; switched on, the spawn tool drops what it holds with a click.
         var sim = _ui.Sim;
         Key(Godot.Key.F7);
@@ -442,10 +456,56 @@ public partial class UiSelfTest : Node
             await Frames(3);
             Check($"Shift+click with the tool takes a belt down ({tool.LastAction})", sim.Conveyors.Count == belts);
         }
+        // Laid again: the inspector's Take down button holds still under the pointer (the panel is rebuilt every tick,
+        // which made it flicker and lose clicks) and a click on it lands.
+        Move(beltAt - Vector2.One, beltAt, false);
+        await Frames(3);
+        Mouse(beltAt, true);
+        Mouse(beltAt, false);
+        await Frames(2);
+        Move(beltAt, beltTo, false);
+        await Frames(4);
+        Mouse(beltTo, true);
+        Mouse(beltTo, false);
+        await Frames(4);
+        var again = sim.Conveyors.Count > belts ? sim.Conveyors.All[^1] : null;
+        while (tool.CancelPlacement()) { }
+        if (again != null && _ui.Window("inspect") is InspectorWindow inspect)
+        {
+            _ui.Main.Selection.Select(new PickBelt(again, again.Cells[0]));
+            m.Open(inspect);
+            inspect.Tick();
+            await Frames(3);
+            var button = FindAll<Button>(inspect).FirstOrDefault(b => b.Text.Trim() == "Take down" && b.IsVisibleInTree());
+            if (button != null)
+            {
+                var at = button.GetGlobalRect().GetCenter();
+                Move(at - Vector2.One, at, false);
+                await Frames(2);
+                for (int i = 0; i < 3; i++) { inspect.Tick(); await Frames(1); }
+                Check("the inspector keeps the button under the pointer through its ticks", IsInstanceValid(button) && button.IsInsideTree());
+                await Click(at);
+                await Frames(2);
+                Check($"a click on the inspector's Take down takes the belt down ({tool.LastAction})", sim.Conveyors.Count == belts);
+            }
+            else Check("the inspector shows a belt's Take down button", false);
+            _ui.Main.Selection.Clear();
+            inspect.Close();
+        }
+        else Check("the belt is laid again for the inspector", false);
         while (tool.CancelPlacement()) { }
         tool.Issue(new Colony.Core.Commands.SetDevMode(false, false));
         await Frames();
         Check("dev mode switches off", !sim.DevMode);
+    }
+
+    private static System.Collections.Generic.IEnumerable<T> FindAll<T>(Node root) where T : class
+    {
+        foreach (var c in root.GetChildren())
+        {
+            if (c is T t) yield return t;
+            foreach (var d in FindAll<T>(c)) yield return d;
+        }
     }
 
     private static T? FindFirst<T>(Node root) where T : class

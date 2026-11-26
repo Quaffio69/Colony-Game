@@ -54,7 +54,9 @@ The window system, controls, game windows, hotkeys, mouse, selection, notices an
   the last step of `CancelPlacement`). Colonists and Military rows select too. **Inspect** (V) shows the selection, else
   whatever is under the cursor: colonists (doing, health/food/rest/mood bars, home, gear, work priorities, likes),
   homes and workshops as before, stockpiles (cells, racks, stacks used/capacity, contents), farm fields (crops sown,
-  ripe), piles (role), blueprints (what they wait for), nests, tiles; Go to, Follow (camera tracks the colonist until
+  ripe), piles (role), blueprints (what they wait for), nests, tiles. Its panel is rebuilt every tick, except while the
+  pointer is on one of its buttons and it still shows the same thing (`GlyphWindow.PointerOnButtonIn`; a button freed under
+  the mouse flickered and lost clicks); a press refreshes it at once and again after the next sim tick; Go to, Follow (camera tracks the colonist until
   WASD/RMB), clear; a tile lists what is built and lying there with materials. **Hover card** (`UI.HoverCard`, `UI.WorldInfo`): inspect on hover, a glass card at the bottom right describing what is under the cursor (what a click would select, its subtitle, the tile's facts: ground and level, floor, roof, walls/doors/windows by side with materials, plants, water, parts "of logs", plans and what they wait for, piles, ants; a hint for click and F); hidden over the UI and while boxing. **Notices** (`UI.Notices`): the tool card (bottom centre, accent pill: the tool's icon and name from `Tools`, its key hints as keycaps, the box size or wall piece count,
   the box size or why it can't be placed), the box size at the cursor while dragging, a Paused pill, and toasts for the
   colony's events (alerts red; click: Chronicle). Window shadows are a tight contact shadow (the old 34 px one smeared

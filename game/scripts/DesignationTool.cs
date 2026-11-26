@@ -842,8 +842,16 @@ public partial class DesignationTool : Node3D
         : _hoverNormal.Z == 0 && (_hoverNormal.X != 0 || _hoverNormal.Y != 0) ? h.Offset(_hoverNormal.X, _hoverNormal.Y, 0) : h.Offset(0, 0, 1);
 
     // A wheel hung on a wall turns its axle along the wall (its paddles stand out from it, in the fall).
-    private void PlaceStructure(TilePos cell) => Issue(new Colony.Core.Commands.PlaceStructure(Structure, cell,
-        Structure == StructureKind.WaterWheel && _hoverNormal.Z == 0 && (_hoverNormal.X != 0 || _hoverNormal.Y != 0) ? (_hoverNormal.X != 0 ? 0 : 1) : _facing));
+    private int StructureFacing() =>
+        Structure == StructureKind.WaterWheel && _hoverNormal.Z == 0 && (_hoverNormal.X != 0 || _hoverNormal.Y != 0) ? (_hoverNormal.X != 0 ? 0 : 1) : _facing;
+
+    private void PlaceStructure(TilePos cell) => Issue(new Colony.Core.Commands.PlaceStructure(Structure, cell, StructureFacing()));
+
+    /// <summary>
+    /// Draws the waterworks being placed as it will stand (its model, turned the way it will face), or hides it (null).
+    /// Set by Main to the water view; without it the tool shows a plain box.
+    /// </summary>
+    public Action<(StructureKind Kind, TilePos Cell, int Facing, bool Ok)?>? StructurePreview { get; set; }
 
     public void SelectStructure(StructureKind kind)
     {
@@ -936,12 +944,19 @@ public partial class DesignationTool : Node3D
         {
             var cell = StructureCell() ?? sh.Offset(0, 0, 1);
             PlacementProblem = _sim.Constructions.CanPlace(Structure, cell);
+            if (StructurePreview is { } preview)
+            {
+                preview((Structure, cell, StructureFacing(), PlacementProblem is null));
+                _ghost.Visible = false;
+                return;
+            }
             _ghost.Position = new Vector3(cell.X + 0.5f, cell.Z + 0.5f, cell.Y + 0.5f);
             _ghost.Scale = new Vector3(1, 1, 1);
             _ghost.MaterialOverride = PlacementProblem is null ? _ghostOk : _ghostBad;
             _ghost.Visible = true;
             return;
         }
+        StructurePreview?.Invoke(null);
         if (!placing || Hovered is not { } h || PartFor(Mode) is not { } part)
         {
             _ghost.Visible = false;
