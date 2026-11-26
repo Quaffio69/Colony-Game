@@ -231,8 +231,12 @@ public partial class GlyphManager : Control
 
     // ---- Input --------------------------------------------------------------------------------------------
 
+    /// <summary>Where the last mouse motion was (viewport coordinates): where a nudge goes.</summary>
+    private Vector2 _lastMouse;
+
     public override void _Input(InputEvent e)
     {
+        if (e is InputEventMouseMotion mm) _lastMouse = mm.Position;
         // Clicking anywhere in a window brings it to the front (the click itself still goes to its controls).
         if (e is InputEventMouseButton { Pressed: true } b && !MenuOpen)
         {
@@ -342,32 +346,62 @@ public partial class GlyphManager : Control
     private string? _anchoredTip;
     private Control? _tipAnchor;
 
+    /// <summary>A tip whose control was freed under a still mouse (its window rebuilt), held a few frames for its successor.</summary>
+    private string? _orphan;
+    private int _orphanFrames;
+    private const int OrphanFrames = 8, NudgeAt = 5;
+
     /// <summary>
-    /// A tip belongs to the control the mouse was on when it was set (the nearest one that takes the mouse, so a row's
-    /// labels count as the row). Controls clear their tips on leave, but not all do (some set them on every move, and a row
-    /// rebuilt under the mouse never hears it leave): once the mouse is off that control, or it is gone, the tip goes.
+    /// The tip to show. A tip belongs to the control the mouse was on when it was set (the nearest one that takes the
+    /// mouse, so a row's labels count as the row). Controls clear their tips on leave, but not all do (some set them on
+    /// every move): once the mouse is off that control, the tip goes. A window that rebuilds its rows (Inspect every tick,
+    /// Stocks and the Chronicle when they change) frees the control under a mouse that never moved: that is not the mouse
+    /// leaving, so the tip is held a few frames and the mouse "nudged" (a motion where it already is) so that whatever
+    /// now lies under it announces its own tip, without the rest delay starting over. If nothing does, the tip goes.
     /// </summary>
-    private void DropStaleTip()
+    private string? LiveTip()
     {
         var hovered = Receiver(GetViewport().GuiGetHoveredControl());
-        if (GlyphStatus.Tip is not { Length: > 0 } tip)
+        bool freed = _tipAnchor != null && (!IsInstanceValid(_tipAnchor) || !_tipAnchor.IsInsideTree());
+        string? tip = GlyphStatus.Tip is { Length: > 0 } t ? t : null;
+        if (tip == null)
         {
+            if (freed && _anchoredTip != null) Orphan(_anchoredTip); // its owner cleared it as it left the tree
             _anchoredTip = null;
             _tipAnchor = null;
-            return;
         }
-        if (tip != _anchoredTip)
+        else if (tip != _anchoredTip)
         {
             _anchoredTip = tip;
             _tipAnchor = hovered; // null: set from code, not by hovering (e.g. --tip): left alone
-            return;
+            _orphanFrames = 0;
+            _orphan = null;
         }
-        if (_tipAnchor == null) return;
-        if (IsInstanceValid(_tipAnchor) && _tipAnchor.IsVisibleInTree() && hovered == _tipAnchor) return;
-        if (GlyphStatus.Banner == tip) GlyphStatus.Banner = null;
-        GlyphStatus.Tip = null;
-        _anchoredTip = null;
-        _tipAnchor = null;
+        else if (_tipAnchor != null && (freed || !_tipAnchor.IsVisibleInTree() || hovered != _tipAnchor))
+        {
+            if (GlyphStatus.Banner == tip) GlyphStatus.Banner = null;
+            GlyphStatus.Tip = null;
+            if (freed) Orphan(tip);
+            _anchoredTip = null;
+            _tipAnchor = null;
+            tip = null;
+        }
+        if (tip != null || _orphanFrames == 0) return tip;
+        if (--_orphanFrames == NudgeAt)
+        {
+            // The rebuilt rows are laid out by now: let the one under the mouse hear it come in.
+            var at = _lastMouse;
+            GetViewport().PushInput(new InputEventMouseMotion { Position = at, GlobalPosition = at }, true);
+            if (GlyphStatus.Tip is { Length: > 0 }) return LiveTip(); // it did: that tip now (anchored afresh)
+        }
+        if (_orphanFrames == 0) _orphan = null;
+        return _orphan;
+    }
+
+    private void Orphan(string tip)
+    {
+        _orphan = tip;
+        _orphanFrames = OrphanFrames;
     }
 
     /// <summary>The control that takes the mouse for <paramref name="c"/>: itself, or the nearest ancestor that stops it.</summary>
@@ -391,14 +425,14 @@ public partial class GlyphManager : Control
     private void UpdateBanner()
     {
         double now = Time.GetTicksMsec() / 1000.0;
-        DropStaleTip();
+        string? live = LiveTip();
         string? text = GlyphStatus.Banner;
-        if (string.IsNullOrEmpty(text) && GlyphStatus.Tip is { Length: > 0 } tip)
+        if (string.IsNullOrEmpty(text) && live is { } tip)
         {
             if (tip != _tipSeen) { _tipSeen = tip; _tipSince = now; }
             if (now - _tipSince >= TipDelay) text = tip;
         }
-        else if (GlyphStatus.Tip == null) _tipSeen = null;
+        else if (live == null) _tipSeen = null;
         _banner.Visible = !string.IsNullOrEmpty(text) && Cols > 0;
         if (!_banner.Visible) { _bannerShown = null; return; }
         float cw = GlyphTheme.Cw, ch = GlyphTheme.Ch;

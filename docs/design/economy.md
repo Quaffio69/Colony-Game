@@ -123,7 +123,12 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   whatever its other priorities, it got in for that work, and gets out when it runs out)
   and no scaffold jobs. It **parks** where it stands (`Park`) when nothing is worth driving to, or as soon as its task has
   nothing to do with the machine (a meal, bed, a fight, a draft, struck down), then leaves machines be for
-  `MachineRestTicks` (300). **Is it worth fetching?** Judged on the run of work the machine would do before its driver gets
+  `MachineRestTicks` (300). **One machine to a tile:** colonists may share a tile, heavy machinery never does (parked or
+  moving): a driver plans round the tiles other machines stand on or are stepping into (`PlanPath` with a machine,
+  `OtherMachineCells`), checks the next tile before each step and waits up to `MachineWaitTicks` (20) for a machine in the
+  way before giving the job up and planning again (`WaitForMachineAt`); machines rolled out together, or falling onto
+  another, take the nearest free tile (`ColonySim.FreeMachineCell`). People on foot still pass through a machine's tile.
+  **Is it worth fetching?** Judged on the run of work the machine would do before its driver gets
   out, not one job: the excavator against digging by hand, counting the open unclaimed dig/stair orders within
   `MachineClusterReach` (8) tiles and `ExcavatorClusterLevels` (2) levels of the job, capped at `ExcavatorSessionJobs` (40)
   (`ExcavatorDigCost` vs `HandDigCost`: walk to it, climb in, crawl it over, then each job dug fast with a crawl between);

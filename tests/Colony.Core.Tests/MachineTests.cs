@@ -75,6 +75,39 @@ public class MachineTests
     }
 
     [Fact]
+    public void Machines_RolledOutTogether_EachGetATile()
+    {
+        var sim = FlatSim();
+        var at = new TilePos(10, 10, 4);
+        var machines = Enumerable.Range(0, 5).Select(i => sim.AddMachine(i % 2 == 0 ? MachineKind.Excavator : MachineKind.PowerWagon, at)).ToList();
+        Assert.Equal(at, machines[0].Position);
+        Assert.Equal(5, machines.Select(m => m.Position).Distinct().Count());
+        Assert.All(machines, m => Assert.True(Math.Max(Math.Abs(m.Position.X - at.X), Math.Abs(m.Position.Y - at.Y)) <= 1, $"beside the spot ({m.Position})"));
+    }
+
+    [Fact]
+    public void TwoExcavators_InOnePit_NeverShareATile()
+    {
+        var sim = FlatSim(size: 40);
+        for (int i = 0; i < 3; i++) sim.AddColonist($"Miner {i}", new TilePos(4 + i, 4, 4));
+        var a = sim.AddMachine(MachineKind.Excavator, new TilePos(4, 6, 4));
+        var b = sim.AddMachine(MachineKind.Excavator, new TilePos(5, 6, 4));
+        sim.Commands.Execute(new DesignateBox(new TilePos(8, 4, 3), new TilePos(20, 12, 2), DesignationKind.Dig));
+        bool bothDriven = false;
+        int t = 0;
+        for (; t < 30000 && sim.Designations.Count > 0; t++)
+        {
+            sim.Step();
+            bothDriven |= a.Driver != null && b.Driver != null;
+            Assert.NotEqual(a.Position, b.Position);
+            if (a.NextStep is { } an) Assert.True(an != b.Position && an != b.NextStep, $"tick {t}: {a.Name} stepping into {b.Name}'s tile {an}");
+            if (b.NextStep is { } bn) Assert.True(bn != a.Position, $"tick {t}: {b.Name} stepping into {a.Name}'s tile {bn}");
+        }
+        Assert.True(bothDriven, "both excavators were at work together");
+        Assert.Equal(0, sim.Designations.Count);
+    }
+
+    [Fact]
     public void AMiner_DrivesTheExcavator_AndDigsFaster()
     {
         var people = FlatSim();

@@ -617,11 +617,41 @@ public sealed partial class ColonySim
     }
 
     /// <summary>Adds a machine of a kind to a colony (named "Excavator 2" ...), full of fuel.</summary>
+    /// <summary>Whether a machine other than <paramref name="except"/> stands on <paramref name="cell"/> (arrivals this tick included).</summary>
+    internal bool MachineStandsOn(TilePos cell, Colonist? except)
+    {
+        foreach (var m in _colonists) if (m.IsMachine && m != except && m.Position == cell) return true;
+        foreach (var m in _arriving) if (m.IsMachine && m != except && m.Position == cell) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// The nearest standable tile to <paramref name="at"/> no other machine stands on (heavy machinery never shares a
+    /// tile): ring by ring on its level, then a level up and down, in the same component; <paramref name="at"/> itself
+    /// when there is none within 8 tiles.
+    /// </summary>
+    internal TilePos FreeMachineCell(TilePos at, Colonist? except)
+    {
+        int component = Connectivity.ComponentOf(at);
+        for (int r = 0; r <= 8; r++)
+        foreach (int dz in new[] { 0, 1, -1 })
+        for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++)
+        {
+            if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != r) continue;
+            var c = at.Offset(dx, dy, dz);
+            if (!World.InBounds(c) || !Navigation.Movement.IsStandable(World, c) || MachineStandsOn(c, except)) continue;
+            if (component >= 0 && c != at && Connectivity.ComponentOf(c) != component) continue;
+            return c;
+        }
+        return at;
+    }
+
     public Colonist AddMachine(Agents.MachineKind kind, TilePos at, int faction = 0)
     {
         int n = _colonists.Count(c => c.Machine == kind) + _arriving.Count(c => c.Machine == kind) + 1;
         string name = $"{Agents.MachineInfo.Name(kind)} {n}";
-        var c = AddColonist(name, at, automaton: true, faction: faction);
+        var c = AddColonist(name, FreeMachineCell(at, null), automaton: true, faction: faction); // one machine to a tile
         c.Machine = kind;
         c.SetUpMachine();
         Announce($"{name} rolls out of the workshop, fired up and ready", faction);

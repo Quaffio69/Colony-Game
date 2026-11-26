@@ -228,6 +228,29 @@ public partial class UiSelfTest : Node
             await Frames(3);
             leaky.QueueFree();
             Check($"a tip goes when the mouse leaves its control, cleared or not (now: {GlyphStatus.Tip ?? "none"})", GlyphStatus.Tip == null && !m.TipShowing);
+
+            // A window rebuilding its rows under a still mouse (Inspect does every tick) must not drop the tip.
+            Control Row() => new Control { MouseFilter = Control.MouseFilterEnum.Stop, Size = new Vector2(60, 30), Name = "RebuiltRow" }.WithTip("a row's tip");
+            var row = Row();
+            m.Overlay.AddChild(row);
+            row.GlobalPosition = world + new Vector2(150, -15);
+            await Frames(2);
+            Move(world, world + new Vector2(180, 0), false);
+            for (int i = 0; i < 120 && !m.TipShowing; i++) await Frames(1);
+            bool shownFirst = m.TipShowing;
+            int dropped = 0;
+            for (int k = 0; k < 6; k++)
+            {
+                row.QueueFree(); // rebuilt: the old row goes, an identical one takes its place
+                row = Row();
+                m.Overlay.AddChild(row);
+                row.GlobalPosition = world + new Vector2(150, -15);
+                for (int f = 0; f < 10; f++) { await Frames(1); if (!m.TipShowing) dropped++; }
+            }
+            Check($"a row rebuilt under a still mouse keeps its tip (showing first: {shownFirst}; frames without it: {dropped} of 60)", shownFirst && dropped == 0);
+            row.QueueFree();
+            Move(world + new Vector2(180, 0), world, false);
+            await Frames(2);
         }
 
         // Ctrl+Tab cycles focus.
@@ -291,10 +314,17 @@ public partial class UiSelfTest : Node
         await Frames(3);
         Check($"a click selects what is under it only if it is of interest ({under?.GetType().Name}: {(interesting ? "opens" : "no")} Inspect)",
             (_ui.Main.Selection.Current != null) == interesting && _ui.Window("inspect")!.IsShown == interesting);
-        Mouse(mid, true, MouseButton.Right);
-        Mouse(mid, false, MouseButton.Right);
+        // Right-click open world: Inspect may now cover the middle (wherever the player's layout puts it).
+        var screen = GetViewport().GetVisibleRect().Size;
+        var open = mid;
+        for (float y = screen.Y * 0.2f; y < screen.Y * 0.8f && m.Blocks(open); y += 24)
+        for (float x = screen.X * 0.1f; x < screen.X * 0.9f && m.Blocks(open = new Vector2(x, y)); x += 24) { }
+        Move(mid, open, false);
+        await Frames(2);
+        Mouse(open, true, MouseButton.Right);
+        Mouse(open, false, MouseButton.Right);
         await Frames();
-        Check("a right click clears the selection", _ui.Main.Selection.Current == null);
+        Check($"a right click clears the selection (at {open}, clear of windows: {!m.Blocks(open)})", _ui.Main.Selection.Current == null);
         _ui.Ribbon.Pinned = true;
         await Frames();
         Check("the Orders pill pins the ribbon open with no tool", _ui.Ribbon.Open && tool.Mode == DesignationTool.ToolMode.None);

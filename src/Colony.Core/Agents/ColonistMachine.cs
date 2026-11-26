@@ -114,7 +114,57 @@ public sealed partial class Colonist
         if (_fuelRetry > 0) _fuelRetry--;
         if (Downed && sim.Tick % 30 == Id % 30 && ++Health >= StandUpHealth) Downed = false;
         if (Driver != null) return;
-        if (!Movement.IsStandable(sim.World, Position)) ApplyGravity(sim);
+        if (Movement.IsStandable(sim.World, Position)) return;
+        ApplyGravity(sim);
+        if (sim.MachineStandsOn(Position, this)) Position = sim.FreeMachineCell(Position, this); // never lands on another
+    }
+
+    // ---- One machine to a tile ----------------------------------------------------------------------------------
+    // Colonists may share a tile (and spread out when fighting); heavy machinery never does. A machine holds the tile
+    // it stands on and, mid-step, the one it is stepping into. Drivers plan round other machines (PlanPath), and before
+    // each step check the tile is still free, waiting a little for a machine in the way to move on before giving the
+    // job up and planning again.
+
+    /// <summary>Ticks a driver waits for a machine in its way before giving up the trip.</summary>
+    public const int MachineWaitTicks = 20;
+    private int _blockedFor;
+
+    /// <summary>Whether a machine other than <paramref name="except"/> stands on <paramref name="cell"/> or is stepping into it.</summary>
+    internal static bool MachineAt(ColonySim sim, TilePos cell, Colonist? except)
+    {
+        foreach (var m in sim.Machines)
+            if (m != except && (m.Position == cell || m.NextStep == cell)) return true;
+        return false;
+    }
+
+    /// <summary>The tiles every machine but <paramref name="me"/> holds.</summary>
+    private static HashSet<TilePos>? OtherMachineCells(ColonySim sim, Colonist me)
+    {
+        HashSet<TilePos>? cells = null;
+        foreach (var m in sim.Machines)
+        {
+            if (m == me) continue;
+            (cells ??= new()).Add(m.Position);
+            if (m.NextStep is { } n) cells.Add(n);
+        }
+        return cells;
+    }
+
+    /// <summary>Driving: whether the next step is held by another machine (it waits; false once it should give up).</summary>
+    private bool WaitForMachineAt(ColonySim sim, TilePos next, out bool giveUp)
+    {
+        giveUp = false;
+        if (!_aboard || !MachineAt(sim, next, _vehicle))
+        {
+            _blockedFor = 0;
+            return false;
+        }
+        if (++_blockedFor > MachineWaitTicks)
+        {
+            _blockedFor = 0;
+            giveUp = true;
+        }
+        return true;
     }
 
     /// <summary>After its own tick: a driver whose task has nothing to do with its machine gets out; otherwise the machine follows.</summary>
@@ -131,7 +181,12 @@ public sealed partial class Colonist
             _ => false, // a meal, bed, a fight, a draft...
         };
         if (!fits || Downed || Drafted || v.Downed) Park(sim);
-        else SyncVehicle();
+        else
+        {
+            // Fell (or was dropped) onto another machine's tile: off to the nearest free one.
+            if (NextStep == null && sim.MachineStandsOn(Position, v)) Position = sim.FreeMachineCell(Position, v);
+            SyncVehicle();
+        }
     }
 
     /// <summary>The machine stands (and is drawn) where its driver is, mid-step included.</summary>
@@ -330,13 +385,13 @@ public sealed partial class Colonist
         path.Count + (_plannedTrip != null && path.Count > 0 ? Steps(path[^1], near) : 0);
 
     /// <summary>Steps from <paramref name="from"/> to any of <paramref name="goals"/> by pathfinding (null: no way); plans nothing.</summary>
-    private int? MeasureSteps(ColonySim sim, TilePos from, HashSet<TilePos> goals, TilePos near)
+    private int? MeasureSteps(ColonySim sim, TilePos from, HashSet<TilePos> goals, TilePos near, Colonist machine)
     {
         if (goals.Count == 0) return null;
         if (goals.Contains(from)) return 0;
         var saved = _plannedTrip;
         sim.PathSearches++;
-        var path = PlanPath(sim, goals, near, from);
+        var path = PlanPath(sim, goals, near, from, machine);
         int? steps = path is null ? null : RouteSteps(path, near);
         _plannedTrip = saved;
         return steps;
@@ -370,7 +425,7 @@ public sealed partial class Colonist
             return false;
         }
         // Measured: its crawl to the dig, then the walk to it (planned last: that is the path it sets off on).
-        var path = MeasureSteps(sim, best.Position, ReachableAround(sim, job.Target, component), job.Target) is { } crawl
+        var path = MeasureSteps(sim, best.Position, ReachableAround(sim, job.Target, component), job.Target, best) is { } crawl
             ? Route(sim, ReachableAround(sim, best.Position, component), best.Position) is { } p
               && ExcavatorDigCost(RouteSteps(p, best.Position), crawl, jobs, dig, true) < HandDigCost(walk, jobs, dig) ? p : null
             : null;
@@ -423,8 +478,8 @@ public sealed partial class Colonist
         // Measured: the haul itself, the wagon's drive to the pickup, then the walk to the wagon (the path it sets off on).
         var c = chosen;
         List<TilePos>? path = null;
-        if (MeasureSteps(sim, source, ReachableAround(sim, dest, component), dest) is { } h
-            && MeasureSteps(sim, c.Position, ReachableAround(sim, source, component), source) is { } drive2
+        if (MeasureSteps(sim, source, ReachableAround(sim, dest, component), dest, c) is { } h
+            && MeasureSteps(sim, c.Position, ReachableAround(sim, source, component), source, c) is { } drive2
             && Route(sim, ReachableAround(sim, c.Position, component), c.Position) is { } p
             && WagonHaulCost(RouteSteps(p, c.Position), drive2, h, units, wagon, true) < HandHaulCost(walk, h, units, hand))
             path = p;
@@ -560,6 +615,7 @@ public sealed partial class Colonist
         _fuelRetry = 0;
         _stoke = default;
         _machineNo = (-1, default, 0);
+        _blockedFor = 0;
         _tradeGoods.Clear();
         _tradeRoom.Clear();
     }

@@ -672,6 +672,7 @@ public sealed partial class Colonist
                 foreach (var p in leg) _path.Enqueue(p);
             }
             if (_path.Count == 0) return MoveResult.Arrived;
+            if (WaitForMachineAt(sim, _path.Peek(), out bool giveUp)) return giveUp ? MoveResult.Failed : MoveResult.Moving; // one machine to a tile
             var next = _path.Dequeue();
             if (Movement.MoveCost(sim.World, Position, next) is not { } cost) return MoveResult.Failed; // terrain changed under the path; replan
             NextStep = next;
@@ -1347,6 +1348,7 @@ public sealed partial class Colonist
     {
         Task = task;
         JobTarget = target;
+        _blockedFor = 0;
         _path.Clear();
         foreach (var p in path) _path.Enqueue(p);
         _trip = _plannedTrip; // the path is one leg of a longer trip if the plan said so
@@ -1652,12 +1654,22 @@ public sealed partial class Colonist
     /// across the map would otherwise be one search of tens of thousands of nodes (a frame-long stall), and a
     /// failed one, retried whenever the world changed, a stall that repeats while the colonist never sets off.
     /// </para>
-    private List<TilePos>? PlanPath(ColonySim sim, HashSet<TilePos> goals, TilePos near) => PlanPath(sim, goals, near, Position);
+    private List<TilePos>? PlanPath(ColonySim sim, HashSet<TilePos> goals, TilePos near) => PlanPath(sim, goals, near, Position, _aboard ? _vehicle : null);
 
-    /// <summary>The same from any cell (machines measure the trip from where they are parked).</summary>
-    private List<TilePos>? PlanPath(ColonySim sim, HashSet<TilePos> goals, TilePos near, TilePos from)
+    /// <summary>
+    /// The same from any cell, for a colonist or (<paramref name="machine"/>) a machine: tiles other machines stand on or
+    /// are stepping into are walls to a machine (heavy machinery never shares a tile), and never goals.
+    /// </summary>
+    private List<TilePos>? PlanPath(ColonySim sim, HashSet<TilePos> goals, TilePos near, TilePos from, Colonist? machine)
     {
         _plannedTrip = null;
+        var blocked = machine != null ? OtherMachineCells(sim, machine) : null;
+        if (blocked is { Count: > 0 })
+        {
+            goals = goals.Where(g => !blocked.Contains(g)).ToHashSet();
+            if (goals.Count == 0) return null;
+        }
+        bool Free(TilePos p) => blocked is null || !blocked.Contains(p);
         var connectivity = sim.Connectivity;
         var chain = connectivity.RegionChain(from, goals);
         if (chain is null) return null;
@@ -1670,12 +1682,12 @@ public sealed partial class Colonist
             var lbox = TileBox.Capture(sim.World, lmin.X - lpad, lmin.Y - lpad, lmin.Z - lpad,
                 lmax.X - lmin.X + 2 * lpad, lmax.Y - lmin.Y + 2 * lpad, lmax.Z - lmin.Z + 2 * lpad);
             var path = Pathfinder.FindPathToward(lbox, sim.World.Width, sim.World.Depth, from,
-                p => connectivity.RegionOf(p) == stop, near, LegMaxNodes, p => leg.Contains(connectivity.RegionOf(p)));
+                p => connectivity.RegionOf(p) == stop && Free(p), near, LegMaxNodes, p => leg.Contains(connectivity.RegionOf(p)) && Free(p));
             if (path is not null) _plannedTrip = (goals, near);
             return path;
         }
         var corridor = connectivity.Widen(chain, 0, chain.Count);
-        bool InCorridor(TilePos p) => corridor.Contains(connectivity.RegionOf(p));
+        bool InCorridor(TilePos p) => corridor.Contains(connectivity.RegionOf(p)) && Free(p);
 
         // Search a snapshot of the corridor's bounding box when it is small enough: reads become plain array
         // lookups instead of chunk lookups. Moves read 1 tile around and 2 below a cell, hence the padding.
