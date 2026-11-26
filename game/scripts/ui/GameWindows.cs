@@ -385,6 +385,7 @@ public partial class InspectorWindow : GlyphWindow
             case PickPile p: PilePanel(p.Cell); break;
             case PickSite s: SitePanel(s.Blueprint); break;
             case PickNest n: NestPanel(n.Nest); break;
+            case PickBelt b: BeltPanel(b.Belt); break;
             case PickTile t: TilePanel(t.Tile); break;
         }
     }
@@ -519,6 +520,67 @@ public partial class InspectorWindow : GlyphWindow
             Colony.Core.Orders.Constructions.MaterialsOnSite(bp, _ui.Sim.Items)), "Dim"));
         KV("Builder", bp.BuilderId >= 0 ? _ui.Sim.Colonists.FirstOrDefault(c => c.Id == bp.BuilderId)?.Name ?? "someone" : "nobody yet", "dim");
         Content.AddChild(G.Para("Shift+X over it cancels the plan (what was delivered stays).", "Faint"));
+    }
+
+    /// <summary>A conveyor: what it joins, what it is doing, what it carries (and a filter to change that), take it down.</summary>
+    private void BeltPanel(Colony.Core.Transport.Belt b)
+    {
+        var sim = _ui.Sim;
+        Content.AddChild(new GlyphSection($"Conveyor {b.Id}" + (b.From.Kind == Colony.Core.Transport.PortKind.Belt ? " (a branch)" : "")));
+        if (b.Faction != _ui.Me) Content.AddChild(G.Para($"Belongs to {sim.Factions[b.Faction].Name}.", "Warn"));
+        KV("Status", WorldInfo.BeltStatus(sim, b), b.Running ? "dim" : "warn");
+        KV("Runs", WorldInfo.BeltEnds(sim, b), "dim");
+        KV("Shape", WorldInfo.BeltShape(sim, b), "dim");
+        KV("Delivered", $"{b.Delivered} so far");
+        if (b.Packets > 0)
+        {
+            var riding = new Dictionary<Colony.Core.Items.ItemType, int>();
+            for (int i = 0; i < b.Length; i++)
+                if (b.PacketAt(i) is { Empty: false } p) riding[p.Type] = riding.GetValueOrDefault(p.Type) + p.Count;
+            KV("On it", string.Join(", ", riding.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Value} {kv.Key.Name.ToLowerInvariant()}")), "dim");
+        }
+        if (b.HasHopper && b.Wants is { } want) KV("Hopper wants", want.Name.ToLowerInvariant(), "dim");
+        if (b.Faction != _ui.Me) return;
+        // What it carries: everything, or one item (‹ › step through what its start offers first, then everything else).
+        var choices = BeltChoices(b);
+        int at = b.Carries is null ? -1 : b.Carries.Count == 1 ? choices.IndexOf(new Colony.Core.Items.ItemType(b.Carries.First())) : -2;
+        var row = new HBoxContainer();
+        row.AddChild(G.Text("Carries", cols: 14));
+        void Pick(int i)
+        {
+            if (i < 0) _ui.Tool.Issue(new Colony.Core.Commands.FilterConveyor(b.Cells[0], "", 0));
+            else _ui.Tool.Issue(new Colony.Core.Commands.FilterConveyor(b.Cells[0], choices[i].Id, 3));
+        }
+        int Wrap(int i) => i < -1 ? choices.Count - 1 : i >= choices.Count ? -1 : i;
+        row.AddChild(G.Button(" ‹ ", () => Pick(Wrap(Math.Max(-1, at) - 1)), "Carry the previous item only (or everything)", "Ghost"));
+        string shown = at == -1 ? "everything" : at >= 0 ? $"only {choices[at].Name.ToLowerInvariant()}" : $"{b.Carries!.Count} kinds";
+        row.AddChild(G.Text(shown, "Hi", cols: 22, align: HorizontalAlignment.Center));
+        row.AddChild(G.Button(" › ", () => Pick(Wrap(Math.Max(-1, at) + 1)), "Carry the next item only (or everything)", "Ghost"));
+        Content.AddChild(row);
+        Content.AddChild(G.Para("A belt loads what something at its end wants: input crates first, then stockpiles, then open ground (only a workshop's products are dropped there). A splitter sends each load down the branch whose end wants it.", "Faint"));
+        var buttons = new HBoxContainer();
+        buttons.AddChild(G.Button(" Take down ", () => _ui.Tool.Issue(new Colony.Core.Commands.RemoveConveyor(b.Cells[0])), "Take the whole belt down: its planks and gears are left under it, the goods on it fall"));
+        Content.AddChild(buttons);
+    }
+
+    /// <summary>Items a belt's filter steps through: what its source holds or it carries now first, then the rest of the catalog.</summary>
+    private List<Colony.Core.Items.ItemType> BeltChoices(Colony.Core.Transport.Belt b)
+    {
+        var sim = _ui.Sim;
+        var first = new List<Colony.Core.Items.ItemType>();
+        void Note(Colony.Core.Items.ItemType t) { if (!first.Contains(t)) first.Add(t); }
+        if (sim.Items.TryGet(b.From.Kind == Colony.Core.Transport.PortKind.Crate ? b.From.Cell : b.Start, out var src) && src.Count > 0) Note(src.Type);
+        if (b.From.Kind == Colony.Core.Transport.PortKind.Crate && sim.Rooms.PartAt(b.From.Cell) is { } crate)
+            foreach (var m in crate.Room.PartsWithRole(PartRole.Machine))
+                if (m.Recipe is { Kind: Colony.Core.Items.ItemKind.Good } r) Note(r.Output);
+        if (b.From.Kind == Colony.Core.Transport.PortKind.Stockpile && sim.Stockpiles.ZoneById(b.From.Id) is { } zone)
+            foreach (var c in sim.Stockpiles.CellsOf(zone).Take(400))
+                if (sim.Items.TryGet(c, out var p) && p.Count > 0) Note(p.Type);
+        for (int i = 0; i < b.Length; i++)
+            if (b.PacketAt(i) is { Empty: false } pk) Note(pk.Type);
+        foreach (var def in Catalog.Items)
+            if (def.Kind == Colony.Core.Items.ItemKind.Good) Note(def.Type);
+        return first;
     }
 
     private void NestPanel(Colony.Core.Combat.Nest n)
@@ -718,7 +780,8 @@ public partial class HelpWindow : GlyphWindow
             ("Drag", "a box (or click one corner, then the other)"), ("Shift + drag", "remove instead"),
             ("Shift / Ctrl, Z X", "stretch the box over levels"), ("RMB click, Esc", "abort the box, then put the tool down"),
             ("Walls: click / drag", "one piece / a line along an edge, or a box round"), ("R, [ ]", "turn, size of the part being placed"),
-            ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor")]),
+            ("F / Shift+F", "next recipe (machine) or policy (home) under the cursor"),
+            ("Conveyor, splitter", "click the start, then the end (the route follows the mouse); Shift+click a belt: take it down")]),
         ("People", [
             ("G", "draft everyone, then click ground to march or a nest to attack (G again: done)"), ("Shift+G", "stand everyone down")]),
         ("Windows", [
@@ -744,7 +807,7 @@ public partial class HelpWindow : GlyphWindow
         Live("Sim per frame", () => $"{_ui.Main.SimMs:0.0} ms");
         Live("Terrain sections to build", () => _ui.Main.PendingSections.ToString());
         Live("Water spans moving", () => $"{sim.Water.LastStepCells} in {sim.Water.AwakeChunks} blocks ({sim.Water.WetChunks} wet)");
-        Live("Power", () => $"{sim.Waterworks.Generated:0.#} made, {sim.Waterworks.Demand:0.#} wanted ({sim.Waterworks.Supply:P0})");
+        Live("Power", () => $"{sim.Waterworks.GeneratedOf(_ui.Me):0.#} made, {sim.Waterworks.DemandOf(_ui.Me):0.#} wanted ({sim.Waterworks.SupplyOf(_ui.Me):P0}) · {sim.Conveyors.All.Count(b => b.Faction == _ui.Me)} belts");
         Live("Designations, blueprints", () => $"{sim.Designations.Count}, {sim.Constructions.Count}");
         Live("Stockpile cells, farm plots", () => $"{sim.Stockpiles.Count}, {sim.Farms.Count}");
         Live("Settlers, left, weddings, births", () => $"{_ui.MyFaction.Society.SettlersArrived}, {_ui.MyFaction.Society.Departed}, {_ui.MyFaction.Society.Marriages}, {_ui.MyFaction.Society.Births}");

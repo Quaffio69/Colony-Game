@@ -26,6 +26,7 @@ public class CommandTests
         new ProposeTrade(2, new Trade.TradeTerms([new Trade.TradeTerm(0, "planks", 20), new Trade.TradeTerm(2, "iron_ingot", 3)])),
         new CounterTrade(5, new Trade.TradeTerms([new Trade.TradeTerm(1, "bread", 9)])) { Player = 1 }, new AcceptTrade(5), new RejectTrade(6) { Player = 2 }, new SetMachineLimit(A, 50), new SetOrderPriority(A, B, 1) { Player = 2 }, new SetDevMode(true, false), new DevSpawn(A, "excavator", 2) { Player = 1 },
         new ConfigureStockpile(3, Items.StockpileOption.Name, Text: "Pantry"), new ConfigureStockpile(4, Items.StockpileOption.Workshop, 12, 1) { Player = 2 }, new ConfigureStockpile(1, Items.StockpileOption.Reach), new ClaimColony(2, "Ann", "abc123"),
+        new PlaceConveyor(A, "EENfUUaD", Transport.PortKind.Crate, B, Transport.PortKind.Belt, A) { Player = 1 }, new RemoveConveyor(B), new FilterConveyor(A, "planks", 3),
     }.Select(c => new object[] { c });
 
     [Theory]

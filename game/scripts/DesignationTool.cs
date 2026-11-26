@@ -42,7 +42,7 @@ public partial class DesignationTool : Node3D
         // Orders
         None, Dig, Stairs, UpStair, DownStair, UpDownStair, Chop, Gather, Stockpile, FarmGrain, FarmHerbs, FarmGlowcaps, FarmFlax, Block, Demolish, Cancel,
         // Build (which workshop / part / structure: see Workshop, Part and Structure)
-        Room, Part, Structure, Edge, Floor, Roof, Rack, TradeDepot, House,
+        Room, Part, Structure, Edge, Floor, Roof, Rack, TradeDepot, House, Conveyor, Splitter,
         // Dev mode: drop an item, machine or colonist with a click (see SpawnItem)
         Spawn,
     }
@@ -300,6 +300,7 @@ public partial class DesignationTool : Node3D
             SquadOrders = false;
             return true;
         }
+        if (CancelBelt()) return true;
         if (_selection != Selection.None)
         {
             EndSelection();
@@ -526,6 +527,8 @@ public partial class DesignationTool : Node3D
         _cursor.Visible = Hovered.HasValue && _selection == Selection.None && !placing;
         if (Hovered is { } h)
             _cursor.Position = SimSpace.TileCenter(IsAreaTool(Mode) && SurfaceAt(h.X, h.Y) is >= 0 and var s ? h with { Z = s } : h);
+        PickBelt(origin, dir, hit);
+        if (IsBeltTool(Mode)) _cursor.Visible = false; // the tool marks its own cells
         UpdateGhost(placing);
         _hoverEdge = Mode == ToolMode.Edge && _selection == Selection.None ? EdgeUnderMouse(origin, dir) : null;
         if (_hoverEdge is { } he)
@@ -557,6 +560,7 @@ public partial class DesignationTool : Node3D
             }
             UpdateBox();
         }
+        UpdateBeltTool();
     }
 
     // ---- Mouse and keys -------------------------------------------------------------------------------------
@@ -718,6 +722,12 @@ public partial class DesignationTool : Node3D
             // Dev mode: a click drops what the spawn tool holds on the floor there.
             case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } when Mode == ToolMode.Spawn:
                 if (Hovered is { } drop) Issue(new Colony.Core.Commands.DevSpawn(drop.Offset(0, 0, 1), SpawnItem, SpawnCount));
+                Handled();
+                break;
+
+            // Conveyors: click the start, then the end (Shift+click a belt takes it down).
+            case InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } bc when IsBeltTool(Mode):
+                BeltClick(bc.ShiftPressed);
                 Handled();
                 break;
 

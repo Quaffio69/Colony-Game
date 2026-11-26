@@ -94,6 +94,8 @@ public sealed partial class ColonySim
     public Fluids.Mist Mist { get; }
     /// <summary>Water wheels, pumps and power.</summary>
     public Fluids.Waterworks Waterworks { get; } = new();
+    /// <summary>Conveyor belts and the goods riding them.</summary>
+    public Transport.Conveyors Conveyors { get; }
     /// <summary>Walls, wheels and pumps waiting to be built.</summary>
     public Constructions Constructions { get; }
     /// <summary>Grass growing back over dug-out dirt.</summary>
@@ -126,13 +128,20 @@ public sealed partial class ColonySim
         Farms = new Farms(world);
         Water = new Fluids.Water(world);
         Mist = new Fluids.Mist(world);
-        Constructions = new Constructions(world) { IsOccupied = c => Waterworks.Occupied(c) || Stockpiles.Racks.ContainsKey(c), IsStorage = c => Stockpiles.Contains(c) };
+        Conveyors = new Transport.Conveyors(world);
+        Constructions = new Constructions(world)
+        {
+            IsOccupied = c => Waterworks.Occupied(c) || Stockpiles.Racks.ContainsKey(c) || Conveyors.Contains(c), IsStorage = c => Stockpiles.Contains(c),
+            Keeps = (c, t) => Conveyors.IsHopper(c) && Conveyors.At(c) is { } at && at.Belt.CarriesItem(t),
+        };
+        Waterworks.OtherDemand = f => Conveyors.PowerDemand(f);
+        Rooms.IsPartBlocked = c => Conveyors.Contains(c);
         Items.CapacityAt = Stockpiles.CapacityAt;
         Stockpiles.RackLost = (c, rack) => Items.Drop(c, ItemType.Plank, Constructions.Cost(StructureKind.Rack, rack.Levels).Count);
         // A floor cell is storage, factory or farm: never two of them.
-        Stockpiles.IsBlocked = c => Rooms.RoomAt(c) is not null || Farms.Contains(c);
+        Stockpiles.IsBlocked = c => Rooms.RoomAt(c) is not null || Farms.Contains(c) || Conveyors.Contains(c);
         Rooms.IsBlocked = c => Stockpiles.Contains(c) || Farms.Contains(c);
-        Farms.IsBlocked = c => Stockpiles.Contains(c) || Rooms.RoomAt(c) is not null;
+        Farms.IsBlocked = c => Stockpiles.Contains(c) || Rooms.RoomAt(c) is not null || Conveyors.Contains(c);
         Designations.CanSow = c => Farms.TryGet(c, out var crop) && !Flora.TryGet(c, out _) && PlantInfo.CanGrowAt(World, c, crop);
         _caveIns = new CaveIns(world);
         World.ChunkChanged += i => Wildlife.OnChunkChanged(World, i);
@@ -235,14 +244,17 @@ public sealed partial class ColonySim
                 Stockpiles.Remove(cell);
                 Rooms.ValidateCell(cell);
                 break;
+            case StructureKind.Conveyor:
+                Conveyors.TileBuilt(cell);
+                break;
             case StructureKind.WaterWheel:
-                Waterworks.AddWheel(Water, cell, bp.Facing);
+                Waterworks.AddWheel(Water, cell, bp.Facing, bp.Faction);
                 break;
             case StructureKind.Rack:
                 if (!Stockpiles.AddRack(cell, bp.Material, bp.Facing)) Items.Drop(cell, bp.Cost.Material, bp.Cost.Count); // its zone went meanwhile
                 break;
             default:
-                Waterworks.AddPump(cell, bp.Facing);
+                Waterworks.AddPump(cell, bp.Facing, bp.Faction);
                 break;
         }
     }
@@ -704,6 +716,7 @@ public sealed partial class ColonySim
         if (_waterworksDue) RunWaterworks(); // the step begun at the end of the last tick lands first
         DevStep(); // dev mode: what was just planned stands at once
         Farms.Tick(Tick, Flora, Designations, Water);
+        Conveyors.Tick(this); // before colonists act: belts deliver, and haulers see what is on its way
         Regrowth.Tick(this);
         CheckEvents();
         if (_arriving.Count > 0)
@@ -760,7 +773,7 @@ public sealed partial class ColonySim
     private void RunWaterworks()
     {
         Water.Join();
-        Waterworks.Tick(Water, World);
+        Waterworks.Tick(Water, World, _factions.Count);
         Mist.Sample(this); // reads the falls of the step just landed
         _waterworksDue = false;
     }
@@ -827,6 +840,7 @@ public sealed partial class ColonySim
         foreach (var f in _factions) f.Housing.Settle();
         Wildlife.Settle(this);
         Trades.Settle();
+        Conveyors.Settle();
         _reservedStudents.Clear();
         RebuildDerived();
     }
@@ -871,6 +885,7 @@ public sealed partial class ColonySim
         Net.SnapIO.Section(w, "regrowth"); Regrowth.SnapSave(w);
         Net.SnapIO.Section(w, "trades"); Trades.SnapSave(w);
         Net.SnapIO.Section(w, "mist"); Mist.SnapSave(w);
+        Net.SnapIO.Section(w, "conveyors"); Conveyors.SnapSave(w);
         Net.SnapIO.Section(w, "sim");
         w.Write(Tick); w.Write(PathSearches); w.Write(CaveInCount); w.Write(ItemsProduced); w.Write(ColonistsEver);
         w.Write(_families); w.Write(_eventRoomsVersion); w.Write(_waterworksDue); w.Write(NeedsEnabled); w.Write(Deaths);
@@ -936,6 +951,7 @@ public sealed partial class ColonySim
         if (!Net.SnapIO.Before(3)) { Net.SnapIO.Section(r, "regrowth"); sim.Regrowth.SnapLoad(r); }
         if (!Net.SnapIO.Before(4)) { Net.SnapIO.Section(r, "trades"); sim.Trades.SnapLoad(r); }
         if (!Net.SnapIO.Before(11)) { Net.SnapIO.Section(r, "mist"); sim.Mist.SnapLoad(r); }
+        if (!Net.SnapIO.Before(15)) { Net.SnapIO.Section(r, "conveyors"); sim.Conveyors.SnapLoad(r); }
         Net.SnapIO.Section(r, "sim");
         sim.Tick = r.ReadInt64(); sim.PathSearches = r.ReadInt64(); sim.CaveInCount = r.ReadInt32(); sim.ItemsProduced = r.ReadInt64();
         sim.ColonistsEver = r.ReadInt32(); sim._families = r.ReadInt32(); sim._eventRoomsVersion = r.ReadInt32();

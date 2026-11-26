@@ -67,6 +67,13 @@ public static class StateHash
             sum += Of(8, n.Id, Pos(n.Entrance), n.Population, n.Out, n.Health, n.Crowded, n.Awake ? 1 : 0);
         foreach (var c in sim.Wildlife.Creatures)
             sum += Of(9, c.Id, Pos(c.Position), c.Health, (long)c.Mode, c.NestId, c.TargetId);
+        foreach (var b in sim.Conveyors.All)
+        {
+            sum += Of(18, b.Id, b.Faction, b.Length, b.Unbuilt, b.Blocked, (long)b.From.Kind, Pos(b.From.Cell), (long)b.To.Kind, Pos(b.To.Cell), b.FilterPrint, b.Packets);
+            for (int i = 0; i < b.Length; i++)
+                if (b.PacketAt(i) is { Empty: false } p) sum += Of(19, b.Id, i, p.Type.Index, p.Count, p.Dest);
+        }
+        sum += Of(20, (long)(sim.Waterworks.Generated * 1000), (long)(sim.Waterworks.Demand * 1000));
         foreach (var p in sim.Stockpiles.DepotCells)
             sum += Of(12, Pos(p));
         foreach (var d in sim.Trades.All)

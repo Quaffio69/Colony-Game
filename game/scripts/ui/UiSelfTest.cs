@@ -399,6 +399,44 @@ public partial class UiSelfTest : Node
         int after = sim.Items.All.Where(kv => kv.Value.Type == Colony.Core.Items.ItemType.Plank).Sum(kv => kv.Value.Count);
         Check($"a click with the spawn tool drops 10 planks ({tool.LastAction})", after == planks + 10);
         while (tool.CancelPlacement()) { }
+
+        // The conveyor tool: a click where it starts, the route follows the mouse, a click where it ends places it.
+        int belts = sim.Conveyors.Count;
+        tool.SelectConveyor(false);
+        var beltAt = mid + new Vector2(-120, 60);
+        var beltTo = beltAt + new Vector2(200, -20);
+        Move(beltTo - Vector2.One, beltTo, false);
+        await Frames(3);
+        if (tool.Hovered is { } yard) tool.Issue(new Colony.Core.Commands.AddStockpile(yard.Offset(-1, -1, 0), yard.Offset(1, 1, 0))); // where it ends
+        await Frames(2);
+        Move(beltAt - Vector2.One, beltAt, false);
+        await Frames(3);
+        Mouse(beltAt, true);
+        Mouse(beltAt, false);
+        await Frames(2);
+        Move(beltAt, beltTo, false);
+        await Frames(4);
+        string note = tool.BeltNote?.Text ?? "";
+        Check($"the conveyor tool plans a route as the mouse moves ({note})", tool.BeltNote is { Good: true });
+        Mouse(beltTo, true);
+        Mouse(beltTo, false);
+        await Frames(3);
+        Check($"a second click places the belt ({tool.LastAction})", sim.Conveyors.Count == belts + 1);
+        await Frames(3);
+        var placed = sim.Conveyors.Count > belts ? sim.Conveyors.All[^1] : null;
+        Check("in dev mode it is built at once", placed?.Complete == true);
+        // Shift+click on it takes it down.
+        if (placed != null)
+        {
+            var onBelt = GetViewport().GetCamera3D().UnprojectPosition(ConveyorView.Point(placed.Cells[placed.Length / 2]));
+            Move(onBelt - Vector2.One, onBelt, false);
+            await Frames(3);
+            Input.ParseInputEvent(new InputEventMouseButton { Position = onBelt, GlobalPosition = onBelt, ButtonIndex = MouseButton.Left, Pressed = true, ShiftPressed = true, ButtonMask = MouseButtonMask.Left });
+            Input.ParseInputEvent(new InputEventMouseButton { Position = onBelt, GlobalPosition = onBelt, ButtonIndex = MouseButton.Left, Pressed = false, ShiftPressed = true });
+            await Frames(3);
+            Check($"Shift+click with the tool takes a belt down ({tool.LastAction})", sim.Conveyors.Count == belts);
+        }
+        while (tool.CancelPlacement()) { }
         tool.Issue(new Colony.Core.Commands.SetDevMode(false, false));
         await Frames();
         Check("dev mode switches off", !sim.DevMode);

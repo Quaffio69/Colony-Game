@@ -13,8 +13,9 @@ public static class VoxelRaycast
     /// <param name="origin">Ray start, in simulation tile units.</param>
     /// <param name="direction">Ray direction; need not be normalised.</param>
     /// <param name="maxLevel">Tiles above this level are ignored (the view slice).</param>
+    /// <param name="alsoHits">Open cells that stop the ray too (null: only solid tiles and stairs).</param>
     public static RayHit? Cast(VoxelWorld world, Vector3 origin, Vector3 direction, float maxDistance,
-        int maxLevel = int.MaxValue)
+        int maxLevel = int.MaxValue, Func<int, int, int, bool>? alsoHits = null)
     {
         if (direction == Vector3.Zero) return null;
         direction = Vector3.Normalize(direction);
@@ -47,7 +48,8 @@ public static class VoxelRaycast
 
         while (t <= maxDistance)
         {
-            if (world.Get(x, y, z) != TileType.Air || world.IsUnseen(x, y, z)) // stairs are pickable too; unseen cavern air reads as rock
+            // Stairs are pickable too; unseen cavern air reads as rock; callers may pick things standing in open cells (belts).
+            if (world.Get(x, y, z) != TileType.Air || world.IsUnseen(x, y, z) || alsoHits?.Invoke(x, y, z) == true)
                 return new RayHit(new TilePos(x, y, z), normal, t);
 
             if (tMaxX < tMaxY && tMaxX < tMaxZ)

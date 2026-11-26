@@ -136,7 +136,7 @@ public sealed record NetPlayer(int Faction, string Name)
 /// </summary>
 public sealed class LockstepHost : IDisposable
 {
-    public const int Protocol = 17;
+    public const int Protocol = 18;
     /// <summary>Ticks between desync checks (5 s at 1x).</summary>
     public const int HashInterval = 100;
 
@@ -321,6 +321,14 @@ public sealed class LockstepHost : IDisposable
     {
         _sim.Commands.Flush();
         var log = _sim.Commands.Log;
+        // Hashes go before the turn that reaches their tick: a client must hold a tick's hash before it can step past it,
+        // or the check is skipped (a race a fast loopback client could lose).
+        foreach (var (tick, hash) in _hashQueue)
+        {
+            var data = Peer.Pack(w => { w.Write(tick); w.Write(hash); });
+            foreach (var c in _clients.Where(c => c.Faction > 0)) c.Peer.Send(Msg.Hash, data);
+        }
+        _hashQueue.Clear();
         foreach (var c in _clients)
         {
             if (c.Faction <= 0 || (c.SentLog == log.Count && c.SentTick == _sim.Tick)) continue;
@@ -335,12 +343,6 @@ public sealed class LockstepHost : IDisposable
             c.SentLog = log.Count;
             c.SentTick = _sim.Tick;
         }
-        foreach (var (tick, hash) in _hashQueue)
-        {
-            var data = Peer.Pack(w => { w.Write(tick); w.Write(hash); });
-            foreach (var c in _clients.Where(c => c.Faction > 0 && c.SentTick >= tick)) c.Peer.Send(Msg.Hash, data);
-        }
-        _hashQueue.Clear();
     }
 
     private readonly List<(long Tick, ulong Hash)> _hashQueue = new();

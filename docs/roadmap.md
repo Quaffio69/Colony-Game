@@ -47,7 +47,13 @@ What is done and what is next, milestone by milestone.
 - [x] Production tree: data-driven catalog, 12 workshops / 32 stations / 78 recipes with models for every
       station size, multi-input crates, recipe per machine, education and the Academy, automatons, build
       menu (B). Raw sources: clay, sand, 8 minerals by depth, wild herbs, grain/herb/glowcap farms.
-- [ ] Next for industry: conveyors between output and input crates; rooms themselves costing
+- [x] Conveyors: one tool from anything to anything (output crates, stockpiles, hoppers on open ground; input crates,
+      stockpiles, the ground, other belts), the route planned for you across hills, cliffs (lifts), trenches and rivers
+      (trestles) and round whatever is in the way; splitters (a second tool) that send each load where it is wanted;
+      merges; demand-driven loading with haulers taking the rest; power per colony from water wheels; built on site from
+      planks and wooden gears (the first component tier, joinery bench). Next: multi-material blueprints (water wheels and
+      pumps taking gears), faster bronze belts on cogs, axles and power networks, carts on rails.
+- [ ] Next for industry: rooms themselves costing
       (walls/floors); standing orders ("keep 50 planks") instead of fixed recipes;
       wonders as aux parts (philosopher's stone, farseer orb, orrery); real ratios.
 - [~] Flora: grass grows back over dug dirt (`Regrowth`). Next: wild growth and spreading/regrowth of plants (staggered, deterministic).
@@ -127,7 +133,7 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [x] Haulers carry more per trip: items have weights and a colonist lifts 30 kg (6 logs, 10 stone, 60 herbs), topped up from small piles beside; trees give fewer logs. Carts and heavy machinery are the way to carry more later.
 
 ### New features
-- [x] Heavy machinery, built in a workshop: a steam excavator (digs 5x as fast) and a power wagon (8 loads a trip), burning charcoal. Driven by colonists, who fetch one only when the run of work round the job pays for the walk (a big dig fetches it from afar, one tile never does; judged by real paths, so a machine behind a wall counts the way round), drive on while that holds, stoke it, and park it where they stop. The wagon ships trade deals too. Next: more machines (ore crusher, steam tractor), repairs and wear, conveyors.
+- [x] Heavy machinery, built in a workshop: a steam excavator (digs 5x as fast) and a power wagon (8 loads a trip), burning charcoal. Driven by colonists, who fetch one only when the run of work round the job pays for the walk (a big dig fetches it from afar, one tile never does; judged by real paths, so a machine behind a wall counts the way round), drive on while that holds, stoke it, and park it where they stop. The wagon ships trade deals too. Next: more machines (ore crusher, steam tractor), repairs and wear.
 - [x] Stockpile settings (F8, or Settings in Inspect): name, priority (goods move up to better stockpiles), items by category and one by one, workshop whitelist/blacklist, haul-from distance (500 tiles by default, or any), keep at most N of each item, and reserve (kept for workshops and trade).
 - [ ] Nobility: managers over aspects of production and people.
 - [ ] Colonist inventory: pack meals to eat away from stores.

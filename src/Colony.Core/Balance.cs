@@ -138,6 +138,26 @@ public static class Balance
     /// <summary>Ticks a colonist that just got out of a machine leaves it be (so it doesn't hop straight back in).</summary>
     public const int MachineRestTicks = 300;
 
+    // ---- Conveyors -------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A belt moves its goods one tile every this many ticks at full power (2 tiles a second); a tile holds one packet of
+    /// up to <see cref="ConveyorPacketKg"/> (a third of what a colonist lifts, so a running belt carries about as much as
+    /// a dozen haulers walking nose to tail). Belts draw power from their colony's water wheels:
+    /// <see cref="ConveyorDrivePower"/> a belt plus <see cref="ConveyorPowerPerTile"/> a tile (a wheel in a brisk river
+    /// makes ~5, the most 20: a hundred-odd tiles of belt). Short of power, every belt of the colony runs at the share
+    /// covered.
+    /// </summary>
+    public const int ConveyorStepTicks = 10;
+    public const float ConveyorPacketKg = 10, ConveyorDrivePower = 0.5f, ConveyorPowerPerTile = 0.04f;
+    /// <summary>Ticks to build one tile of belt (planks) and a drive (gears), before <see cref="StructureBuildScale"/>.</summary>
+    public const int ConveyorTileTicks = 24, ConveyorDriveTicks = 60;
+    /// <summary>Most tiles one belt may run (draw a longer line in pieces joined end to end, or branch it).</summary>
+    public const int ConveyorMaxTiles = 1500;
+    /// <summary>An output crate a belt empties is left to the belt by haulers until it is this full (per mille): past it
+    /// they help clear it, so a backed-up belt never stops the workshop.</summary>
+    public const int ConveyorCrateOverflow = 750;
+
     // ---- Wildlife (giant ant nests) ------------------------------------------------------------------------------
 
     /// <summary>A nest breeds one ant this often (a 40-ant nest refills in about two weeks).</summary>

@@ -197,6 +197,7 @@ public partial class Notices : Control
                 if (tool.EdgePieces is { } pieces) extra = G.Plural(pieces, "piece");
                 else if (tool.BoxSize is { } b) extra = b.H > 1 ? $"{b.W}×{b.D}×{b.H}" : $"{b.W}×{b.D}";
                 if (tool.IsArea && tool.Selecting) keys = [("Click", "confirm"), ("RMB", "abort")];
+                if (tool.BeltNote is { } belt) (extra, extraTone) = (belt.Text, belt.Good ? "hi" : "bad");
                 if (tool.PlacementProblem is { } why && !tool.Selecting)
                 {
                     extra = "can't place: " + why;

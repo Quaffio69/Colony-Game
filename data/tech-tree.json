@@ -156,6 +156,7 @@
 
     { "id": "tools", "name": "Tools", "category": "component", "weight": 2, "uses": ["tool racks and cribs (aux parts)", "construction"], "model": "crates", "color": "#8c6640" },
     { "id": "scaffold", "name": "Scaffold", "category": "component", "uses": ["reaching high work: a colonist carries it there, sets it up, stands on it and takes it down after"], "model": "scaffold", "color": "#c49a5e", "stack": 10, "weight": 30 },
+    { "id": "wooden_gears", "name": "Wooden Gears", "category": "component", "weight": 3, "uses": ["mechanisms built on site: conveyor drives, splitters"], "model": "gears", "color": "#b08552" },
     { "id": "cogs", "name": "Cogs", "category": "component", "model": "gears", "color": "#c79a4d" },
     { "id": "springs", "name": "Springs", "category": "component", "model": "springs", "color": "#a6b3c4" },
     { "id": "wire", "name": "Copper Wire", "category": "component", "model": "coils", "color": "#e0803a" },
@@ -238,6 +239,7 @@
     { "output": "spear", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks*2", "stone"] },
     { "output": "bow", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks*2", "rope"] },
     { "output": "wooden_shield", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks*3"] },
+    { "output": "wooden_gears", "count": 2, "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks*2"] },
     { "output": "scaffold", "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["logs*2"] },
     { "output": "wooden_ware", "count": 3, "workshop": "carpentry", "station": "joinery_bench", "education": "Unskilled", "inputs": ["planks"] },
 

@@ -63,8 +63,8 @@ public sealed partial class Colonist
         public string Where => Part is { } p ? $" in {p.Room.Name}" : "";
         public bool Removed => Part?.Removed ?? Site!.Removed;
         public BuildCost Cost => Part?.Cost ?? Site!.Cost;
-        public int Ticks => Part is { } p ? PartInfo.BuildTicks(p.Type, p.Size) : Constructions.BuildTicks(Site!.Kind);
-        public bool InReach(TilePos at) => Part is { } p ? p.Cells.Any(c => Colonist.InReach(at, c)) : Colonist.InReach(at, Site!.Target);
+        public int Ticks => Part is { } p ? PartInfo.BuildTicks(p.Type, p.Size) : Constructions.BuildTicks(Site!);
+        public bool InReach(TilePos at) => Part is { } p ? p.Cells.Any(c => Colonist.InReach(at, c)) : Colonist.InReach(at, Site!.Kind == StructureKind.Conveyor ? Site.Cell : Site!.Target);
         public void ReleaseBuilder(int id)
         {
             if (Part is { } p && p.BuilderId == id) p.BuilderId = -1;
@@ -695,9 +695,10 @@ public sealed partial class Colonist
     private bool NothingNewSinceLastSearch(ColonySim sim) =>
         _searchedDesignations == sim.Designations.Version && _searchedConnectivity == sim.Connectivity.Version &&
         _searchedItems == sim.Items.Version && _searchedStockpiles == sim.Stockpiles.Version &&
-        _searchedRooms == sim.Rooms.Version && _searchedHousing == MyHousing(sim).Version && _searchedTrades == sim.Trades.Version;
+        _searchedRooms == sim.Rooms.Version && _searchedHousing == MyHousing(sim).Version && _searchedTrades == sim.Trades.Version &&
+        _searchedBelts == sim.Conveyors.WorkVersion;
 
-    private int _searchedRooms = -1, _searchedHousing = -1, _searchedTrades = -1;
+    private int _searchedRooms = -1, _searchedHousing = -1, _searchedTrades = -1, _searchedBelts = -1;
 
     private void FindWork(ColonySim sim)
     {
@@ -710,6 +711,7 @@ public sealed partial class Colonist
         _searchedRooms = sim.Rooms.Version;
         _searchedHousing = MyHousing(sim).Version;
         _searchedTrades = sim.Trades.Version;
+        _searchedBelts = sim.Conveyors.WorkVersion;
         _deferred = false;
 
         if (_pathFailedConnectivity != sim.Connectivity.Version)
@@ -826,7 +828,7 @@ public sealed partial class Colonist
     private bool TryHaul(ColonySim sim, int component)
     {
         bool first = true;
-        foreach (var plan in Hauling.Plans(sim.Items, sim.Stockpiles, sim.Rooms, sim.Connectivity, Position, component, _pathFailed, sim.Constructions, Filter(sim)))
+        foreach (var plan in Hauling.Plans(sim.Items, sim.Stockpiles, sim.Rooms, sim.Connectivity, Position, component, _pathFailed, sim.Constructions, Filter(sim), sim.Conveyors, sim))
         {
             if (sim.PathBudgetExhausted)
             {
@@ -1208,7 +1210,8 @@ public sealed partial class Colonist
             if (Constructions.MaterialsOnSite(site, sim.Items, available: true) < cost) continue;
             // Never stand in the cell being built (a wall would entomb the builder). A deck or upper stair is built from
             // below (its materials are there): around the cell it goes in, never in it.
-            var spots = ReachableAround(sim, site.Target, component);
+            // A conveyor tile is built from the ground under it (a raised one goes up on trestles from there).
+            var spots = ReachableAround(sim, site.Kind == StructureKind.Conveyor ? site.Cell : site.Target, component);
             spots.Remove(site.Target);
             if (spots.Count == 0) continue;
             if (sim.PathBudgetExhausted)
@@ -1752,7 +1755,7 @@ public sealed partial class Colonist
         _trip = _plannedTrip = null;
         _stepTicksTotal = _stepTicksDone = 0;
         _searchedDesignations = _searchedConnectivity = _searchedItems = _searchedStockpiles = -1;
-        _searchedRooms = _searchedHousing = _searchedTrades = -1;
+        _searchedRooms = _searchedHousing = _searchedTrades = _searchedBelts = -1;
         _trade = default;
         _tradePartner = "";
         _retryDelay = 0;

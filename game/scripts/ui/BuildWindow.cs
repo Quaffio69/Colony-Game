@@ -61,7 +61,7 @@ public partial class BuildWindow : GlyphWindow
         Header.AddChild(new GlyphSegmented(Tabs, _tab, i => { _tab = i; _cat = 0; _drawn = ""; Tick(); })
         {
             Tips = ["Orders: dig, stairs, chop, gather, cancel, demolish", "Zones: stockpiles, racks, trade depot, farms, homes",
-                "Structures: whole houses, walls, doors, windows, floors, roofs, stone blocks, waterworks", "Workshops: mark out a workshop, then place its stations"],
+                "Structures: whole houses, walls, doors, windows, floors, roofs, stone blocks, waterworks, conveyors", "Workshops: mark out a workshop, then place its stations"],
         });
         Header.AddChild(G.Gap(0.25f));
         Footer.AddChild(G.Gap(0.25f));
@@ -259,6 +259,11 @@ public partial class BuildWindow : GlyphWindow
                     () => Tool.Mode == ToolMode.Roof && Tool.RoofMaterial == m, () => Tool.SelectRoof(m));
             }).ToList()),
             new("Stone blocks", () => [Mode(ToolMode.Block) with { Cost = (ItemType.Stone, 1) }]),
+            new("Conveyors", () =>
+            [
+                Mode(ToolMode.Conveyor, () => Tool.SelectConveyor(false)) with { Cost = (ItemType.Plank, 1) },
+                Mode(ToolMode.Splitter, () => Tool.SelectConveyor(true)) with { Cost = (Catalog.Item("wooden_gears"), 1) },
+            ]),
             new("Waterworks", () => new[] { StructureKind.WaterWheel, StructureKind.Pump }.Select(k =>
             {
                 var cost = Constructions.Cost(k);

@@ -3,6 +3,7 @@ using Colony.Core.Industry;
 using Colony.Core.Items;
 using Colony.Core.Nature;
 using Colony.Core.Orders;
+using Colony.Core.Transport;
 using Colony.Core.World;
 
 namespace Colony.Core.Commands;
@@ -74,7 +75,8 @@ public sealed record CancelOrders(TilePos A, TilePos B) : Command
         int zones = sim.Stockpiles.RemoveBox(A, B, Player);
         int plots = sim.Farms.RemoveBox(A, B, Player);
         // Every plan in the box too: walls, doors, windows, floors, roofs, racks, waterworks and room parts not yet built.
-        int plans = sim.Constructions.CancelBox(A, B, Player) + sim.Rooms.RemovePartsIn(A, B, Player, onlyPlanned: true);
+        int plans = sim.Constructions.CancelBox(A, B, Player) + sim.Rooms.RemovePartsIn(A, B, Player, onlyPlanned: true)
+                  + sim.Conveyors.RemoveIn(sim, A, B, Player, onlyPlanned: true); // belts not finished yet
         return $"Cancelled {orders} designations and {plans} plans, removed {zones} stockpile and {plots} farm cells";
     }
 }
@@ -91,7 +93,7 @@ public sealed record Demolish(TilePos A, TilePos B) : Command
         int x0 = Math.Min(A.X, B.X), x1 = Math.Max(A.X, B.X), y0 = Math.Min(A.Y, B.Y), y1 = Math.Max(A.Y, B.Y);
         int z0 = Math.Min(A.Z, B.Z) + 1, z1 = Math.Max(A.Z, B.Z) + 1;
         int plans = sim.Constructions.CancelBox(A, B, Player);
-        int walls = 0, structures = 0;
+        int walls = 0, structures = sim.Conveyors.RemoveIn(sim, A, B, Player, onlyPlanned: false); // whole belts with a tile in the box
         for (int z = z0; z <= z1; z++)
         for (int y = y0 - 1; y <= y1; y++)
         for (int x = x0 - 1; x <= x1; x++)
@@ -254,6 +256,7 @@ public sealed record RemoveStructures(TilePos A, TilePos B) : Command
             if (sim.Stockpiles.Racks.ContainsKey(c) && sim.Stockpiles.OwnerOf(c) != Player) continue; // another colony's rack
             if (sim.RemoveStructure(c)) built++;
         }
+        built += sim.Conveyors.RemoveIn(sim, A, B, Player, onlyPlanned: false);
         return $"Took down {built} structures, cancelled {sim.Constructions.CancelBox(A, B, Player)} blueprints";
     }
 }
@@ -646,6 +649,65 @@ public sealed record ConfigureStockpile(int Stockpile, StockpileOption Option, i
             StockpileOption.Cap => zone.Cap == 0 ? $"{zone.Name} keeps any amount of each item" : $"{zone.Name} keeps at most {zone.Cap} of each item",
             StockpileOption.Reserve => zone.Reserve ? $"{zone.Name} is a reserve: kept for workshops and trade" : $"{zone.Name} is open to everyone",
             _ => "",
+        };
+    }
+}
+
+// ---- Conveyors -----------------------------------------------------------------------------------------------
+
+/// <summary>
+/// Plans a conveyor belt along a route (from <see cref="Start"/>, one step a letter: see <see cref="Conveyors.Encode"/>),
+/// joining what is at <see cref="FromCell"/> to what is at <see cref="ToCell"/> (by kind: a crate, a stockpile, another
+/// belt's tile for a splitter or a merge, or open ground). The game plans the route (<see cref="ConveyorRouter"/>); the
+/// sim checks every tile again.
+/// </summary>
+public sealed record PlaceConveyor(TilePos Start, string Route, PortKind FromKind, TilePos FromCell, PortKind ToKind, TilePos ToCell) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        if (Conveyors.Decode(Start, Route) is not { } cells) return "Can't place a conveyor: the route is garbled";
+        if (Conveyors.Resolve(sim, FromKind, FromCell) is not { } from) return "Can't place a conveyor: nothing to start from there";
+        if (Conveyors.Resolve(sim, ToKind, ToCell) is not { } to) return "Can't place a conveyor: nothing to end at there";
+        if (Conveyors.CanPlace(sim, Player, cells, from, to) is { } why) return $"Can't place a conveyor: {why}";
+        var belt = sim.Conveyors.Place(sim, Player, cells, from, to);
+        string what = from.Kind == PortKind.Belt ? "a branch" : to.Kind == PortKind.Belt ? "a feeder" : "a conveyor";
+        return $"Planned {what} of {belt.Length} tiles, {Conveyors.Describe(sim, from, true)} {Conveyors.Describe(sim, to, false)}: " +
+               $"{belt.Length - 1} planks, 1 wooden gears and builders";
+    }
+}
+
+/// <summary>Takes down the colony's belt with a tile at <see cref="Cell"/> (built tiles leave their materials).</summary>
+public sealed record RemoveConveyor(TilePos Cell) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        if (sim.Conveyors.At(Cell) is not { } at) return "No conveyor there";
+        if (at.Belt.Faction != Player) return "That belt belongs to another colony";
+        bool built = at.Belt.Complete;
+        sim.Conveyors.Remove(sim, at.Belt);
+        return built ? "Took the conveyor down (its planks and gears are left under it)" : "Cancelled the conveyor";
+    }
+}
+
+/// <summary>
+/// What the belt with a tile at <see cref="Cell"/> carries: <see cref="Mode"/> 0 everything, 1 also <see cref="ItemId"/>,
+/// 2 not it, 3 only it.
+/// </summary>
+public sealed record FilterConveyor(TilePos Cell, string ItemId, int Mode) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        if (sim.Conveyors.At(Cell) is not { } at) return "No conveyor there";
+        if (at.Belt.Faction != Player) return "That belt belongs to another colony";
+        ItemType? item = Catalog.TryItem(ItemId, out var t) ? t : null;
+        if (Mode != 0 && item is null) return $"No item '{ItemId}'";
+        if (!sim.Conveyors.Configure(at.Belt, item, Mode)) return "";
+        return Mode switch
+        {
+            0 => "The belt carries everything",
+            1 => $"The belt carries {Mat(item!.Value)} too",
+            2 => $"The belt no longer carries {Mat(item!.Value)}",
+            _ => $"The belt carries only {Mat(item!.Value)}",
         };
     }
 }

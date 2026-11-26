@@ -113,6 +113,16 @@ public static class WorldInfo
                 showsPile = true;
                 card.Hint = "";
                 break;
+            case PickBelt pb:
+            {
+                var b = pb.Belt;
+                (card.Glyph, card.Color, card.Title) = (b.From.Kind == Colony.Core.Transport.PortKind.Belt ? "╦" : "═", Tok("wood"), $"Conveyor {b.Id}");
+                card.Sub = BeltShape(sim, b) + (b.Faction != ui.Me ? $" · {sim.Factions[b.Faction].Name}" : "");
+                card.Add("•", Tok(b.Running ? "good" : "warn"), BeltStatus(sim, b), b.Status is Colony.Core.Transport.BeltStatus.Blocked or Colony.Core.Transport.BeltStatus.NoPower ? "Bad" : "Dim");
+                card.Add("→", Tok("dim"), BeltEnds(sim, b), "Dim");
+                card.Hint = "click: details · Shift+click with the conveyor tool: take down";
+                break;
+            }
             case PickNest pn:
             {
                 var n = pn.Nest;
@@ -168,6 +178,37 @@ public static class WorldInfo
 
     /// <summary>Plants, water, waterworks, crops, parts, plans, piles and ants at the cell.</summary>
     /// <summary>A level as the player reads it: counted from level zero (the lowest ground on the map), negative below.</summary>
+    /// <summary>"from the output crate of Carpentry #1 to Stockpile 2".</summary>
+    public static string BeltEnds(ColonySim sim, Colony.Core.Transport.Belt b) =>
+        $"{Colony.Core.Transport.Conveyors.Describe(sim, b.From, true)} {Colony.Core.Transport.Conveyors.Describe(sim, b.To, false)}";
+
+    /// <summary>"24 tiles, 2 lifts, carries everything".</summary>
+    public static string BeltShape(ColonySim sim, Colony.Core.Transport.Belt b)
+    {
+        int lifts = 0;
+        for (int i = 1; i < b.Length; i++)
+            if (Colony.Core.Transport.Conveyors.StepOf(b.Cells[i - 1], b.Cells[i]) == Colony.Core.Transport.Conveyors.Step.Lift) lifts++;
+        string carries = b.Carries is null ? "carries everything" : b.Carries.Count == 1 ? $"carries only {new Colony.Core.Items.ItemType(b.Carries.First()).Name.ToLowerInvariant()}" : $"carries {b.Carries.Count} kinds";
+        return $"{b.Length} tiles{(lifts > 0 ? $", {G.Plural(lifts, "lift")}" : "")}, {carries}";
+    }
+
+    /// <summary>What a belt is doing, in a few words.</summary>
+    public static string BeltStatus(ColonySim sim, Colony.Core.Transport.Belt b)
+    {
+        float power = sim.NeedsEnabled && !sim.DevMode ? sim.Waterworks.SupplyOf(b.Faction) : 1;
+        string slow = power is > 0 and < 0.999f ? $" at {power:P0} power" : "";
+        return b.Status switch
+        {
+            Colony.Core.Transport.BeltStatus.Planned => $"being built: {b.Length - b.Unbuilt} of {b.Length} tiles (a plank a tile, wooden gears for the drive)",
+            Colony.Core.Transport.BeltStatus.Blocked => "stopped: a tile is filled in (dig it out)",
+            Colony.Core.Transport.BeltStatus.NoPower => "stopped: no power (build water wheels: Build, Structures)",
+            Colony.Core.Transport.BeltStatus.NoSource => "stopped: the crate it starts at is gone",
+            Colony.Core.Transport.BeltStatus.Backed => "waiting: nothing at its end wants what it has" + slow,
+            Colony.Core.Transport.BeltStatus.Running => $"running{slow}: {G.Plural(b.Packets, "load")} on it",
+            _ => (b.HasHopper ? "idle: its hopper waits for goods" : b.From.Kind == Colony.Core.Transport.PortKind.Belt ? "idle: nothing for its end yet" : "idle: nothing to carry") + slow,
+        };
+    }
+
     public static string Level(ColonySim sim, int z) => (z - sim.World.ZeroLevel).ToString();
 
     /// <summary>What a tile is called: natural rock by its kind, unexplored rock (fog of war) by nothing more.</summary>

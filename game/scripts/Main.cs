@@ -97,6 +97,9 @@ public partial class Main : Node3D
         var racks = new RackView { Name = "RackView" };
         AddChild(racks);
         racks.Initialize(_sim, _world);
+        var belts = new ConveyorView { Name = "ConveyorView" };
+        AddChild(belts);
+        belts.Initialize(_sim, _world);
 
         var homes = new HomeView { Name = "HomeView" };
         AddChild(homes);
@@ -431,7 +434,7 @@ public partial class Main : Node3D
             {
                 s_devArgsDone = true;
                 // The dev demos below edit the world, which must wait for the water to settle (normal play doesn't).
-                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--house-demo", "--falls-demo", "--mist-demo", "--mine-demo", "--machines-demo", "--ticks" }.Any(a => Arg(a) != null))
+                if (new[] { "--dig-demo", "--stairs-demo", "--haul-demo", "--factory-demo", "--parts-demo", "--showroom", "--water-demo", "--homes-demo", "--ants-demo", "--storage-demo", "--house-demo", "--falls-demo", "--mist-demo", "--mine-demo", "--machines-demo", "--conveyor-demo", "--ticks" }.Any(a => Arg(a) != null))
                     _sim.WaitForWater();
                 if (Arg("--dig-demo") is { } digDemo) DigDemo(digDemo);
                 if (Arg("--stairs-demo") != null) StairsDemo();
@@ -450,6 +453,7 @@ public partial class Main : Node3D
                 if (Arg("--trade-demo") != null) TradeDemo();
                 if (Arg("--mine-demo") is { } mineDemo) MineDemo(mineDemo);
                 if (Arg("--machines-demo") != null) MachinesDemo();
+                if (Arg("--conveyor-demo") != null) ConveyorDemo();
                 if (int.TryParse(Arg("--ticks"), out int ticks))
                     for (int i = 0; i < ticks; i++) _sim.Step();
                 if (_stairsDemoAt is { } s) _rig.Focus(SimSpace.TileCenter(s), 12f, yaw: 200f, pitch: -55f);
@@ -807,6 +811,70 @@ public partial class Main : Node3D
         GD.Print($"[machines-demo] {ex.Name}: {ex.Describe()}, fuel {ex.Fuel}; {wagon.Name}: {wagon.Describe()}, carrying {wagon.Driver?.CarryingCount ?? 0}; stone stockpiled {stored}; orders left {_sim.Designations.Count}");
         _world.ViewLevel = g + 1;
         _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 7, c.Y, g + 1)), float.TryParse(Arg("--machines-zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z0) ? z0 : 14f, yaw: 215f, pitch: -42f);
+    }
+
+    /// <summary>
+    /// --conveyor-demo: a levelled yard by the colony with a carpentry's output crate full of planks, a rock ridge and a
+    /// trench, and over them a belt to a stockpile, a splitter branch to a joinery bench's input crate, and a hopper with
+    /// stone round it belted to the stockpile too; built at once (powered free) and run a while, framed close.
+    /// </summary>
+    private void ConveyorDemo()
+    {
+        // Dev mode: belts build the tick they are planned and run without water wheels.
+        GD.Print("[conveyor-demo] " + _sim.Commands.Execute(new Colony.Core.Commands.SetDevMode(true, false) { Player = Player }));
+        var c = _sim.Colonists[0].Position;
+        int g = c.Z - 1;
+        for (int y = c.Y - 10; y <= c.Y + 10; y++)
+        for (int x = c.X - 4; x <= c.X + 26; x++)
+        {
+            if (!_sim.World.InBounds(x, y, g)) continue;
+            for (int z = g + 1; z <= g + 8 && z < _sim.World.Height; z++) { _sim.Flora.Remove(new TilePos(x, y, z), out _); _sim.World.Set(x, y, z, TileType.Air); }
+            for (int z = g - 3; z <= g; z++) _sim.World.Set(x, y, z, z == g ? TileType.Grass : TileType.Soil);
+        }
+        // A ridge three high and a trench two deep between the yard's halves.
+        for (int y = c.Y - 10; y <= c.Y + 10; y++)
+        {
+            for (int z = g + 1; z <= g + 3; z++) _sim.World.Set(c.X + 9, y, z, TileType.Stone);
+            for (int z = g - 1; z <= g; z++) { _sim.World.Set(c.X + 14, y, z, TileType.Air); _sim.World.Set(c.X + 15, y, z, TileType.Air); }
+        }
+        var q = _sim.Commands;
+        q.Execute(new Colony.Core.Commands.PaintRoom("carpentry", new TilePos(c.X - 3, c.Y - 3, g), new TilePos(c.X + 2, c.Y + 3, g)) { Player = Player });
+        q.Execute(new Colony.Core.Commands.PaintRoom("carpentry", new TilePos(c.X + 19, c.Y - 9, g), new TilePos(c.X + 25, c.Y - 4, g)) { Player = Player });
+        q.Execute(new Colony.Core.Commands.AddStockpile(new TilePos(c.X + 19, c.Y + 2, g), new TilePos(c.X + 24, c.Y + 7, g)) { Player = Player });
+        _sim.Rooms.InstantBuild = true;
+        var outCrate = new TilePos(c.X + 2, c.Y, g + 1);
+        var inCrate = new TilePos(c.X + 19, c.Y - 6, g + 1);
+        _sim.Rooms.Place(Colony.Core.Industry.PartType.OutputCrate, outCrate, false);
+        _sim.Rooms.Place(Colony.Core.Industry.PartType.InputCrate, inCrate, false);
+        if (_sim.Rooms.Place(Colony.Core.Industry.Catalog.Part("carpentry.joinery_bench"), new TilePos(c.X + 22, c.Y - 7, g + 1), false) is { } bench)
+            _sim.Rooms.SetRecipe(bench, Colony.Core.Industry.Catalog.RecipeFor(Colony.Core.Industry.Catalog.Item("wooden_gears"))!);
+        _sim.Rooms.InstantBuild = _sim.DevMode;
+        _sim.Items.Drop(outCrate, Colony.Core.Items.ItemType.Plank, 28); // under three quarters full: haulers leave it to the belt
+        string Lay(TilePos from, TilePos to)
+        {
+            var a = Colony.Core.Transport.Conveyors.PortAt(_sim, Player, from, true, out var whyA);
+            var b = Colony.Core.Transport.Conveyors.PortAt(_sim, Player, to, false, out var whyB);
+            if (a is null || b is null) return $"no port: {whyA ?? whyB}";
+            var route = Colony.Core.Transport.ConveyorRouter.Route(_sim, Colony.Core.Transport.Conveyors.EndCells(_sim, a.Value, true), Colony.Core.Transport.Conveyors.EndCells(_sim, b.Value, false), out int nodes);
+            if (route is null) return $"no route ({nodes} cells searched)";
+            return q.Execute(new Colony.Core.Commands.PlaceConveyor(route[0], Colony.Core.Transport.Conveyors.Encode(route), a.Value.Kind, from, b.Value.Kind, to) { Player = Player }) + $" ({nodes} cells searched)";
+        }
+        GD.Print("[conveyor-demo] main: " + Lay(outCrate, new TilePos(c.X + 19, c.Y + 4, g + 1)));
+        if (_sim.Conveyors.All.Count > 0)
+        {
+            var main = _sim.Conveyors.All[^1];
+            int at = Array.FindIndex(main.Cells, p => p.X >= c.X + 17);
+            if (at > 0) GD.Print("[conveyor-demo] branch: " + Lay(main.Cells[at], inCrate));
+        }
+        var hopper = new TilePos(c.X + 4, c.Y + 8, g + 1);
+        GD.Print("[conveyor-demo] hopper: " + Lay(hopper, new TilePos(c.X + 20, c.Y + 7, g + 1)));
+        for (int i = 0; i < 6; i++) _sim.Items.Drop(new TilePos(c.X + 2 + i, c.Y + 6, g + 1), Colony.Core.Items.ItemType.Stone, 8);
+        int ticks = int.TryParse(Arg("--conveyor-ticks"), out int t) ? t : 400;
+        for (int i = 0; i < ticks; i++) _sim.Step();
+        foreach (var b in _sim.Conveyors.All)
+            GD.Print($"[conveyor-demo] belt {b.Id}: {b.Length} tiles, {b.Status}, {b.Packets} on it, {b.Delivered} delivered; {_sim.Conveyors.Explain(_sim, b)}");
+        _world.ViewLevel = g + 4;
+        _rig.Focus(SimSpace.TileCenter(new TilePos(c.X + 11, c.Y, g + 1)), float.TryParse(Arg("--conveyor-zoom"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float z0) ? z0 : 22f, yaw: 205f, pitch: -48f);
     }
 
     /// <summary>

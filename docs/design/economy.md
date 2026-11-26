@@ -94,7 +94,7 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   room, not raw count, and lesser extras never hurt), Input crate (one input each: `Hauling.InputDemands` fills crates
   towards two batches of every input the machines need, keeping an empty crate per input that has none, so
   a recipe needs at least one crate per input; inputs no machine needs are hauled out; sources are loose piles, stockpiles or other factories' output crates; this is the factory
-  link point, conveyors plug in here later), Output crate (haulers empty it; one per product a room makes, since a crate holds one kind of item: `Rooms.Status` says when one is missing). Machines have a stock limit (`Part.Limit`, command `SetMachineLimit`, Inspect: Keep in store ‹ ›): no new batch while the colony holds that many of the product (`Rooms.AtLimit`; status "stocked up"). Workers loop: reserve batch at
+  link point: conveyor belts end at it, see Conveyors), Output crate (haulers empty it; one per product a room makes, since a crate holds one kind of item: `Rooms.Status` says when one is missing). Machines have a stock limit (`Part.Limit`, command `SetMachineLimit`, Inspect: Keep in store ‹ ›): no new batch while the colony holds that many of the product (`Rooms.AtLimit`; status "stocked up"). Workers loop: reserve batch at
   every input (one pickup per crate) + space at output crate + claim machine (biggest free machine first),
   fetch each, work
   `WorkTicks / Efficiency`, store; a partial batch is allowed when the crate isn't being refilled, so
@@ -184,3 +184,53 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   machine: a small figure in its colour in the cab's roof hatch (on the wagon's footplate), its name on the machine's tag
   ("Excavator 1 · Edric"). Hover card: fuel and who drives it; machines are left out of the work grid. `--machines-demo`
   shows both at work.
+
+- **Building model: components from workshops, machines built on site.** Anything that stays put is built where it
+  stands from bulk materials plus *components* made in workshops (tiered: wooden gears at the joinery bench, no
+  schooling; cogs, springs, clockwork later); anything that moves (vehicles, tools, gear, scaffolds) is made whole in a
+  workshop and carried. Taking a built thing down gives back everything it cost (rearranging must be free, or players
+  stop experimenting); only things destroyed (later: fire, cave-ins on them) should lose part. Blueprints still take one
+  material a cell, so a machine's components go on a cell of their own (a conveyor's first tile); multi-material
+  blueprints are the step that lets water wheels and pumps take gears too.
+- **Conveyors (`Transport.Conveyors`, `Transport.ConveyorRouter`; commands `PlaceConveyor`, `RemoveConveyor`,
+  `FilterConveyor`; Build, Structures, Conveyors):** a belt is drawn in one stroke between two things and its route is
+  planned for you: an A* over open cells by the belt's own steps (flat, a ramp up or down a level that climbs in the
+  lower column so it never cuts the hill, a lift straight up or down), so it follows the ground over hills, climbs
+  cliffs and shafts, bridges trenches and rivers on trestles, goes round rock, trees, stockpiles, farms, parts and other
+  belts (or over them) and slips through walls by a hatch; it prefers to stay low (`PerLevelUp` a tile per level of air
+  under it), run straight (turns cost) and keep out of water, ends level with a crate or stockpile when it can, and is
+  bounded (60k cells searched, `Balance.ConveyorMaxTiles` 1500 tiles); the tool runs the search 700 cells a frame
+  (`ConveyorRouter.Search`), so a long or impossible route never stalls a frame (a route of a few hundred tiles across a
+  512 map takes ~1-4k cells, a few ms). The command carries the route (letters a step,
+  compared by value), the sim checks every tile again (`CanPlace`). **Ends (`Port`):** a start at an output crate (it
+  empties it), a stockpile (a hopper beside it that haulers fill from that stockpile, DF-minecart style) or open ground
+  (a hopper haulers fill with loose goods within `HopperReach` 16); an end at an input crate (it brings only what the
+  workshop still needs towards two batches, as haulers would), a stockpile (stored in its cells up to `UnloadReach` 3
+  tiles from the end, part-filled stacks first, within its filter and cap; from a stockpile only to one at least as good)
+  or the ground (only a workshop's products are dropped there: a hopper's goods would be hauled straight back, so
+  hopper-to-ground belts are refused). **Splitters and merges:** the splitter tool starts a belt at a tile of another
+  (a branch); any belt may end on another's tile (a merge; a merge that would loop back upstream is refused). Goods are
+  addressed when loaded: the source offers its pile to the network's sinks (input crates first, then stockpiles, then
+  the ground, in turn among equals: `Rotor`), the sink's room is reserved like a hauler's (`Incoming`), and every splitter
+  sends a load down its branch if the branch leads to its address (`Terminals`), else on. A merge takes turns with the
+  belt it joins. So belts are demand-driven: haulers see what is on its way and bring only the rest, leave an output
+  crate a belt empties to the belt until it is three quarters full (`Drains`, `ConveyorCrateOverflow`), and never carry
+  goods from a crate to an input crate a belt already serves (`Serves`). A filter per belt (Inspect: Carries ‹ ›) limits
+  what it loads (at a source) and takes (at an end). **Running:** a tile holds one packet of up to
+  `ConveyorPacketKg` (10 kg); every `ConveyorStepTicks` (10) ticks each packet moves a tile, belts processed downstream
+  first so a full belt moves as one. Belts draw `ConveyorDrivePower` + `ConveyorPowerPerTile` a tile from their colony's
+  power (water wheels: power is now one pool per colony, `Waterworks.SupplyOf`) and run at the share covered (none: they
+  stand still, "no power"); sandboxes without needs and dev mode run free. A tile filled in (a wall, a cave-in, stairs
+  carved) stops the belt until cleared (`Blocked`, noticed through `VoxelWorld.ChunkChanged`). Belts don't block movement
+  or water; they take their cells from parts, racks, stockpiles, farms and structures. **Building:** a belt is planned as
+  one blueprint a tile (`StructureKind.Conveyor`): a plank a tile, wooden gears for the first (the drive, or a branch's
+  splitter); each tile's materials go to the first free floor straight below it (its own cell on the ground) and its
+  builder works from there (a raised stretch goes up on trestles; blueprints sharing a site are summed for haulers).
+  Cancel removes unfinished belts, Demolish (and Shift+click with the tool, or Take down in Inspect) any: built tiles
+  leave their planks and gears under them, goods on the belt fall where they are, branches carry on from a hopper and
+  feeders drop at their end. Snapshot 15, `StateHash` (belts and every packet), protocol 18. **Look (`ConveyorView`):**
+  a timber frame with a dark belt and iron rollers, a gearbox at each first tile, a plank bin round a hopper, slatted lift
+  towers, trestle legs to the ground, planned tiles as plates, red when stopped; goods ride as crates in their item's
+  colour, eased tile to tile. Hover card and Inspect say what it joins, what it is doing and why
+  (`Conveyors.Explain`), what rides it and what it carries. `--conveyor-demo` shows a belt over a ridge and a trench,
+  a splitter to a workshop and a hopper.

@@ -32,6 +32,9 @@ public enum StructureKind : byte
     /// <summary>A built stair (<see cref="Blueprint.Material"/> = its <see cref="TileType"/>): from its own floor, or from the
     /// stair below it.</summary>
     Stair,
+    /// <summary>One tile of a conveyor belt (<see cref="Transport.Conveyors"/>; <see cref="Blueprint.Material"/>: a tile or its
+    /// drive). <see cref="Blueprint.Target"/> is the tile, <see cref="Blueprint.Cell"/> the ground it is built from.</summary>
+    Conveyor,
 }
 
 /// <summary>A structure waiting for its material and a builder.</summary>
@@ -97,6 +100,7 @@ public sealed class Constructions
         StructureKind.Rack => new BuildCost(ItemType.Plank, RackPlanksPerLevel * Math.Clamp(material, 1, Stockpiles.MaxRackLevels)), // material = its levels
         StructureKind.Deck => new BuildCost(Catalog.Item(FloorMaterials.All[Math.Clamp(material, 1, FloorMaterials.Count - 1)].Item), DeckCost),
         StructureKind.Stair => new BuildCost(ItemType.Plank, StairPlanks),
+        StructureKind.Conveyor => material == ConveyorDrive ? new BuildCost(Catalog.Item("wooden_gears"), 1) : new BuildCost(ItemType.Plank, 1),
         _ => new BuildCost(Catalog.Item(RoofMaterials.All[Math.Clamp(material, 1, RoofMaterials.Count - 1)].Item), 1),
     };
 
@@ -110,8 +114,25 @@ public sealed class Constructions
         StructureKind.Rack => 90,
         StructureKind.Deck => 50,
         StructureKind.Stair => 90,
+        StructureKind.Conveyor => Balance.ConveyorTileTicks,
         _ => 120,
     });
+
+    /// <summary>Build time of a conveyor tile: its drive (the gears) takes longer than a plank tile.</summary>
+    public static int BuildTicks(Blueprint bp) =>
+        bp.Kind == StructureKind.Conveyor && bp.Material == ConveyorDrive ? (int)(Balance.StructureBuildScale * Balance.ConveyorDriveTicks) : BuildTicks(bp.Kind);
+
+    /// <summary>A conveyor tile's <see cref="Blueprint.Material"/>: a belt tile (a plank) or the belt's first tile, its drive
+    /// or splitter (wooden gears).</summary>
+    public const int ConveyorTile = 0, ConveyorDrive = 1;
+
+    /// <summary>Piles a structure keeps where they lie (a conveyor's hopper holding what its belt carries; set by <see cref="ColonySim"/>).</summary>
+    public Func<TilePos, ItemType, bool>? Keeps { get; set; }
+
+    /// <summary>Plans one tile of a conveyor belt (the belt itself is <see cref="Transport.Conveyors"/>'): built in
+    /// <paramref name="tile"/> from <paramref name="site"/>, where its material goes.</summary>
+    internal Blueprint PlaceConveyor(TilePos tile, TilePos site, int material, int faction) =>
+        AddRemote(new Blueprint { Cell = site, Target = tile, Kind = StructureKind.Conveyor, Material = material, Faction = faction });
 
     /// <summary>Planks a storage rack costs per level it rises.</summary>
     public const int RackPlanksPerLevel = 3;
@@ -135,6 +156,7 @@ public sealed class Constructions
         StructureKind.Rack => "Storage rack",
         StructureKind.Deck => "Upper floor",
         StructureKind.Stair => "Stairs",
+        StructureKind.Conveyor => "Conveyor",
         _ => "Window",
     };
 
@@ -437,7 +459,8 @@ public sealed class Constructions
     {
         bool In(TilePos c) => c.X >= Math.Min(a.X, b.X) && c.X <= Math.Max(a.X, b.X) && c.Y >= Math.Min(a.Y, b.Y) && c.Y <= Math.Max(a.Y, b.Y) &&
             c.Z >= Math.Min(a.Z, b.Z) && c.Z <= Math.Max(a.Z, b.Z) + 1;
-        var hits = _order.Where(bp => (faction == Owners.Any || bp.Faction == faction) && (In(bp.Cell) || In(bp.Target))).ToList();
+        // Conveyor tiles go with their belt (Conveyors.RemoveIn), never one by one.
+        var hits = _order.Where(bp => bp.Kind != StructureKind.Conveyor && (faction == Owners.Any || bp.Faction == faction) && (In(bp.Cell) || In(bp.Target))).ToList();
         foreach (var bp in hits) Remove(bp);
         return hits.Count;
     }

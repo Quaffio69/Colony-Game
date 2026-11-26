@@ -121,6 +121,8 @@ public sealed class Rooms
 
     /// <summary>Cells rooms may not claim (e.g. stockpile zones). Set by <see cref="ColonySim"/>.</summary>
     public Func<TilePos, bool>? IsBlocked { get; set; }
+    /// <summary>Cells no part may stand on (a conveyor belt runs there; set by <see cref="ColonySim"/>).</summary>
+    public Func<TilePos, bool>? IsPartBlocked { get; set; }
 
     public int Version { get; private set; }
     public IReadOnlyList<Room> All => _rooms;
@@ -324,6 +326,7 @@ public sealed class Rooms
             if (room is not null && r != room) return "must fit inside one room";
             room = r;
             if (_cellPart.ContainsKey(c)) return "space is occupied";
+            if (IsPartBlocked?.Invoke(c) == true) return "a conveyor runs here";
         }
         if (!RoomInfo.Allows(room!.Type, type)) return $"doesn't belong in a {RoomInfo.Name(room.Type)}";
         return null;

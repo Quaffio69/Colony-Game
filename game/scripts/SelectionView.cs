@@ -21,6 +21,8 @@ public sealed record PickPile(TilePos Cell) : Pick;
 public sealed record PickSite(Blueprint Blueprint) : Pick;
 public sealed record PickNest(Nest Nest) : Pick;
 public sealed record PickTile(TilePos Tile) : Pick;
+/// <summary>A conveyor belt (by the tile clicked).</summary>
+public sealed record PickBelt(Colony.Core.Transport.Belt Belt, TilePos Cell) : Pick;
 
 /// <summary>
 /// The selection: a click with no tool picks the most interesting thing under the cursor (a colonist, a nest, a
@@ -138,6 +140,9 @@ public partial class SelectionView : Node3D
         // A colonist in the cell (yours first); one beside it only when the cell holds nothing else (they are small targets).
         var c = _sim.Colonists.Where(k => k.Position == cell).OrderBy(k => k.Faction == player ? 0 : 1).FirstOrDefault();
         if (c != null) return new PickColonist(c);
+        // A belt under the mouse (a raised one is picked in mid-air), or on the floor here.
+        if (_tool.HoveredBelt is { } hb && _sim.Conveyors.At(hb) is { } over) return new PickBelt(over.Belt, hb);
+        if (_sim.Conveyors.At(cell) is { } on) return new PickBelt(on.Belt, cell);
         if (_sim.Wildlife.NestNear(cell, 1) is { } nest) return new PickNest(nest);
         if (_sim.Rooms.RoomAt(cell) is { } room) return new PickRoom(room);
         if (_sim.Stockpiles.Contains(cell)) return new PickZone(cell, false);
@@ -185,6 +190,7 @@ public partial class SelectionView : Node3D
         PickSite p => p.Blueprint.Cell,
         PickNest p => p.Nest.Entrance,
         PickTile p => p.Tile,
+        PickBelt p => p.Cell,
         _ => null,
     };
 
@@ -197,6 +203,7 @@ public partial class SelectionView : Node3D
         PickPile pl => _sim.Items.TryGet(pl.Cell, out var pile) && pile.Count > 0,
         PickSite s => !s.Blueprint.Removed,
         PickNest n => _sim.Wildlife.Nests.Contains(n.Nest),
+        PickBelt b => _sim.Conveyors.All.Contains(b.Belt),
         _ => true,
     };
 
@@ -245,6 +252,7 @@ public partial class SelectionView : Node3D
         {
             PickRoom => _sim.Rooms.Version,
             PickZone z => z.Farm ? _sim.Farms.Version : _sim.Stockpiles.Version,
+            PickBelt => _sim.Conveyors.Version,
             _ => 0,
         };
         if (!ReferenceEquals(pick, _drawn) || version != _drawnVersion || level != _drawnLevel)
@@ -254,6 +262,7 @@ public partial class SelectionView : Node3D
             _drawnLevel = level;
             _zone.Clear();
             if (pick is PickRoom r) _zone.AddRange(r.Room.Cells);
+            else if (pick is PickBelt pb) _zone.AddRange(pb.Belt.Cells);
             else if (pick is PickZone z) _zone.AddRange(ZoneCells(z.Cell, z.Farm));
             var visible = _zone.Where(c => c.Z <= level + 1).Take(MaxZone).ToList();
             var mm = _plates.Multimesh;

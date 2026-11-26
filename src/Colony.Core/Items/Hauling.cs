@@ -26,7 +26,7 @@ public enum StorageRole : byte
 /// Chooses haul trips, in priority order:
 /// <list type="number">
 /// <item>Demand: factory input crates with room pull their room's input from loose piles, stockpiles or other
-/// factories' output crates (this is what links factories together; conveyors will plug in here).</item>
+/// factories' output crates (this is what links factories together; conveyor belts too: <see cref="Transport.Conveyors"/>).</item>
 /// <item>Supply: loose piles and output crates go to the nearest stockpile cell with room.</item>
 /// </list>
 /// Linear scans over piles, crates and stockpile cells: fine for thousands of each; a spatial index is the
@@ -40,6 +40,7 @@ public static class Hauling
     public static StorageRole RoleOf(TilePos p, ItemType type, Stockpiles stockpiles, Rooms rooms, Orders.Constructions? sites = null)
     {
         if (sites is not null && sites.IsSite(p, type)) return StorageRole.Construction;
+        if (sites?.Keeps?.Invoke(p, type) == true) return StorageRole.Input; // a conveyor hopper: its belt takes it
         if (sites?.At(p) is not null) return StorageRole.Loose; // wrong material in a structure's cell
         var part = rooms.PartAt(p);
         if (part is { Built: false }) return part.Cost.Material == type ? StorageRole.Construction : StorageRole.Loose;
@@ -115,7 +116,8 @@ public static class Hauling
     }
 
     public static List<HaulPlan> Plans(ItemPiles items, Stockpiles stockpiles, Rooms rooms, Connectivity connectivity,
-        TilePos from, int component, IReadOnlySet<TilePos>? exclude = null, Orders.Constructions? sites = null, int faction = 0)
+        TilePos from, int component, IReadOnlySet<TilePos>? exclude = null, Orders.Constructions? sites = null, int faction = 0,
+        Transport.Conveyors? belts = null, ColonySim? sim = null)
     {
         var plans = new List<HaulPlan>();
         bool Usable(TilePos p) => (exclude is null || !exclude.Contains(p)) && connectivity.ComponentOf(p) == component;
@@ -129,7 +131,8 @@ public static class Hauling
         var blocked = new Nearest<(TilePos Cell, ItemPile Pile)>(Considered);
         void Blocked(TilePos c, ItemType material)
         {
-            if (items.TryGet(c, out var pile) && pile.Type != material && pile.Available > 0 && Usable(c) && Ours(c))
+            // (Another blueprint sharing the cell may be waiting on that very pile: then it isn't in the way.)
+            if (items.TryGet(c, out var pile) && pile.Type != material && pile.Available > 0 && Usable(c) && Ours(c) && sites?.IsSite(c, pile.Type) != true)
                 blocked.Offer(Dist(c, from), (c, pile), c);
         }
         foreach (var room in rooms.All)
@@ -186,16 +189,34 @@ public static class Hauling
                 }
             }
         }
-        // Structure blueprints (walls, wheels, pumps) want their material in their own cell.
+        // Structure blueprints (walls, wheels, pumps, conveyor tiles) want their material at their site; blueprints sharing
+        // a site (the tiles of a conveyor lift, built from the ground under it) are summed, so it is brought in one go.
         if (sites is not null)
+        {
+            var wanted = new Dictionary<(TilePos Cell, ushort Type), int>();
+            var order = new List<(TilePos Cell, ItemType Type)>();
             foreach (var bp in sites.All)
             {
                 if (faction != Owners.Any && bp.Faction != faction) continue;
                 var (material, cost) = bp.Cost;
-                int need = cost;
-                if (items.TryGet(bp.Cell, out var pile)) need = pile.Type == material ? cost - pile.Count - pile.Incoming : 0;
-                int space = Math.Min(items.RoomAt(bp.Cell, material), need);
-                if (space > 0 && Usable(bp.Cell)) demands.Offer(Dist(bp.Cell, from), (bp.Cell, material, space, -1));
+                var key = (bp.Cell, material.Index);
+                if (!wanted.TryGetValue(key, out int sum)) order.Add((bp.Cell, material));
+                wanted[key] = sum + cost;
+            }
+            foreach (var (cell, material) in order)
+            {
+                int need = wanted[(cell, material.Index)];
+                if (items.TryGet(cell, out var pile)) need = pile.Type == material ? need - pile.Count - pile.Incoming : 0;
+                int space = Math.Min(items.RoomAt(cell, material), need);
+                if (space > 0 && Usable(cell)) demands.Offer(Dist(cell, from), (cell, material, space, -1));
+            }
+        }
+        // Conveyor hoppers want what their belts' sinks take: from the stockpile they load from (-2 - its id), or loose goods nearby.
+        if (belts is not null)
+            foreach (var (_, cell, type, space, store) in belts.HopperDemands(faction))
+            {
+                int room = Math.Min(space, items.RoomAt(cell, type));
+                if (room > 0 && Usable(cell)) demands.Offer(Dist(cell, from), (cell, type, room, store >= 0 ? -2 - store : -1_000_000));
             }
         foreach (var (cell, type, space, workshop) in demands.Items)
         {
@@ -203,8 +224,12 @@ public static class Hauling
             foreach (var (p, pile) in items.All)
             {
                 if (pile.Type != type || pile.Available <= 0 || !Usable(p) || !Ours(p)) continue;
-                if (RoleOf(p, pile.Type, stockpiles, rooms, sites) is StorageRole.Input or StorageRole.Construction) continue;
+                var role = RoleOf(p, pile.Type, stockpiles, rooms, sites);
+                if (role is StorageRole.Input or StorageRole.Construction) continue;
+                if (workshop == -1_000_000 && (role != StorageRole.Loose || Math.Max(Math.Abs(p.X - cell.X), Math.Abs(p.Y - cell.Y)) > Transport.Conveyors.HopperReach)) continue; // a hopper on open ground: loose goods round it
+                if (workshop <= -2 && workshop > -1_000_000 && stockpiles.ZoneAt(p)?.Id != -2 - workshop) continue; // a hopper by a stockpile: from that stockpile
                 if (workshop >= 0 && stockpiles.ZoneAt(p) is { } store && !store.Lets(workshop)) continue; // a stockpile closed to this workshop
+                if (role == StorageRole.Output && belts?.Serves(p, cell) == true) continue; // a belt carries it there
                 source.Offer(Dist(p, cell), (p, pile.Available));
             }
             foreach (var (src, available) in source.Items)
@@ -220,6 +245,7 @@ public static class Hauling
         {
             if (pile.Available <= 0 || !Usable(p) || !Ours(p)) continue;
             var role = RoleOf(p, pile.Type, stockpiles, rooms, sites);
+            if (role == StorageRole.Output && sim is not null && belts?.Drains(sim, p, pile) == true) continue; // a belt empties this crate
             if (role is StorageRole.Loose or StorageRole.Output) sources.Offer(Dist(p, from), (p, pile, int.MaxValue));
             else if (role == StorageRole.Stockpile && stockpiles.ZoneAt(p) is { } home && home.Priority > 1 && View().BetterHome(home.Priority, pile.Type))
                 sources.Offer(Dist(p, from), (p, pile, home.Priority));

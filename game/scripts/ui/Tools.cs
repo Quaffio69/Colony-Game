@@ -169,6 +169,12 @@ public static class Tools
             $"{(t.Storeys > 1 ? ", stairs up through the storeys" : "")}, a {RoofName(t.RoofMaterial).ToLowerInvariant()} unless rock is overhead. " +
             "Materials: the last wall, floor and roof picked. Nothing is planned if anything is in the way (shown red)",
             [("Drag", "a box"), ("[ ]", "storeys"), ("Shift", "remove"), ("RMB", "done")]),
+        ToolMode.Conveyor => new("═", Tok("wood"), "Conveyor", "Conveyor",
+            "A belt from an output crate, a stockpile or a hopper on open ground to an input crate, a stockpile, the ground or another belt. Its route is planned for you: round rock, up hills and cliffs, over gaps. Built on site: a plank a tile, wooden gears for its drive. Runs on water-wheel power",
+            [("Click", "start, then end"), ("Shift+click", "take a belt down"), ("RMB", "back")]),
+        ToolMode.Splitter => new("╦", Tok("warn"), "Splitter", "Splitter",
+            "A branch off a belt: click a tile of the belt, then where the branch goes. Each load rides down the branch if what it ends at wants it, else on along the belt",
+            [("Click", "a belt, then the end"), ("Shift+click", "take a belt down"), ("RMB", "back")]),
         ToolMode.TradeDepot => new("$", Tok("accent"), "Trade depot", "Depot", "Where other colonies' traders deliver what you buy; haulers carry it on to your stockpiles", BoxKeys),
         ToolMode.Spawn => new("+", Tok("warn"), $"Spawn: {SpawnName(t)}", "Spawn", "Dev mode: drops it on the floor you click", [("Click", "drop"), ("RMB", "done")]),
         _ => new("?", Tok("dim"), m.ToString(), m.ToString(), "", BoxKeys),
