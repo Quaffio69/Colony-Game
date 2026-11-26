@@ -557,7 +557,7 @@ public partial class InspectorWindow : GlyphWindow
         row.AddChild(G.Text(shown, "Hi", cols: 22, align: HorizontalAlignment.Center));
         row.AddChild(G.Button(" › ", () => Pick(Wrap(Math.Max(-1, at) + 1)), "Carry the next item only (or everything)", "Ghost"));
         Content.AddChild(row);
-        Content.AddChild(G.Para("A belt loads what something at its end wants: input crates first, then stockpiles, then open ground (only a workshop's products are dropped there). A splitter sends each load down the branch whose end wants it.", "Faint"));
+        Content.AddChild(G.Para("Its start picks up from every output crate and stockpile in the 3x3 round it (and its hopper, which haulers fill); its end delivers into every input crate and stockpile in the 3x3 round it, only what they want; a bare end drops a workshop's products. A splitter sends each load down the branch whose end wants it.", "Faint"));
         var buttons = new HBoxContainer();
         buttons.AddChild(G.Button(" Take down ", () => _ui.Tool.Issue(new Colony.Core.Commands.RemoveConveyor(b.Cells[0])), "Take the whole belt down: its planks and gears are left under it, the goods on it fall"));
         Content.AddChild(buttons);
@@ -569,11 +569,15 @@ public partial class InspectorWindow : GlyphWindow
         var sim = _ui.Sim;
         var first = new List<Colony.Core.Items.ItemType>();
         void Note(Colony.Core.Items.ItemType t) { if (!first.Contains(t)) first.Add(t); }
-        if (sim.Items.TryGet(b.From.Kind == Colony.Core.Transport.PortKind.Crate ? b.From.Cell : b.Start, out var src) && src.Count > 0) Note(src.Type);
-        if (b.From.Kind == Colony.Core.Transport.PortKind.Crate && sim.Rooms.PartAt(b.From.Cell) is { } crate)
+        if (sim.Items.TryGet(b.Start, out var src) && src.Count > 0) Note(src.Type);
+        var (outs, _, stores) = Colony.Core.Transport.Conveyors.Reach(sim, b.Faction, b.Start);
+        foreach (var crate in outs)
+        {
+            if (sim.Items.TryGet(crate.Cells[0], out var held) && held.Count > 0) Note(held.Type);
             foreach (var m in crate.Room.PartsWithRole(PartRole.Machine))
                 if (m.Recipe is { Kind: Colony.Core.Items.ItemKind.Good } r) Note(r.Output);
-        if (b.From.Kind == Colony.Core.Transport.PortKind.Stockpile && sim.Stockpiles.ZoneById(b.From.Id) is { } zone)
+        }
+        foreach (var zone in stores)
             foreach (var c in sim.Stockpiles.CellsOf(zone).Take(400))
                 if (sim.Items.TryGet(c, out var p) && p.Count > 0) Note(p.Type);
         for (int i = 0; i < b.Length; i++)

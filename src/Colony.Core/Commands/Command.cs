@@ -669,10 +669,16 @@ public sealed record PlaceConveyor(TilePos Start, string Route, PortKind FromKin
         if (Conveyors.Resolve(sim, FromKind, FromCell) is not { } from) return "Can't place a conveyor: nothing to start from there";
         if (Conveyors.Resolve(sim, ToKind, ToCell) is not { } to) return "Can't place a conveyor: nothing to end at there";
         if (Conveyors.CanPlace(sim, Player, cells, from, to) is { } why) return $"Can't place a conveyor: {why}";
+        string toText = Conveyors.Describe(sim, to, false, Player);
+        if (sim.Conveyors.Extends(from))
+        {
+            var longer = sim.Conveyors.Place(sim, Player, cells, from, to);
+            return $"Extended belt {longer.Id} by {cells.Count} tiles {toText}: {cells.Count} planks and builders";
+        }
+        string fromText = Conveyors.Describe(sim, from, true, Player);
         var belt = sim.Conveyors.Place(sim, Player, cells, from, to);
         string what = from.Kind == PortKind.Belt ? "a branch" : to.Kind == PortKind.Belt ? "a feeder" : "a conveyor";
-        return $"Planned {what} of {belt.Length} tiles, {Conveyors.Describe(sim, from, true)} {Conveyors.Describe(sim, to, false)}: " +
-               $"{belt.Length - 1} planks, 1 wooden gears and builders";
+        return $"Planned {what} of {belt.Length} tiles, {fromText} {toText}: {belt.Length - 1} planks, 1 wooden gears and builders";
     }
 }
 

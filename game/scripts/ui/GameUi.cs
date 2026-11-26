@@ -66,6 +66,7 @@ public partial class GameUi : CanvasLayer
         Ribbon = new OrdersRibbon(this) { Name = "OrdersRibbon" };
         _m.AddChild(Ribbon);
         _m.AddChild(new Notices(this) { Name = "Notices" });
+        _m.AddChild(new BeltBubbles(this) { Name = "BeltBubbles" });
         _m.AddChild(new HoverCard(this) { Name = "HoverCard" });
         if (main != null)
         {

@@ -51,7 +51,9 @@ What is done and what is next, milestone by milestone.
       stockpiles, the ground, other belts), the route planned for you across hills, cliffs (lifts), trenches and rivers
       (trestles) and round whatever is in the way; splitters (a second tool) that send each load where it is wanted;
       merges; demand-driven loading with haulers taking the rest; power per colony from water wheels; built on site from
-      planks and wooden gears (the first component tier, joinery bench). Next: multi-material blueprints (water wheels and
+      planks and wooden gears (the first component tier, joinery bench). Second pass: each end works with the crates and
+      stockpiles in the 3x3 round it (marked, with a bubble of what it picks up), dead ends extend, smooth 45° ramps that
+      can turn as they climb, belts picked where they are. Next: multi-material blueprints (water wheels and
       pumps taking gears), faster bronze belts on cogs, axles and power networks, carts on rails.
 - [ ] Next for industry: rooms themselves costing
       (walls/floors); standing orders ("keep 50 planks") instead of fixed recipes;

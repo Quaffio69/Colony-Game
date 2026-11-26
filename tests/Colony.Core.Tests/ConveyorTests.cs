@@ -120,9 +120,11 @@ public class ConveyorTests
         Assert.Contains("gap", Conveyors.CanPlace(sim, 0, straight.Where(c => c.X != 15).ToList(), from, to));
         Assert.Contains("start", Conveyors.CanPlace(sim, 0, straight.Skip(2).ToList(), from, to));
         Assert.NotNull(Conveyors.CanPlace(sim, 1, straight, from, to)); // another colony can't use these crates
-        // Starting at an input crate is refused when clicked.
-        Assert.Null(Conveyors.PortAt(sim, 0, inCrate.Cells[0], true, out var why));
-        Assert.Contains("output crate", why);
+        // A free cell is exactly where the belt starts; a crate or stockpile clicked puts it beside that.
+        Assert.Equal(new Port(PortKind.Ground, F(20, 20)), Conveyors.PortAt(sim, 0, F(20, 20), true, out _));
+        Assert.Equal(PortKind.Crate, Conveyors.PortAt(sim, 0, inCrate.Cells[0], true, out _)?.Kind);
+        Assert.Null(Conveyors.PortAt(sim, 1, inCrate.Cells[0], true, out var why));
+        Assert.Contains("another colony", why);
     }
 
     // ---- Moving goods -----------------------------------------------------------------------------------------
@@ -161,6 +163,81 @@ public class ConveyorTests
         Assert.Equal(4, belt.Delivered); // all of it by belt
         Assert.Equal(16, CountAt(sim, outCrate.Cells[0], ItemType.Plank)); // and nobody carried the rest off
     }
+
+    [Fact]
+    public void AHopper_PullsFromEveryCrateAndStockpileRoundIt()
+    {
+        var sim = Flat();
+        sim.Rooms.Paint(RoomType.Carpentry, G(4, 4), G(8, 8));
+        var a = sim.Rooms.Place(PartType.OutputCrate, F(8, 5), false)!;
+        var b = sim.Rooms.Place(PartType.OutputCrate, F(8, 7), false)!;
+        sim.Items.Drop(a.Cells[0], ItemType.Plank, 10);
+        sim.Items.Drop(b.Cells[0], ItemType.Log, 6);
+        sim.Stockpiles.AddFloorBox(G(10, 5), G(11, 7)); // a stockpile on the other side of the start
+        var near = sim.Stockpiles.ZoneAt(F(10, 6))!;
+        sim.Items.Drop(F(10, 6), ItemType.Stone, 5);
+        sim.Stockpiles.AddFloorBox(G(36, 4), G(40, 8));
+        var store = sim.Stockpiles.ZoneAt(F(36, 4))!;
+        var (outs, _, stores) = Conveyors.Reach(sim, 0, F(9, 6));
+        Assert.Equal(2, outs.Count);
+        Assert.Equal([near], stores);
+        var belt = Lay(sim, F(9, 6), F(35, 6)); // starts between them, ends beside the far stockpile
+        Assert.Equal(F(9, 6), belt.Start);
+        Assert.Equal(F(35, 6), belt.End);
+        BuildAll(sim);
+        Run(sim, 3000);
+        int Stored(ItemType t) => store.Cells.Sum(c => CountAt(sim, c, t));
+        Assert.Equal(10, Stored(ItemType.Plank));
+        Assert.Equal(6, Stored(ItemType.Log));
+        Assert.Equal(5, Stored(ItemType.Stone)); // the near stockpile's goods go on to the far one (as good a priority)
+    }
+
+    [Fact]
+    public void AnEnd_FeedsEveryInputCrateRoundIt()
+    {
+        var sim = Flat();
+        sim.Rooms.Paint(RoomType.Carpentry, G(4, 4), G(8, 8));
+        var src = sim.Rooms.Place(PartType.OutputCrate, F(8, 6), false)!;
+        sim.Items.Drop(src.Cells[0], ItemType.Plank, 30);
+        // Two workshops side by side, an input crate each, both a step from the belt's end.
+        sim.Rooms.Paint(RoomType.Carpentry, G(30, 2), G(36, 5));
+        sim.Rooms.Paint(RoomType.Carpentry, G(30, 7), G(36, 10));
+        var inA = sim.Rooms.Place(PartType.InputCrate, F(30, 5), false)!;
+        var inB = sim.Rooms.Place(PartType.InputCrate, F(30, 7), false)!;
+        foreach (var (at, y) in new[] { (F(33, 3), 0), (F(33, 9), 0) })
+        {
+            var bench = sim.Rooms.Place(Catalog.Part("carpentry.joinery_bench"), at, false)!;
+            Assert.True(sim.Rooms.SetRecipe(bench, Catalog.RecipeFor(Catalog.Item("wooden_gears"))!));
+        }
+        var belt = Lay(sim, F(9, 6), F(29, 6));
+        BuildAll(sim);
+        Run(sim, 2000);
+        Assert.Equal(4, CountAt(sim, inA.Cells[0], ItemType.Plank));
+        Assert.Equal(4, CountAt(sim, inB.Cells[0], ItemType.Plank));
+        Assert.Equal(22, CountAt(sim, src.Cells[0], ItemType.Plank)); // no more than they need, and nothing dumped
+        Assert.Equal(8, belt.Delivered);
+    }
+
+    [Fact]
+    public void ADeadEnd_IsExtended_FromItsLastTile()
+    {
+        var sim = Flat();
+        var (outCrate, inCrate) = TwoShops(sim);
+        var stub = Lay(sim, outCrate.Cells[0], F(18, 12)); // a dump in the middle of nowhere
+        int length = stub.Length;
+        Assert.True(sim.Conveyors.Extends(new Port(PortKind.Belt, stub.End, stub.Id, stub.Length - 1)));
+        var a = Conveyors.PortAt(sim, 0, stub.End, true, out _)!.Value;
+        var b = Conveyors.PortAt(sim, 0, inCrate.Cells[0], false, out _)!.Value;
+        var route = ConveyorRouter.Route(sim, Conveyors.EndCells(sim, a, true), Conveyors.EndCells(sim, b, false), out _)!;
+        Assert.StartsWith("Extended belt", sim.Commands.Execute(new PlaceConveyor(route[0], Conveyors.Encode(route), a.Kind, stub.End, b.Kind, inCrate.Cells[0])));
+        Assert.Single(sim.Conveyors.All);
+        Assert.Equal(length + route.Count, stub.Length);
+        Assert.Equal(1, sim.Constructions.All.Count(bp => bp.Material == Constructions.ConveyorDrive)); // one drive, still
+        BuildAll(sim);
+        Run(sim, 2000);
+        Assert.Equal(4, CountAt(sim, inCrate.Cells[0], ItemType.Plank));
+        Assert.Equal(26, CountAt(sim, outCrate.Cells[0], ItemType.Plank)); // it is no dump any more
+    }
     [Fact]
     public void ASplitter_SendsEachPacketWhereItIsWanted()
     {
@@ -194,7 +271,7 @@ public class ConveyorTests
         sim.Stockpiles.AddFloorBox(G(36, 4), G(40, 8));
         var store = sim.Stockpiles.ZoneAt(F(36, 4))!;
         var trunk = Lay(sim, planks.Cells[0], F(36, 5));
-        Assert.Equal(PortKind.Stockpile, trunk.To.Kind);
+        Assert.Equal(PortKind.Ground, trunk.To.Kind); // an end: it stores into the stockpile beside it
         int k = Array.FindIndex(trunk.Cells, c => c.X >= 20);
         var feeder = Lay(sim, logs.Cells[0], trunk.Cells[k]);
         Assert.Equal(PortKind.Belt, feeder.To.Kind);
@@ -220,7 +297,7 @@ public class ConveyorTests
         Assert.Equal(source.Priority, sink.Priority); // equal priority: haulers alone would leave the planks be
         for (int x = 4; x <= 6; x++) sim.Items.Drop(F(x, 4), ItemType.Plank, 40);
         var belt = Lay(sim, F(8, 6), F(36, 6));
-        Assert.Equal(PortKind.Stockpile, belt.From.Kind);
+        Assert.Equal(PortKind.Ground, belt.From.Kind); // a hopper beside the stockpile
         Assert.True(sim.Conveyors.IsHopper(belt.Start));
         BuildAll(sim);
         sim.AddColonist("Hauler", F(10, 10));

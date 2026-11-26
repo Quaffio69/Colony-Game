@@ -868,6 +868,14 @@ public partial class Main : Node3D
         }
         var hopper = new TilePos(c.X + 4, c.Y + 8, g + 1);
         GD.Print("[conveyor-demo] hopper: " + Lay(hopper, new TilePos(c.X + 20, c.Y + 7, g + 1)));
+        // A stepped hill, and a belt that turns as it climbs it: a ramp leaving at a right angle to the way it came in.
+        for (int x = c.X + 4; x <= c.X + 6; x++)
+        {
+            _sim.World.Set(x, c.Y - 6, g + 1, TileType.Stone);
+            for (int y = c.Y - 9; y <= c.Y - 7; y++) { _sim.World.Set(x, y, g + 1, TileType.Stone); _sim.World.Set(x, y, g + 2, TileType.Stone); }
+        }
+        var climb = new System.Collections.Generic.List<TilePos> { new(c.X + 3, c.Y - 5, g + 1), new(c.X + 4, c.Y - 5, g + 1), new(c.X + 4, c.Y - 6, g + 2), new(c.X + 4, c.Y - 7, g + 3), new(c.X + 4, c.Y - 8, g + 3), new(c.X + 5, c.Y - 8, g + 3) };
+        GD.Print("[conveyor-demo] climb: " + q.Execute(new Colony.Core.Commands.PlaceConveyor(climb[0], Colony.Core.Transport.Conveyors.Encode(climb), Colony.Core.Transport.PortKind.Ground, climb[0], Colony.Core.Transport.PortKind.Ground, climb[^1]) { Player = Player }));
         for (int i = 0; i < 6; i++) _sim.Items.Drop(new TilePos(c.X + 2 + i, c.Y + 6, g + 1), Colony.Core.Items.ItemType.Stone, 8);
         int ticks = int.TryParse(Arg("--conveyor-ticks"), out int t) ? t : 400;
         for (int i = 0; i < ticks; i++) _sim.Step();

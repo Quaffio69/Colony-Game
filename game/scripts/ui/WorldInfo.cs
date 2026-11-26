@@ -180,7 +180,7 @@ public static class WorldInfo
     /// <summary>A level as the player reads it: counted from level zero (the lowest ground on the map), negative below.</summary>
     /// <summary>"from the output crate of Carpentry #1 to Stockpile 2".</summary>
     public static string BeltEnds(ColonySim sim, Colony.Core.Transport.Belt b) =>
-        $"{Colony.Core.Transport.Conveyors.Describe(sim, b.From, true)} {Colony.Core.Transport.Conveyors.Describe(sim, b.To, false)}";
+        $"{Colony.Core.Transport.Conveyors.Describe(sim, b.From, true, b.Faction)} {Colony.Core.Transport.Conveyors.Describe(sim, b.To, false, b.Faction)}";
 
     /// <summary>"24 tiles, 2 lifts, carries everything".</summary>
     public static string BeltShape(ColonySim sim, Colony.Core.Transport.Belt b)

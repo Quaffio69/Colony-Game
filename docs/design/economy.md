@@ -202,13 +202,7 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   bounded (60k cells searched, `Balance.ConveyorMaxTiles` 1500 tiles); the tool runs the search 700 cells a frame
   (`ConveyorRouter.Search`), so a long or impossible route never stalls a frame (a route of a few hundred tiles across a
   512 map takes ~1-4k cells, a few ms). The command carries the route (letters a step,
-  compared by value), the sim checks every tile again (`CanPlace`). **Ends (`Port`):** a start at an output crate (it
-  empties it), a stockpile (a hopper beside it that haulers fill from that stockpile, DF-minecart style) or open ground
-  (a hopper haulers fill with loose goods within `HopperReach` 16); an end at an input crate (it brings only what the
-  workshop still needs towards two batches, as haulers would), a stockpile (stored in its cells up to `UnloadReach` 3
-  tiles from the end, part-filled stacks first, within its filter and cap; from a stockpile only to one at least as good)
-  or the ground (only a workshop's products are dropped there: a hopper's goods would be hauled straight back, so
-  hopper-to-ground belts are refused). **Splitters and merges:** the splitter tool starts a belt at a tile of another
+  compared by value), the sim checks every tile again (`CanPlace`). The tools mark each end's 3x3, the crates and whole stockpiles it works with, and a bubble over it (`BeltBubbles`) naming them with the most plentiful items as chips and +N for the rest; belts are picked with the mouse only where the belt is (the bottom of its cell, or a lift's tower). **Ends:** a belt starts and ends exactly on the cells clicked (click a crate or stockpile itself and it goes on the nearest free cell beside it), and each end works with the 3x3 round it on its level (`Conveyors.Around`, `Reach`). Its start picks up from every output crate and stockpile cell there, in turn, and from its own hopper, which haulers fill: from the rest of the stockpile beside it (`Link`, the lowest id), or, with no stockpile or crate beside it, loose goods within `HopperReach` 16. Its end delivers into every input crate there (only what the workshop still needs towards two batches, as haulers would) and every stockpile there (stored in its cells up to `UnloadReach` 3 tiles from the end, part-filled stacks first, within its filter and cap; never the stockpile the goods came from, and from a stockpile only into one at least as good); an end with no crate or stockpile round it is a dump for a workshop's products (anything else would be hauled straight back). **Extending:** starting a belt on the last tile of a belt that ends on the ground lengthens that belt (`Extends`; planks only, no second drive; it stands still until the new tiles are built), so a dead end can always go on. **Splitters and merges:** the splitter tool starts a belt at a tile of another
   (a branch); any belt may end on another's tile (a merge; a merge that would loop back upstream is refused). Goods are
   addressed when loaded: the source offers its pile to the network's sinks (input crates first, then stockpiles, then
   the ground, in turn among equals: `Rotor`), the sink's room is reserved like a hauler's (`Incoming`), and every splitter
@@ -228,8 +222,8 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   builder works from there (a raised stretch goes up on trestles; blueprints sharing a site are summed for haulers).
   Cancel removes unfinished belts, Demolish (and Shift+click with the tool, or Take down in Inspect) any: built tiles
   leave their planks and gears under them, goods on the belt fall where they are, branches carry on from a hopper and
-  feeders drop at their end. Snapshot 15, `StateHash` (belts and every packet), protocol 18. **Look (`ConveyorView`):**
-  a timber frame with a dark belt and iron rollers, a gearbox at each first tile, a plank bin round a hopper, slatted lift
+  feeders drop at their end. Snapshot 16 (15 had ends naming a crate or stockpile: converted on load; goods record whether they reserved room, `Packet.Reserved`), `StateHash` (belts and every packet), protocol 19. **Look (`ConveyorView`):**
+  a timber frame with a dark belt and iron rollers laid tile by tile (`ConveyorView.Tile`: in at an edge, through the centre, out at an edge, so it turns at tile centres; a ramp climbs across the lower tile of its pair at 45 degrees, edge to edge, so runs of ramps make one smooth slope and a ramp may turn as it climbs), a gearbox at each first tile, a plank bin round a hopper, slatted lift
   towers, trestle legs to the ground, planned tiles as plates, red when stopped; goods ride as crates in their item's
   colour, eased tile to tile. Hover card and Inspect say what it joins, what it is doing and why
   (`Conveyors.Explain`), what rides it and what it carries. `--conveyor-demo` shows a belt over a ridge and a trench,

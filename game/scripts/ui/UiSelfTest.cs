@@ -417,6 +417,12 @@ public partial class UiSelfTest : Node
         Move(beltAt, beltTo, false);
         await Frames(4);
         string note = tool.BeltNote?.Text ?? "";
+        Check($"the start and the end each show what they work with ({tool.BeltBubbles.Count} bubbles)", tool.BeltBubbles.Count >= 1);
+        if (OS.GetCmdlineUserArgs().FirstOrDefault(a => a.StartsWith("--selftest-shot=")) is { } shot)
+        {
+            await Frames(3);
+            GetViewport().GetTexture().GetImage().SavePng(shot["--selftest-shot=".Length..]); // what the tool shows mid-placement
+        }
         Check($"the conveyor tool plans a route as the mouse moves ({note})", tool.BeltNote is { Good: true });
         Mouse(beltTo, true);
         Mouse(beltTo, false);

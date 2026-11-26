@@ -31,7 +31,7 @@ public readonly record struct Port(PortKind Kind, TilePos Cell, int Id = -1, int
 /// <see cref="Dest"/> whose end delivers them, into <see cref="DestCell"/> (room there was reserved when they were loaded,
 /// like a hauler reserves it). <see cref="Serial"/> tells packets apart for the view.
 /// </summary>
-public record struct Packet(ItemType Type, int Count, int Dest, TilePos DestCell, int Serial)
+public record struct Packet(ItemType Type, int Count, int Dest, TilePos DestCell, int Serial, bool Reserved = false)
 {
     public readonly bool Empty => Count == 0;
 }
@@ -48,9 +48,9 @@ public sealed class Belt
 {
     public required int Id { get; init; }
     public required int Faction { get; init; }
-    public required TilePos[] Cells { get; init; }
+    public TilePos[] Cells { get; internal set; } = [];
     /// <summary>Where each tile's materials are brought and its builder works from (the ground under it).</summary>
-    public required TilePos[] Sites { get; init; }
+    public TilePos[] Sites { get; internal set; } = [];
     public Port From { get; internal set; }
     public Port To { get; internal set; }
     internal bool[] BuiltCells = [];
@@ -69,7 +69,9 @@ public sealed class Belt
     /// <summary>Its end delivers (to a crate, stockpile or the ground) rather than feeding another belt.</summary>
     public bool IsTerminal => To.Kind != PortKind.Belt;
     /// <summary>It starts at a hopper (open ground, or by a stockpile) that haulers fill.</summary>
-    public bool HasHopper => From.Kind is PortKind.Ground or PortKind.Stockpile;
+    public bool HasHopper => From.Kind != PortKind.Belt;
+    /// <summary>The stockpile beside its start that haulers fill its hopper from (-1: none; then loose goods nearby).</summary>
+    public int Link { get; internal set; } = -1;
     public TilePos Start => Cells[0];
     public TilePos End => Cells[^1];
     public Packet PacketAt(int i) => Slots[i];
@@ -218,11 +220,12 @@ public sealed class Conveyors
             if (on.Belt.Faction != faction) { why = "another colony's belt"; return null; }
             return new Port(PortKind.Belt, cell, on.Belt.Id, on.Index);
         }
+        // A free cell: the belt starts (or ends) right there, working with what is in the 3x3 round it.
+        if (Free(sim, cell) is not { } bad) return new Port(PortKind.Ground, cell);
+        // Clicked on a crate or a stockpile itself: the belt starts or ends beside it (the nearest free cell round it).
         if (sim.Rooms.PartAt(cell) is { } part && part.Role is PartRole.Input or PartRole.Output)
         {
             if (part.Room.Faction != faction) { why = "another colony's workshop"; return null; }
-            if (source && part.Role != PartRole.Output) { why = "a belt starts at an output crate (it fills input crates)"; return null; }
-            if (!source && part.Role != PartRole.Input) { why = "a belt ends at an input crate (it empties output crates)"; return null; }
             return new Port(PortKind.Crate, cell);
         }
         if (sim.Stockpiles.Contains(cell) && !sim.Stockpiles.IsDepot(cell) && sim.Stockpiles.ZoneAt(cell) is { } zone)
@@ -230,10 +233,13 @@ public sealed class Conveyors
             if (zone.Faction != faction) { why = "another colony's stockpile"; return null; }
             return new Port(PortKind.Stockpile, cell, zone.Id);
         }
-        if (Free(sim, cell) is { } bad) { why = bad; return null; }
-        if (source && !Movement.IsStandable(sim.World, cell)) { why = "a hopper needs ground to stand on"; return null; }
-        return new Port(PortKind.Ground, cell);
+        why = bad;
+        return null;
     }
+
+    /// <summary>A belt starting at its last tile extends it (a dead end goes on) rather than branching off it.</summary>
+    public bool Extends(Port from) =>
+        from.Kind == PortKind.Belt && ById(from.Id) is { IsTerminal: true } b && from.Index == b.Length - 1;
 
     /// <summary>
     /// Cells a belt may begin in (<paramref name="source"/>) or finish in to join <paramref name="port"/>: beside the crate
@@ -243,11 +249,9 @@ public sealed class Conveyors
     public static List<TilePos> EndCells(ColonySim sim, Port port, bool source)
     {
         var cells = new List<TilePos>();
-        bool hopper = source && port.Kind is PortKind.Ground or PortKind.Stockpile;
         void Try(TilePos c)
         {
             if (cells.Contains(c) || Free(sim, c) is not null) return;
-            if (hopper && !Movement.IsStandable(sim.World, c)) return;
             if (!Joins(sim, port, c, source)) return;
             cells.Add(c);
         }
@@ -312,13 +316,18 @@ public sealed class Conveyors
     };
 
     /// <summary>"the output crate of Carpentry #2", "Stockpile 1", "belt 4", "the ground".</summary>
-    public static string Describe(ColonySim sim, Port p, bool source) => p.Kind switch
+    public static string Describe(ColonySim sim, Port p, bool source, int faction = 0)
     {
-        PortKind.Crate => sim.Rooms.PartAt(p.Cell) is { } part ? $"{(source ? "from" : "into")} the {part.Name.ToLowerInvariant()} of {part.Room.Name}" : "a crate",
-        PortKind.Stockpile => $"{(source ? "from" : "into")} {sim.Stockpiles.ZoneById(p.Id)?.Name ?? "a stockpile"}",
-        PortKind.Belt => source ? $"split off belt {p.Id}" : $"onto belt {p.Id}",
-        _ => source ? "from a hopper" : "onto the ground",
-    };
+        if (p.Kind == PortKind.Belt) return source ? (sim.Conveyors.Extends(p) ? $"on from the end of belt {p.Id}" : $"split off belt {p.Id}") : $"onto belt {p.Id}";
+        if (p.Kind == PortKind.Crate && sim.Rooms.PartAt(p.Cell) is { } part) faction = part.Room.Faction;
+        if (p.Kind == PortKind.Stockpile && sim.Stockpiles.ZoneById(p.Id) is { } z) faction = z.Faction;
+        // What the 3x3 round the cell holds (for a crate or stockpile clicked, round that).
+        var (outs, ins, stores) = Reach(sim, faction, p.Cell);
+        var names = (source ? outs : ins).Select(c => $"the {c.Name.ToLowerInvariant()} of {c.Room.Name}").Concat(stores.Select(s => s.Name)).ToList();
+        if (names.Count == 0) return source ? "from a hopper" : "onto the ground";
+        string list = names.Count <= 2 ? string.Join(" and ", names) : $"{names[0]} and {names.Count - 1} more";
+        return (source ? "from " : "into ") + list;
+    }
 
     // Route letters: a step across in direction 0..3 (+x, +y, -x, -y) a level down, level or up, or a lift up or down.
     private const string Down = "abcd", Level = "ENWS", Up = "fghi";
@@ -383,9 +392,6 @@ public sealed class Conveyors
         if (Check(to, false) is { } b) return b;
         if (!Joins(sim, from, cells[0], true)) return "its start doesn't reach what it starts from";
         if (!Joins(sim, to, cells[^1], false)) return "its end doesn't reach what it ends at";
-        if (from.Kind is PortKind.Ground or PortKind.Stockpile && !Movement.IsStandable(sim.World, cells[0])) return "a hopper needs ground to stand on";
-        if (from.Kind is PortKind.Ground or PortKind.Stockpile && to.Kind == PortKind.Ground)
-            return "goods dropped on open ground would be hauled straight back: end it at a crate, a stockpile or another belt";
         if (from.Kind == PortKind.Belt && to.Kind == PortKind.Belt && sim.Conveyors.Reaches(to.Id, to.Index, from.Id, from.Index))
             return "that would loop back into itself";
         return null;
@@ -398,13 +404,12 @@ public sealed class Conveyors
                     var other = sim.Conveyors.ById(p.Id);
                     if (other is null || p.Index < 0 || p.Index >= other.Length || other.Cells[p.Index] != p.Cell) return "that belt is gone";
                     if (other.Faction != faction) return "another colony's belt";
-                    if (source && sim.Conveyors.BranchAt(other, p.Index) is not null) return "there is a splitter there already";
+                    if (source && !sim.Conveyors.Extends(p) && sim.Conveyors.BranchAt(other, p.Index) is not null) return "there is a splitter there already";
                     if (!source && sim.Conveyors.MergeAt(other, p.Index) is not null) return "another belt joins there already";
                     return null;
                 case PortKind.Crate:
                     var part = sim.Rooms.PartAt(p.Cell);
                     if (part is null || part.Room.Faction != faction) return "no crate there";
-                    if (part.Role != (source ? PartRole.Output : PartRole.Input)) return source ? "a belt starts at an output crate" : "a belt ends at an input crate";
                     return null;
                 case PortKind.Stockpile:
                     var zone = sim.Stockpiles.ZoneById(p.Id);
@@ -420,11 +425,13 @@ public sealed class Conveyors
     internal Belt Place(ColonySim sim, int faction, IReadOnlyList<TilePos> cells, Port from, Port to)
     {
         var path = cells.ToArray();
-        if (to.Kind == PortKind.Ground) to = to with { Cell = path[^1] };
-        if (@from.Kind == PortKind.Ground) @from = @from with { Cell = path[0] };
+        // A crate or stockpile clicked: the belt's end is the cell beside it (it works with the 3x3 round that).
+        if (to.Kind != PortKind.Belt) to = new Port(PortKind.Ground, path[^1]);
+        if (@from.Kind != PortKind.Belt) @from = new Port(PortKind.Ground, path[0]);
+        if (Extends(@from) && ById(@from.Id) is { } extended) return Extend(sim, extended, path, to);
         var sites = new TilePos[path.Length];
         var first = SiteFor(sim, path[0], path[0], null);
-        sites[0] = HasHopperKind(from) ? path[0] : first ?? path[0];
+        sites[0] = HasHopperKind(from) && Movement.IsStandable(sim.World, path[0]) ? path[0] : first ?? path[0];
         TilePos? last = null;
         for (int i = 1; i < path.Length; i++)
         {
@@ -448,7 +455,35 @@ public sealed class Conveyors
         return belt;
     }
 
-    private static bool HasHopperKind(Port p) => p.Kind is PortKind.Ground or PortKind.Stockpile;
+    private static bool HasHopperKind(Port p) => p.Kind != PortKind.Belt;
+
+    /// <summary>
+    /// Lengthens a belt from its dead end along <paramref name="path"/> to <paramref name="to"/> (plank tiles only: it has its
+    /// drive). Goods already on it stay addressed where they were; it stands still until the new tiles are built.
+    /// </summary>
+    private Belt Extend(ColonySim sim, Belt a, TilePos[] path, Port to)
+    {
+        int old = a.Length;
+        var sites = new TilePos[path.Length];
+        TilePos? last = null;
+        for (int i = 0; i < path.Length; i++)
+        {
+            var s = SiteFor(sim, path[i], a.Start, a.Sites[0]);
+            if (s is { } found) last = found;
+            sites[i] = s ?? last ?? a.Sites[old - 1];
+        }
+        a.Cells = a.Cells.Concat(path).ToArray();
+        a.Sites = a.Sites.Concat(sites).ToArray();
+        Array.Resize(ref a.BuiltCells, a.Cells.Length);
+        Array.Resize(ref a.Slots, a.Cells.Length);
+        a.Unbuilt += path.Length;
+        a.To = to;
+        Index(a);
+        Validate(a);
+        for (int i = 0; i < path.Length; i++) sim.Constructions.PlaceConveyor(path[i], sites[i], Constructions.ConveyorTile, a.Faction);
+        Version++;
+        return a;
+    }
 
     /// <summary>
     /// Where a belt tile's materials go and its builder stands: the first floor straight below it (its own cell on the
@@ -540,7 +575,7 @@ public sealed class Conveyors
 
     private void Release(ColonySim sim, Packet p)
     {
-        if (ById(p.Dest) is { } d && d.To.Kind is PortKind.Crate or PortKind.Stockpile) sim.Items.ReleaseIncoming(p.DestCell, p.Count);
+        if (p.Reserved) sim.Items.ReleaseIncoming(p.DestCell, p.Count);
     }
 
     /// <summary>Removes the colony's belts with a tile in the box (only those not finished, if <paramref name="onlyPlanned"/>). Returns how many.</summary>
@@ -759,135 +794,211 @@ public sealed class Conveyors
         }
     }
 
-    /// <summary>Goods off the end: into the crate or stockpile cell reserved for them, or onto the ground.</summary>
+    /// <summary>Goods off the end: into the crate or stockpile cell whose room they reserved, or onto the ground.</summary>
     private void Deliver(ColonySim sim, Belt b, Packet p)
     {
         b.Delivered += p.Count;
-        if (p.Dest == b.Id && b.To.Kind is PortKind.Crate or PortKind.Stockpile)
+        if (p.Reserved)
         {
-            int added = sim.Items.Deliver(p.DestCell, p.Type, p.Count);
-            if (added < p.Count) sim.Items.Drop(b.End, p.Type, p.Count - added);
-            return;
+            if (p.Dest == b.Id)
+            {
+                int added = sim.Items.Deliver(p.DestCell, p.Type, p.Count);
+                if (added < p.Count) sim.Items.Drop(b.End, p.Type, p.Count - added);
+                return;
+            }
+            Release(sim, p); // the network changed under it: it ends up here instead
         }
-        if (p.Dest != b.Id) Release(sim, p); // the network changed under it: it ends up here instead
         sim.Items.Drop(b.End, p.Type, p.Count);
     }
 
     /// <summary>Units of an item one packet carries (<see cref="Balance.ConveyorPacketKg"/> over its weight).</summary>
     public static int PacketUnits(ItemType t) => Math.Clamp((int)(Balance.ConveyorPacketKg / t.Def.Weight + 0.001f), 1, ItemInfo.StackLimit(t));
 
-    /// <summary>The pile the belt loads from: the output crate it starts at, or its hopper.</summary>
-    private static TilePos? SourceCell(ColonySim sim, Belt b)
+    /// <summary>
+    /// A pile a belt's start loads from: its own hopper, an output crate in the 3x3 round it (same level), or a stockpile
+    /// cell there. <see cref="Zone"/> is the stockpile it comes from (for a hopper: the stockpile its haulers load it from),
+    /// -1 if none.
+    /// </summary>
+    private readonly record struct Source(TilePos Cell, int Zone, int Priority, bool Crate);
+
+    /// <summary>The 3x3 round a cell on its level (itself first), in a fixed order.</summary>
+    public static IEnumerable<TilePos> Around(TilePos c)
     {
-        if (b.From.Kind == PortKind.Crate)
-            return sim.Rooms.PartAt(b.From.Cell) is { Role: PartRole.Output, Built: true } crate && crate.Room.Faction == b.Faction ? b.From.Cell : null;
-        return b.HasHopper ? b.Start : null;
+        yield return c;
+        for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++)
+            if ((dx | dy) != 0) yield return c.Offset(dx, dy, 0);
     }
 
-    /// <summary>Puts a packet on the belt's first tile: what its source holds that one of its sinks wants, addressed there.</summary>
+    /// <summary>What a belt starting (or ending) at <paramref name="cell"/> works with: the colony's output and input crates
+    /// and the stockpiles (with a cell) in the 3x3 round it.</summary>
+    public static (List<Part> Outputs, List<Part> Inputs, List<Stockpile> Stores) Reach(ColonySim sim, int faction, TilePos cell)
+    {
+        var outs = new List<Part>();
+        var ins = new List<Part>();
+        var stores = new List<Stockpile>();
+        foreach (var c in Around(cell))
+        {
+            if (sim.Rooms.PartAt(c) is { Built: true } part && part.Room.Faction == faction)
+            {
+                if (part.Role == PartRole.Output && !outs.Contains(part)) outs.Add(part);
+                if (part.Role == PartRole.Input && !ins.Contains(part)) ins.Add(part);
+            }
+            if (!sim.Stockpiles.IsDepot(c) && sim.Stockpiles.ZoneAt(c) is { } z && z.Faction == faction && !stores.Contains(z)) stores.Add(z);
+        }
+        stores.Sort((a, b) => a.Id.CompareTo(b.Id));
+        return (outs, ins, stores);
+    }
+
+    /// <summary>The stockpile haulers fill a hopper from: the first (lowest id) in the 3x3 round its start, or -1.</summary>
+    private static int LinkOf(ColonySim sim, Belt b)
+    {
+        int best = -1;
+        foreach (var c in Around(b.Start))
+            if (!sim.Stockpiles.IsDepot(c) && sim.Stockpiles.ZoneAt(c) is { } z && z.Faction == b.Faction && (best < 0 || z.Id < best)) best = z.Id;
+        return best;
+    }
+
+    /// <summary>The piles a belt loads from, in a fixed order: its hopper, then the crates and stockpile cells round it.</summary>
+    private static List<Source> SourcesOf(ColonySim sim, Belt b)
+    {
+        var list = new List<Source>();
+        int link = b.Link;
+        int linkPriority = link >= 0 && sim.Stockpiles.ZoneById(link) is { } lz ? lz.Priority : int.MaxValue;
+        foreach (var c in Around(b.Start))
+        {
+            if (c == b.Start)
+            {
+                if (sim.Items.TryGet(c, out _)) list.Add(new Source(c, link, linkPriority, false));
+                continue;
+            }
+            if (sim.Rooms.PartAt(c) is { Role: PartRole.Output, Built: true } crate && crate.Room.Faction == b.Faction)
+                list.Add(new Source(c, -1, int.MaxValue, true));
+            else if (!sim.Stockpiles.IsDepot(c) && sim.Stockpiles.ZoneAt(c) is { } z && z.Faction == b.Faction)
+                list.Add(new Source(c, z.Id, z.Priority, false));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Puts a packet on the belt's first tile: of the piles round its start (taking turns), the first that holds something
+    /// one of its ends wants, addressed there (input crates first, then stockpiles, then the ground).
+    /// </summary>
     private void Load(ColonySim sim, Belt b)
     {
-        if (SourceCell(sim, b) is not { } src) { b.Status = BeltStatus.NoSource; return; }
-        if (!sim.Items.TryGet(src, out var pile) || pile.Available <= 0 || !b.CarriesItem(pile.Type)) return;
-        var type = pile.Type;
+        var sources = SourcesOf(sim, b);
         var sinks = Terminals(b, 0);
         if (sinks.Count == 0) return;
-        for (int cls = 0; cls < 3; cls++)
+        bool any = false;
+        for (int s = 0; s < sources.Count; s++)
         {
-            int count = sinks.Count;
-            for (int k = 0; k < count; k++)
+            var src = sources[(b.Rotor + s) % sources.Count];
+            if (!sim.Items.TryGet(src.Cell, out var pile) || pile.Available <= 0 || !b.CarriesItem(pile.Type)) continue;
+            any = true;
+            var type = pile.Type;
+            for (int cls = 0; cls < 3; cls++)
+            for (int k = 0; k < sinks.Count; k++)
             {
-                var t = ById(sinks[(b.Rotor + k) % count]);
-                if (t is null || ClassOf(t) != cls) continue;
-                if (Accepts(sim, b, t, type) is not { } room) continue;
+                if (ById(sinks[(b.Rotor + k) % sinks.Count]) is not { } t) continue;
+                if (Accepts(sim, t, type, src, cls) is not { } room) continue;
                 int n = Math.Min(Math.Min(pile.Available, PacketUnits(type)), room.Space);
                 if (n <= 0) continue;
-                if (t.To.Kind != PortKind.Ground && !sim.Items.ReserveIncoming(room.Cell, type, n)) continue;
-                int taken = sim.Items.Consume(src, n);
-                if (taken < n && t.To.Kind != PortKind.Ground) sim.Items.ReleaseIncoming(room.Cell, n - taken);
+                if (room.Reserve && !sim.Items.ReserveIncoming(room.Cell, type, n)) continue;
+                int taken = sim.Items.Consume(src.Cell, n);
+                if (taken < n && room.Reserve) sim.Items.ReleaseIncoming(room.Cell, n - taken);
                 if (taken <= 0) return;
-                b.Slots[0] = new Packet(type, taken, t.Id, room.Cell, _serial++);
+                b.Slots[0] = new Packet(type, taken, t.Id, room.Cell, _serial++, room.Reserve);
                 b.Packets++;
                 b.Rotor++;
                 b.Status = BeltStatus.Running;
                 return;
             }
         }
-        b.Status = BeltStatus.Backed;
+        if (any) b.Status = BeltStatus.Backed;
+        else if (sources.Count == 0 && b.Packets == 0) b.Status = BeltStatus.NoSource;
     }
 
-    private static int ClassOf(Belt t) => t.To.Kind switch { PortKind.Crate => 0, PortKind.Stockpile => 1, _ => 2 };
-
-    /// <summary>Why a belt isn't loading what its source holds: per sink, whether it takes it (for Inspect and the demos).</summary>
+    /// <summary>Why a belt isn't loading: what is round its start and whether its ends take it (for Inspect and the demos).</summary>
     public string Explain(ColonySim sim, Belt b)
     {
         if (!b.Complete) return "not built yet";
         if (b.Blocked >= 0) return $"tile {b.Blocked} is filled in";
         if (b.From.Kind == PortKind.Belt) return "a branch: it carries what its splitter sends";
-        if (SourceCell(sim, b) is not { } src) return "its source is gone";
-        if (!sim.Items.TryGet(src, out var pile) || pile.Available <= 0) return "nothing at its source";
-        if (!b.CarriesItem(pile.Type)) return $"it doesn't carry {pile.Type.Name.ToLowerInvariant()}";
+        var sources = SourcesOf(sim, b);
+        if (sources.Count == 0) return "nothing round its start: an output crate, a stockpile or goods haulers bring to its hopper";
         var parts = new List<string>();
-        foreach (var id in Terminals(b, 0))
+        foreach (var src in sources)
         {
-            if (ById(id) is not { } t) continue;
-            var room = Accepts(sim, b, t, pile.Type);
-            parts.Add($"belt {t.Id} ({t.To.Kind}): {(room is { } r ? $"takes {Math.Min(r.Space, 999)} at {r.Cell}" : "takes none")}");
+            if (!sim.Items.TryGet(src.Cell, out var pile) || pile.Available <= 0) continue;
+            if (!b.CarriesItem(pile.Type)) { parts.Add($"{pile.Type.Name.ToLowerInvariant()}: filtered out"); continue; }
+            bool taken = false;
+            foreach (var id in Terminals(b, 0))
+                for (int cls = 0; cls < 3 && !taken; cls++)
+                    if (ById(id) is { } t && Accepts(sim, t, pile.Type, src, cls) is not null) taken = true;
+            parts.Add($"{pile.Type.Name.ToLowerInvariant()}: {(taken ? "wanted" : "nothing at its end takes it")}");
         }
-        return parts.Count == 0 ? "it leads nowhere" : string.Join("; ", parts);
+        return parts.Count == 0 ? "everything round its start is spoken for" : string.Join("; ", parts.Distinct());
     }
 
-    /// <summary>Whether the sink at the end of terminal belt <paramref name="t"/> takes <paramref name="type"/> loaded on
-    /// <paramref name="from"/>: where it goes and how much room there is.</summary>
-    private static (TilePos Cell, int Space)? Accepts(ColonySim sim, Belt from, Belt t, ItemType type)
+    /// <summary>
+    /// Whether the end of terminal belt <paramref name="t"/> takes <paramref name="type"/> from <paramref name="src"/>, of
+    /// one class: 0 an input crate in the 3x3 round the end whose workshop needs it, 1 a stockpile there (stored in its cells
+    /// up to <see cref="UnloadReach"/> from the end, never the stockpile it came from, and from a stockpile only into one
+    /// at least as good), 2 the ground (only a workshop's products: anything else would be hauled straight back).
+    /// </summary>
+    private static (TilePos Cell, int Space, bool Reserve)? Accepts(ColonySim sim, Belt t, ItemType type, Source src, int cls)
     {
-        if (!t.CarriesItem(type) || !t.Running) return null;
-        switch (t.To.Kind)
+        if (!t.CarriesItem(type) || !t.Running || !t.IsTerminal) return null;
+        var end = t.End;
+        if (cls == 0)
         {
-            case PortKind.Crate:
-            {
-                if (sim.Rooms.PartAt(t.To.Cell) is not { Role: PartRole.Input, Built: true } crate || crate.Room.Faction != t.Faction) return null;
-                int space = CrateRoom(sim, crate.Room, t.To.Cell, type);
-                return space > 0 ? (t.To.Cell, space) : null;
-            }
-            case PortKind.Stockpile:
-            {
-                if (sim.Stockpiles.ZoneById(t.To.Id) is not { } zone || zone.Faction != t.Faction || !zone.Accepts(type)) return null;
-                // From a stockpile, goods only go to one at least as good (haulers would carry them straight back).
-                if (from.From.Kind == PortKind.Stockpile && sim.Stockpiles.ZoneById(from.From.Id) is { } home && zone.Priority > home.Priority) return null;
-                if (zone.Cap > 0)
-                {
-                    int held = 0;
-                    foreach (var c in zone.Cells)
-                        if (sim.Items.TryGet(c, out var have) && have.Type == type) held += have.Count + have.Incoming;
-                    if (held >= zone.Cap) return null;
-                }
-                // The stockpile cells round the end, ring by ring out to UnloadReach (a chute spreads its load): in the nearest
-                // ring with room, a part-filled stack of the item first, else an empty cell.
-                var end = t.End;
-                for (int r = 1; r <= UnloadReach; r++)
-                {
-                    (TilePos Cell, int Space)? empty = null;
-                    for (int dz = -1; dz <= 1; dz++)
-                    for (int dy = -r; dy <= r; dy++)
-                    for (int dx = -r; dx <= r; dx++)
-                    {
-                        if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != r) continue;
-                        var c = end.Offset(dx, dy, dz);
-                        if (sim.Stockpiles.ZoneAt(c) != zone || sim.Constructions.At(c) is not null) continue;
-                        int room = sim.Items.RoomAt(c, type);
-                        if (room <= 0) continue;
-                        if (sim.Items.TryGet(c, out _)) return (c, room);
-                        empty ??= (c, room);
-                    }
-                    if (empty is not null) return empty;
-                }
-                return null;
-            }
-            default:
-                // Only a workshop's products are dropped on open ground (goods from a stockpile or a hopper would just be hauled back).
-                return from.From.Kind == PortKind.Crate ? (t.End, int.MaxValue) : null;
+            foreach (var c in Around(end))
+                if (sim.Rooms.PartAt(c) is { Role: PartRole.Input, Built: true } crate && crate.Room.Faction == t.Faction && CrateRoom(sim, crate.Room, c, type) is > 0 and var space)
+                    return (c, space, true);
+            return null;
         }
+        if (cls == 2)
+        {
+            // A dump: only where nothing round the end takes goods (a belt ending at a crate or stockpile never floods the floor).
+            if (!src.Crate) return null;
+            foreach (var c in Around(end))
+                if (sim.Rooms.PartAt(c) is { Role: PartRole.Input } || sim.Stockpiles.Contains(c)) return null;
+            return (end, int.MaxValue, false);
+        }
+        var seen = new List<Stockpile>();
+        foreach (var at in Around(end))
+        {
+            if (sim.Stockpiles.IsDepot(at) || sim.Stockpiles.ZoneAt(at) is not { } zone || seen.Contains(zone)) continue;
+            seen.Add(zone);
+            if (zone.Faction != t.Faction || !zone.Accepts(type) || zone.Id == src.Zone) continue;
+            if (src.Zone >= 0 && zone.Priority > src.Priority) continue;
+            if (zone.Cap > 0)
+            {
+                int held = 0;
+                foreach (var c in zone.Cells)
+                    if (sim.Items.TryGet(c, out var have) && have.Type == type) held += have.Count + have.Incoming;
+                if (held >= zone.Cap) continue;
+            }
+            // Its cells round the end, ring by ring (a chute spreads its load): a part-filled stack first, else an empty cell.
+            for (int r = 1; r <= UnloadReach; r++)
+            {
+                (TilePos Cell, int Space, bool Reserve)? empty = null;
+                for (int dz = -1; dz <= 1; dz++)
+                for (int dy = -r; dy <= r; dy++)
+                for (int dx = -r; dx <= r; dx++)
+                {
+                    if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != r) continue;
+                    var c = end.Offset(dx, dy, dz);
+                    if (sim.Stockpiles.ZoneAt(c) != zone || sim.Constructions.At(c) is not null) continue;
+                    int room = sim.Items.RoomAt(c, type);
+                    if (room <= 0) continue;
+                    if (sim.Items.TryGet(c, out _)) return (c, room, true);
+                    empty ??= (c, room, true);
+                }
+                if (empty is not null) return empty;
+            }
+        }
+        return null;
     }
 
     /// <summary>Room an input crate has for an item its workshop needs (towards two batches, as haulers fill it; an empty
@@ -922,29 +1033,32 @@ public sealed class Conveyors
         return Math.Min(sim.Items.RoomAt(crate, type), wanted - have);
     }
 
-    /// <summary>What a hopper asks haulers to bring: from its stockpile (or loose goods nearby), an item a sink wants.</summary>
+    /// <summary>What a hopper asks haulers to bring (from the stockpile beside it, or loose goods nearby), refreshed now and then.</summary>
     private void RefreshWant(ColonySim sim, Belt b)
     {
-        var (was, any) = (b.Wants, b.WantCount > 0);
+        var (was, any, link) = (b.Wants, b.WantCount > 0, b.Link);
         FindWant(sim, b);
-        if (b.Wants != was || b.WantCount > 0 != any) _wantChanges++;
+        if (b.Wants != was || b.WantCount > 0 != any || b.Link != link) _wantChanges++;
     }
 
     private void FindWant(ColonySim sim, Belt b)
     {
         b.Wants = null;
         b.WantCount = 0;
+        b.Link = LinkOf(sim, b);
         var h = b.Start;
-        int room;
+        if (!Movement.IsStandable(sim.World, h)) return; // haulers can't reach it: it works with what is round it
+        var hopperSource = new Source(h, b.Link, b.Link >= 0 && sim.Stockpiles.ZoneById(b.Link) is { } lz ? lz.Priority : int.MaxValue, false);
         if (sim.Items.TryGet(h, out var held))
         {
-            room = sim.Items.RoomAt(h, held.Type);
+            int room = sim.Items.RoomAt(h, held.Type);
             if (room > 0 && Wanted(held.Type)) (b.Wants, b.WantCount) = (held.Type, room);
             return;
         }
-        if (b.From.Kind == PortKind.Stockpile)
+        if (b.Link >= 0)
         {
-            if (sim.Stockpiles.ZoneById(b.From.Id) is not { } zone) return;
+            // The rest of the stockpile beside it: what lies beyond the 3x3 is brought to the hopper.
+            if (sim.Stockpiles.ZoneById(b.Link) is not { } zone) return;
             int looked = 0;
             foreach (var c in zone.Cells)
             {
@@ -953,14 +1067,15 @@ public sealed class Conveyors
             }
             return;
         }
-        for (int r = 0; r <= HopperReach; r++)
+        if (SourcesOf(sim, b).Any(s => s.Crate)) return; // a workshop's crate feeds it: nothing to fetch
+        for (int r = 1; r <= HopperReach; r++)
         for (int dz = -2; dz <= 2; dz++)
         for (int dy = -r; dy <= r; dy++)
         for (int dx = -r; dx <= r; dx++)
         {
             if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != r) continue;
             var c = h.Offset(dx, dy, dz);
-            if (c == h || !sim.Items.TryGet(c, out var p) || p.Available <= 0) continue;
+            if (!sim.Items.TryGet(c, out var p) || p.Available <= 0) continue;
             if (Hauling.RoleOf(c, p.Type, sim.Stockpiles, sim.Rooms, sim.Constructions) != StorageRole.Loose || !Wanted(p.Type)) continue;
             Set(p.Type);
             return;
@@ -971,7 +1086,8 @@ public sealed class Conveyors
         {
             if (!b.CarriesItem(t)) return false;
             foreach (var id in Terminals(b, 0))
-                if (ById(id) is { } s && Accepts(sim, b, s, t) is not null) return true;
+                for (int cls = 0; cls < 2; cls++)
+                    if (ById(id) is { } s && Accepts(sim, s, t, hopperSource, cls) is not null) return true;
             return false;
         }
     }
@@ -982,24 +1098,26 @@ public sealed class Conveyors
     /// <summary>Tiles round a hopper on open ground haulers bring loose goods from.</summary>
     public const int HopperReach = 16;
 
-    /// <summary>Whether haulers leave this output crate to the belt emptying it (while it isn't nearly full).</summary>
+    private static bool Near(TilePos a, TilePos b) => a.Z == b.Z && Math.Abs(a.X - b.X) <= 1 && Math.Abs(a.Y - b.Y) <= 1;
+
+    /// <summary>Whether haulers leave this output crate to a belt starting beside it (while it isn't nearly full).</summary>
     public bool Drains(ColonySim sim, TilePos crate, ItemPile pile)
     {
         foreach (var b in _belts)
-            if (b.From.Kind == PortKind.Crate && b.From.Cell == crate && b.Running && (sim.NeedsEnabled ? sim.Waterworks.SupplyOf(b.Faction) > 0 || sim.DevMode : true))
+            if (b.From.Kind != PortKind.Belt && Near(b.Start, crate) && b.Running && (!sim.NeedsEnabled || sim.DevMode || sim.Waterworks.SupplyOf(b.Faction) > 0))
                 return pile.Count * 1000L < (long)sim.Items.LimitAt(crate, pile.Type) * Balance.ConveyorCrateOverflow;
         return false;
     }
 
-    /// <summary>Whether a running belt from the output crate at <paramref name="crate"/> reaches the input crate at
-    /// <paramref name="input"/> (haulers then leave that run to the belt).</summary>
+    /// <summary>Whether a running belt starting beside the output crate at <paramref name="crate"/> ends beside the input crate
+    /// at <paramref name="input"/> (haulers then leave that run to the belt).</summary>
     public bool Serves(TilePos crate, TilePos input)
     {
         foreach (var b in _belts)
         {
-            if (b.From.Kind != PortKind.Crate || b.From.Cell != crate || !b.Running) continue;
+            if (b.From.Kind == PortKind.Belt || !Near(b.Start, crate) || !b.Running) continue;
             foreach (var id in Terminals(b, 0))
-                if (ById(id) is { Running: true, To: { Kind: PortKind.Crate } to } && to.Cell == input) return true;
+                if (ById(id) is { Running: true } t && Near(t.End, input)) return true;
         }
         return false;
     }
@@ -1009,7 +1127,7 @@ public sealed class Conveyors
     {
         foreach (var b in _belts)
             if (b.HasHopper && b.Running && (faction == Owners.Any || b.Faction == faction) && b.Wants is { } t && b.WantCount > 0)
-                yield return (b, b.Start, t, b.WantCount, b.From.Kind == PortKind.Stockpile ? b.From.Id : -1);
+                yield return (b, b.Start, t, b.WantCount, b.Link);
     }
 
     /// <summary>Units of each item riding the colony's belts.</summary>
@@ -1048,11 +1166,11 @@ public sealed class Conveyors
                 var p = b.Slots[i];
                 w.Write(p.Count);
                 if (p.Empty) continue;
-                w.Write(p.Type.Index); w.Write(p.Dest); Net.SnapIO.Write(w, p.DestCell); w.Write(p.Serial);
+                w.Write(p.Type.Index); w.Write(p.Dest); Net.SnapIO.Write(w, p.DestCell); w.Write(p.Serial); w.Write(p.Reserved);
             }
             WritePort(w, b.From); WritePort(w, b.To);
             w.Write(b.Rotor); w.Write(b.MergeTurn); w.Write(b.Delivered);
-            w.Write(b.Wants?.Index ?? -1); w.Write(b.WantCount); w.Write((byte)b.Status);
+            w.Write(b.Wants?.Index ?? -1); w.Write(b.WantCount); w.Write((byte)b.Status); w.Write(b.Link);
             if (b.Carries is null) w.Write(-1);
             else
             {
@@ -1072,6 +1190,7 @@ public sealed class Conveyors
 
     internal void SnapLoad(BinaryReader r)
     {
+        bool legacy = Net.SnapIO.Before(16); // 15: belts joined crates and stockpiles by kind; 16: an end works with its 3x3
         _nextId = r.ReadInt32(); _serial = r.ReadInt32(); Version = r.ReadInt32(); _wantChanges = r.ReadInt32();
         _phase = new int[r.ReadInt32()];
         for (int i = 0; i < _phase.Length; i++) _phase[i] = r.ReadInt32();
@@ -1090,7 +1209,7 @@ public sealed class Conveyors
                 if (!built[i]) unbuilt++;
                 int count = r.ReadInt32();
                 if (count == 0) continue;
-                slots[i] = new Packet(new ItemType(r.ReadUInt16()), count, r.ReadInt32(), Net.SnapIO.ReadPos(r), r.ReadInt32());
+                slots[i] = new Packet(new ItemType(r.ReadUInt16()), count, r.ReadInt32(), Net.SnapIO.ReadPos(r), r.ReadInt32(), !legacy && r.ReadBoolean());
                 packets++;
             }
             var b = new Belt
@@ -1103,6 +1222,7 @@ public sealed class Conveyors
             b.Wants = want < 0 ? null : new ItemType((ushort)want);
             b.WantCount = r.ReadInt32();
             b.Status = (BeltStatus)r.ReadByte();
+            if (!legacy) b.Link = r.ReadInt32();
             int filter = r.ReadInt32();
             if (filter >= 0)
             {
@@ -1112,6 +1232,20 @@ public sealed class Conveyors
             }
             _belts.Add(b);
             Index(b);
+        }
+        if (legacy)
+        {
+            // Old belts named the crate or stockpile they joined: now each end works with the 3x3 round it. Goods on their way
+            // there had room reserved (a belt ending at a crate or stockpile).
+            foreach (var b in _belts)
+                for (int i = 0; i < b.Length; i++)
+                    if (b.Slots[i] is { Empty: false } p && ById(p.Dest) is { To.Kind: PortKind.Crate or PortKind.Stockpile }) b.Slots[i] = p with { Reserved = true };
+            foreach (var b in _belts)
+            {
+                if (b.From.Kind is PortKind.Crate or PortKind.Stockpile) b.From = new Port(PortKind.Ground, b.Cells[0]);
+                if (b.To.Kind is PortKind.Crate or PortKind.Stockpile) b.To = new Port(PortKind.Ground, b.Cells[^1]);
+                _hoppers.Add(b.Cells[0]);
+            }
         }
         Settle();
     }

@@ -30,7 +30,8 @@ public partial class ConveyorView : Node3D
     private long _drawnStates = -1;
     private int _drawnSteps = -1;
     private long _stepTick;
-    private readonly Dictionary<int, (Vector3 From, Vector3 To)> _moving = new();
+    private readonly Dictionary<int, (Vector3 From, Vector3 Via, Vector3 To)> _moving = new();
+    private readonly Dictionary<int, (int Belt, int Index)> _where = new();
     private readonly Dictionary<int, Vector3> _shown = new();
 
     public void Initialize(ColonySim sim, WorldView world)
@@ -167,29 +168,41 @@ public partial class ConveyorView : Node3D
 
     // ---- Geometry ---------------------------------------------------------------------------------------------------
 
-    /// <summary>The middle of a belt tile's surface (Godot space).</summary>
+    /// <summary>The middle of a belt tile's floor-level surface (Godot space).</summary>
     public static Vector3 Point(TilePos c) => new(c.X + 0.5f, c.Z + BeltHeight, c.Y + 0.5f);
 
+    private static readonly (int X, int Y)[] Dirs = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+
+    /// <summary>Horizontal direction (0..3) from <paramref name="c"/> towards a neighbour, or -1 if straight above or below.</summary>
+    private static int DirTo(TilePos c, TilePos n) => Array.IndexOf(Dirs, (n.X - c.X, n.Y - c.Y));
+
     /// <summary>
-    /// The line a belt follows from tile <paramref name="a"/> to <paramref name="b"/>: straight across or up; a ramp climbs at
-    /// the edge of the lower column (up then across, or across then down) so it never cuts into the hill it climbs.
+    /// How tile <paramref name="i"/> of a route is laid: where it enters and leaves (an edge midpoint, or none at an end or
+    /// on a lift), and the surface height (over its floor) at each and at its centre. A ramp climbs across the lower tile
+    /// of the pair, edge to edge at 45 degrees (in at the floor, out a level up), so a run of ramps is one smooth slope, a
+    /// ramp can turn (entering on one side, leaving up on another), and nothing cuts into the hill it climbs.
     /// </summary>
-    public static (Vector3 A, Vector3 Corner, Vector3 B, bool Bent) Line(TilePos a, TilePos b)
+    public static (Vector3? In, Vector3 Centre, Vector3? Out) Tile(IReadOnlyList<TilePos> cells, int i)
     {
-        var pa = Point(a);
-        var pb = Point(b);
-        var step = Conveyors.StepOf(a, b);
-        if (step == Conveyors.Step.RampUp)
+        var c = cells[i];
+        float hIn = 0, hOut = 0;
+        int dIn = -1, dOut = -1;
+        if (i > 0)
         {
-            var edge = ((pa + pb) / 2) with { Y = pb.Y };
-            return (pa, new Vector3((pa.X + edge.X) / 2, pb.Y, (pa.Z + edge.Z) / 2), pb, true);
+            dIn = DirTo(c, cells[i - 1]);
+            if (Conveyors.StepOf(cells[i - 1], c) == Conveyors.Step.RampDown) hIn = 1; // comes down across this tile
         }
-        if (step == Conveyors.Step.RampDown)
+        if (i + 1 < cells.Count)
         {
-            var edge = ((pa + pb) / 2) with { Y = pa.Y };
-            return (pa, new Vector3((pb.X + edge.X) / 2, pa.Y, (pb.Z + edge.Z) / 2), pb, true);
+            dOut = DirTo(c, cells[i + 1]);
+            if (Conveyors.StepOf(c, cells[i + 1]) == Conveyors.Step.RampUp) hOut = 1; // climbs across this tile
         }
-        return (pa, pb, pb, false);
+        float hMid = dIn >= 0 && dOut >= 0 ? (hIn + hOut) / 2 : dIn >= 0 ? hIn : dOut >= 0 ? hOut * 0.5f : 0;
+        Vector3 At(float dx, float dy, float h) => new(c.X + 0.5f + dx, c.Z + h + BeltHeight, c.Y + 0.5f + dy);
+        var centre = At(0, 0, hMid);
+        Vector3? entry = dIn >= 0 ? At(Dirs[dIn].X * 0.5f, Dirs[dIn].Y * 0.5f, hIn) : null;
+        Vector3? exit = dOut >= 0 ? At(Dirs[dOut].X * 0.5f, Dirs[dOut].Y * 0.5f, hOut) : null;
+        return (entry, centre, exit);
     }
 
     /// <summary>A unit run piece stretched from <paramref name="a"/> to <paramref name="b"/>.</summary>
@@ -204,6 +217,9 @@ public partial class ConveyorView : Node3D
         var up = side.Cross(x).Normalized();
         return new Transform3D(new Basis(x * len, up, side), a);
     }
+
+    /// <summary>Per belt: each tile's centre and the point where it hands over to the next (the shared edge), for the goods.</summary>
+    private readonly Dictionary<int, (Vector3[] Centre, Vector3[] Hand)> _geo = new();
 
     // ---- Drawing ----------------------------------------------------------------------------------------------------
 
@@ -233,30 +249,41 @@ public partial class ConveyorView : Node3D
         foreach (var l in new[] { _runList, _jointList, _liftList, _postList, _driveList, _hopperList, _ghostList }) l.Clear();
         _runTint.Clear();
         _jointTint.Clear();
+        _geo.Clear();
         var w = _sim.World;
         foreach (var b in _sim.Conveyors.All)
         {
             // A belt that can't run is tinted: rust red when filled in or without power.
             var tint = b.Status is BeltStatus.Blocked or BeltStatus.NoPower ? new Color(1f, 0.45f, 0.4f) : new Color(1, 1, 1);
+            var centres = new Vector3[b.Length];
+            var hands = new Vector3[b.Length];
             for (int i = 0; i < b.Length; i++)
             {
                 var c = b.Cells[i];
+                var (entry, centre, exit) = Tile(b.Cells, i);
+                centres[i] = centre;
+                hands[i] = exit ?? centre;
                 if (!b.IsBuilt(i))
                 {
-                    _ghostList.Add(new Transform3D(Basis.Identity, Point(c)));
+                    _ghostList.Add(new Transform3D(Basis.Identity, centre));
                     continue;
                 }
                 bool liftBelow = i > 0 && Conveyors.StepOf(b.Cells[i - 1], c) == Conveyors.Step.Lift;
                 bool liftAbove = i + 1 < b.Length && Conveyors.StepOf(c, b.Cells[i + 1]) == Conveyors.Step.Lift;
-                if (!liftBelow || !liftAbove)
+                if (entry is { } e) { _runList.Add(Piece(e, centre)); _runTint.Add(tint); }
+                if (exit is { } x) { _runList.Add(Piece(centre, x)); _runTint.Add(tint); }
+                // A level plate under the centre where the belt turns, starts or ends (on a slope the runs meet cleanly).
+                bool level = MathF.Abs((entry?.Y ?? centre.Y) - centre.Y) < 0.01f && MathF.Abs((exit?.Y ?? centre.Y) - centre.Y) < 0.01f;
+                bool turns = entry is { } en && exit is { } ex && MathF.Abs((en - centre).Dot(ex - centre)) < 0.01f;
+                if (level && (turns || entry is null || exit is null) && !(liftBelow && liftAbove))
                 {
-                    _jointList.Add(new Transform3D(Basis.Identity, Point(c)));
+                    _jointList.Add(new Transform3D(Basis.Identity, centre));
                     _jointTint.Add(tint);
                 }
                 if (i == 0)
                 {
-                    _driveList.Add(new Transform3D(Basis.Identity, Point(c)));
-                    if (b.HasHopper) _hopperList.Add(new Transform3D(Basis.Identity, new Vector3(c.X + 0.5f, c.Z, c.Y + 0.5f)));
+                    _driveList.Add(new Transform3D(Basis.Identity, centre));
+                    if (b.HasHopper && Colony.Core.Navigation.Movement.IsStandable(w, c)) _hopperList.Add(new Transform3D(Basis.Identity, new Vector3(c.X + 0.5f, c.Z, c.Y + 0.5f)));
                 }
                 // Trestle legs under a raised tile (not inside a lift's tower), down to the ground.
                 if (!liftBelow)
@@ -265,27 +292,18 @@ public partial class ConveyorView : Node3D
                     for (int z = c.Z - 1; z > 0 && drop < 64 && !TileInfo.IsSolid(w.Get(c.X, c.Y, z)); z--) drop++;
                     if (drop > 0)
                     {
-                        float top = Point(c).Y - 0.08f, bottom = c.Z - drop;
+                        float top = centre.Y - 0.08f, bottom = c.Z - drop;
                         _postList.Add(new Transform3D(Basis.Identity.Scaled(new Vector3(1, top - bottom, 1)), new Vector3(c.X + 0.5f, bottom, c.Y + 0.5f)));
                     }
                 }
-                if (i + 1 >= b.Length || !b.IsBuilt(i + 1)) continue;
-                var next = b.Cells[i + 1];
-                if (Conveyors.StepOf(c, next) == Conveyors.Step.Lift)
+                // A lift tower rises from the lower tile of each pair, a level up from its centre.
+                if (liftAbove && b.IsBuilt(i + 1))
                 {
-                    var (lo, hi) = c.Z < next.Z ? (c, next) : (next, c);
-                    _liftList.Add(new Transform3D(Basis.Identity.Scaled(new Vector3(1, 1, 1)), new Vector3(lo.X + 0.5f, Point(lo).Y, lo.Y + 0.5f)));
-                    continue;
-                }
-                var (a, corner, end, bent) = Line(c, next);
-                _runList.Add(Piece(a, corner));
-                _runTint.Add(tint);
-                if (bent)
-                {
-                    _runList.Add(Piece(corner, end));
-                    _runTint.Add(tint);
+                    var lower = b.Cells[i + 1].Z > c.Z ? centre : Tile(b.Cells, i + 1).Centre;
+                    _liftList.Add(new Transform3D(Basis.Identity, lower));
                 }
             }
+            _geo[b.Id] = (centres, hands);
         }
         Fill(_runs, _runList, _runTint);
         Fill(_joints, _jointList, _jointTint);
@@ -331,20 +349,23 @@ public partial class ConveyorView : Node3D
         var seen = stepped ? new HashSet<int>() : null;
         foreach (var b in belts.All)
         {
-            if (b.Packets == 0) continue;
+            if (b.Packets == 0 || !_geo.TryGetValue(b.Id, out var geo) || geo.Centre.Length != b.Length) continue;
             for (int i = 0; i < b.Length && n < MaxPackets; i++)
             {
                 var p = b.PacketAt(i);
                 if (p.Empty) continue;
-                var at = Point(b.Cells[i]);
+                var at = geo.Centre[i];
                 if (stepped)
                 {
                     seen!.Add(p.Serial);
+                    // Along its own belt it follows the belt (over the shared edge, up or down a ramp); onto another, straight.
                     var from = _moving.TryGetValue(p.Serial, out var was) ? was.To : at;
-                    _moving[p.Serial] = (from, at);
+                    var via = _where.TryGetValue(p.Serial, out var w) && w.Belt == b.Id && w.Index == i - 1 ? geo.Hand[i - 1] : (from + at) / 2;
+                    _moving[p.Serial] = (from, via, at);
+                    _where[p.Serial] = (b.Id, i);
                 }
-                var (f, to) = _moving.TryGetValue(p.Serial, out var mv) ? mv : (at, at);
-                var goal = f.Lerp(to, t);
+                var (f, v, to) = _moving.TryGetValue(p.Serial, out var mv) ? mv : (at, at, at);
+                var goal = t < 0.5f ? f.Lerp(v, t * 2) : v.Lerp(to, t * 2 - 1);
                 var shown = _shown.TryGetValue(p.Serial, out var s) ? s.Lerp(goal, 1f - MathF.Exp(-dt * 30f)) : goal;
                 _shown[p.Serial] = shown;
                 if (n >= mm.InstanceCount) mm.InstanceCount = Math.Min(MaxPackets, Math.Max(64, mm.InstanceCount * 2));
@@ -359,7 +380,7 @@ public partial class ConveyorView : Node3D
             // Forget crates that left the belts.
             var gone = new List<int>();
             foreach (var k in _moving.Keys) if (!seen!.Contains(k)) gone.Add(k);
-            foreach (var k in gone) { _moving.Remove(k); _shown.Remove(k); }
+            foreach (var k in gone) { _moving.Remove(k); _shown.Remove(k); _where.Remove(k); }
         }
         mm.VisibleInstanceCount = n;
     }
