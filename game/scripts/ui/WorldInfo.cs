@@ -93,8 +93,10 @@ public static class WorldInfo
                 break;
             case PickZone pz:
                 bool depot = sim.Stockpiles.IsDepot(pz.Cell);
-                (card.Glyph, card.Color, card.Title) = (depot ? "$" : "≡", Tok(depot ? "accent" : "item"), depot ? "Trade depot" : "Stockpile");
-                if (sim.Factions.Count > 1) card.Sub = sim.Factions[sim.Stockpiles.OwnerOf(pz.Cell)].Name;
+                var store = sim.Stockpiles.ZoneAt(pz.Cell);
+                (card.Glyph, card.Color, card.Title) = (depot ? "$" : "≡", Tok(depot ? "accent" : "item"), depot ? "Trade depot" : store?.Name ?? "Stockpile");
+                if (store != null) card.Sub = $"priority {store.Priority}" + (store.Reserve ? " · reserve" : "");
+                if (sim.Factions.Count > 1) card.Sub = sim.Factions[sim.Stockpiles.OwnerOf(pz.Cell)].Name + (card.Sub.Length > 0 ? " · " + card.Sub : "");
                 card.Hint = "click: details";
                 break;
             case PickSite ps:

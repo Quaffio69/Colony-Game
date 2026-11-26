@@ -46,7 +46,72 @@ public static class Hauling
         if (part?.Role == PartRole.Input) return part.Room.Needs(type) ? StorageRole.Input : StorageRole.Loose;
         if (part?.Role == PartRole.Output) return StorageRole.Output;
         // A trade depot's deliveries are its owner's (only its haulers take them: see Ours) and go on to its stockpiles.
-        return stockpiles.Contains(p) && !stockpiles.IsDepot(p) ? StorageRole.Stockpile : StorageRole.Loose;
+        if (!stockpiles.Contains(p) || stockpiles.IsDepot(p)) return StorageRole.Loose;
+        // Goods a stockpile no longer takes (its filter changed) are hauled out like loose ones.
+        return stockpiles.ZoneAt(p) is { } zone && !zone.Accepts(type) ? StorageRole.Loose : StorageRole.Stockpile;
+    }
+
+    /// <summary>
+    /// What each stockpile holds and has room for, gathered once per search: its count of each item (for caps), whether
+    /// it has an empty cell, and the items it has a part-filled stack of.
+    /// </summary>
+    private sealed class StoreView
+    {
+        private readonly Dictionary<int, (int Empty, HashSet<ushort> Partial, Dictionary<ushort, int> Held)> _zones = new();
+        private readonly List<Stockpile> _list;
+
+        public StoreView(Stockpiles stockpiles, ItemPiles items, Orders.Constructions? sites, int faction)
+        {
+            _list = stockpiles.Zones(faction).ToList();
+            foreach (var z in _list) _zones[z.Id] = (0, new HashSet<ushort>(), new Dictionary<ushort, int>());
+            foreach (var z in _list)
+            {
+                var (empty, partial, held) = _zones[z.Id];
+                foreach (var c in stockpiles.CellsOf(z))
+                {
+                    if (sites?.At(c) is not null) continue;
+                    if (!items.TryGet(c, out var p)) { empty++; continue; }
+                    held[p.Type.Index] = held.GetValueOrDefault(p.Type.Index) + p.Count + p.Incoming;
+                    if (items.RoomAt(c, p.Type) > 0) partial.Add(p.Type.Index);
+                }
+                _zones[z.Id] = (empty, partial, held);
+            }
+        }
+
+        /// <summary>How many more of the item the stockpile takes (its filter and cap).</summary>
+        public int Takes(Stockpile z, ItemType type) => _zones.TryGetValue(z.Id, out var s) ? z.Takes(type, s.Held.GetValueOrDefault(type.Index)) : 0;
+
+        /// <summary>Whether a stockpile of better priority than <paramref name="priority"/> takes the item and has room for it.</summary>
+        public bool BetterHome(int priority, ItemType type)
+        {
+            foreach (var z in _list)
+            {
+                if (z.Priority >= priority || Takes(z, type) <= 0) continue;
+                var s = _zones[z.Id];
+                if (s.Empty > 0 || s.Partial.Contains(type.Index)) return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Offers the stockpile cells that would take <paramref name="type"/> from <paramref name="src"/>: of stockpiles that
+    /// accept it (under their cap, within their reach unless <paramref name="anyReach"/>), better than
+    /// <paramref name="worseThan"/>, best priority first, then nearest.
+    /// </summary>
+    private static void OfferStores(Nearest<(TilePos Cell, int Room)> dest, StoreView view, Stockpiles stockpiles, ItemPiles items,
+        Connectivity connectivity, Orders.Constructions? sites, TilePos src, ItemType type, int worseThan, int faction, int component, bool anyReach = false)
+    {
+        foreach (var cell in stockpiles.Cells)
+        {
+            if (stockpiles.ZoneAt(cell) is not { } zone || zone.Priority >= worseThan) continue; // depots keep room for deliveries
+            if (faction != Owners.Any && zone.Faction != faction) continue;
+            if (sites?.At(cell) is not null || connectivity.ComponentOf(cell) != component) continue; // a rack going up here wants only its planks
+            int take = view.Takes(zone, type);
+            if (take <= 0 || !anyReach && !zone.InReach(src, cell)) continue;
+            int space = Math.Min(items.RoomAt(cell, type), take);
+            if (space > 0) dest.Offer(zone.Priority * (1L << 52) + Dist(cell, src), (cell, space), cell);
+        }
     }
 
     public static List<HaulPlan> Plans(ItemPiles items, Stockpiles stockpiles, Rooms rooms, Connectivity connectivity,
@@ -76,15 +141,12 @@ public static class Hauling
         if (sites is not null)
             foreach (var bp in sites.All)
                 if (faction == Owners.Any || bp.Faction == faction) Blocked(bp.Cell, bp.Cost.Material);
+        StoreView? view = null;
+        StoreView View() => view ??= new StoreView(stockpiles, items, sites, faction);
         foreach (var (src, pile) in blocked.Items)
         {
             var dest = new Nearest<(TilePos Cell, int Room)>(1);
-            foreach (var cell in stockpiles.Cells)
-            {
-                int space = items.RoomAt(cell, pile.Type);
-                if (space > 0 && sites?.At(cell) is null && !stockpiles.IsDepot(cell) && (faction == Owners.Any || stockpiles.OwnerOf(cell) == faction)
-                    && connectivity.ComponentOf(cell) == component) dest.Offer(Dist(cell, src), (cell, space), cell);
-            }
+            OfferStores(dest, View(), stockpiles, items, connectivity, sites, src, pile.Type, int.MaxValue, faction, component, anyReach: true); // in the way: any reach
             if (!dest.Items.Any())
                 // No stockpile room: set it down on free floor beside the footprint.
                 for (int r = 1; r <= 4 && !dest.Items.Any(); r++)
@@ -100,12 +162,13 @@ public static class Hauling
         }
 
         // 1. Demand: input crates that want their machines' inputs.
-        var demands = new Nearest<(TilePos Cell, ItemType Type, int Room)>(Considered);
+        // (The workshop asking, by room id, decides which stockpiles it may draw from; -1: a structure, any.)
+        var demands = new Nearest<(TilePos Cell, ItemType Type, int Room, int Workshop)>(Considered);
         foreach (var room in rooms.All)
         {
             if (faction != Owners.Any && room.Faction != faction) continue;
             foreach (var (cell, type, space) in InputDemands(room, items))
-                if (Usable(cell)) demands.Offer(Dist(cell, from), (cell, type, space));
+                if (Usable(cell)) demands.Offer(Dist(cell, from), (cell, type, space, room.Id));
             // Blueprints want their materials, spread over their footprint (one pile per cell).
             foreach (var bp in room.Blueprints)
             {
@@ -118,7 +181,7 @@ public static class Hauling
                 {
                     int space = Math.Min(items.RoomAt(c, material), need);
                     if (space <= 0 || !Usable(c)) continue;
-                    demands.Offer(Dist(c, from), (c, material, space));
+                    demands.Offer(Dist(c, from), (c, material, space, room.Id));
                     break;
                 }
             }
@@ -132,39 +195,39 @@ public static class Hauling
                 int need = cost;
                 if (items.TryGet(bp.Cell, out var pile)) need = pile.Type == material ? cost - pile.Count - pile.Incoming : 0;
                 int space = Math.Min(items.RoomAt(bp.Cell, material), need);
-                if (space > 0 && Usable(bp.Cell)) demands.Offer(Dist(bp.Cell, from), (bp.Cell, material, space));
+                if (space > 0 && Usable(bp.Cell)) demands.Offer(Dist(bp.Cell, from), (bp.Cell, material, space, -1));
             }
-        foreach (var (cell, type, space) in demands.Items)
+        foreach (var (cell, type, space, workshop) in demands.Items)
         {
             var source = new Nearest<(TilePos Pos, int Available)>(1);
             foreach (var (p, pile) in items.All)
             {
                 if (pile.Type != type || pile.Available <= 0 || !Usable(p) || !Ours(p)) continue;
                 if (RoleOf(p, pile.Type, stockpiles, rooms, sites) is StorageRole.Input or StorageRole.Construction) continue;
+                if (workshop >= 0 && stockpiles.ZoneAt(p) is { } store && !store.Lets(workshop)) continue; // a stockpile closed to this workshop
                 source.Offer(Dist(p, cell), (p, pile.Available));
             }
             foreach (var (src, available) in source.Items)
                 plans.Add(new HaulPlan(src, cell, type, Math.Min(Math.Min(available, space), ItemInfo.CarryLimit(type))));
         }
 
-        // 2. Supply: loose piles and output crates to the nearest stockpile cell with room.
+        // 2. Supply: loose piles, output crates and goods a stockpile no longer takes, to the stockpile that takes them
+        // (best priority first, then nearest; within its reach and under its cap). Goods already stored move up to a
+        // stockpile of better priority that takes them and has room.
         if (stockpiles.Count == 0) return plans;
-        var sources = new Nearest<(TilePos Pos, ItemPile Pile)>(Considered);
+        var sources = new Nearest<(TilePos Pos, ItemPile Pile, int Priority)>(Considered);
         foreach (var (p, pile) in items.All)
         {
             if (pile.Available <= 0 || !Usable(p) || !Ours(p)) continue;
             var role = RoleOf(p, pile.Type, stockpiles, rooms, sites);
-            if (role is StorageRole.Loose or StorageRole.Output) sources.Offer(Dist(p, from), (p, pile));
+            if (role is StorageRole.Loose or StorageRole.Output) sources.Offer(Dist(p, from), (p, pile, int.MaxValue));
+            else if (role == StorageRole.Stockpile && stockpiles.ZoneAt(p) is { } home && home.Priority > 1 && View().BetterHome(home.Priority, pile.Type))
+                sources.Offer(Dist(p, from), (p, pile, home.Priority));
         }
-        foreach (var (src, pile) in sources.Items)
+        foreach (var (src, pile, worseThan) in sources.Items)
         {
             var dest = new Nearest<(TilePos Cell, int Room)>(1);
-            foreach (var cell in stockpiles.Cells)
-            {
-                int space = items.RoomAt(cell, pile.Type);
-                if (space > 0 && sites?.At(cell) is null && !stockpiles.IsDepot(cell) && // a rack going up here wants only its planks; depots keep room for deliveries
- (faction == Owners.Any || stockpiles.OwnerOf(cell) == faction) && connectivity.ComponentOf(cell) == component) dest.Offer(Dist(cell, src), (cell, space), cell);
-            }
+            OfferStores(dest, View(), stockpiles, items, connectivity, sites, src, pile.Type, worseThan, faction, component);
             foreach (var (cell, space) in dest.Items)
                 plans.Add(new HaulPlan(src, cell, pile.Type, Math.Min(Math.Min(pile.Available, space), ItemInfo.CarryLimit(pile.Type))));
         }

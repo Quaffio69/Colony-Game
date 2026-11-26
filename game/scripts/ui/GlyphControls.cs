@@ -565,3 +565,86 @@ public partial class TipText : GlyphControl
         }
     }
 }
+
+/// <summary>
+/// A slider over fixed notches (unlike <see cref="GlyphSlider"/>, which is continuous and reports every move): its label, then a thin rounded track (the progress bar's: text @ 9%) filled in accent
+/// up to a round accent knob, faint dots at the notches, and the chosen notch's text to the right. Click or drag to
+/// choose; the choice is sent once, on release (one command, not one per pixel).
+/// </summary>
+public partial class GlyphNotchSlider : GlyphControl
+{
+    private readonly string _text;
+    private readonly string[] _notches;
+    private readonly Action<int> _committed;
+    private int _index, _held = -1;
+    private bool _hover;
+
+    public GlyphNotchSlider(string text, string[] notches, int index, Action<int> committed)
+    {
+        _text = text; _notches = notches; _index = Math.Clamp(index, 0, notches.Length - 1); _committed = committed;
+        SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        MouseDefaultCursorShape = CursorShape.PointingHand;
+        MouseEntered += () => { _hover = true; QueueRedraw(); };
+        MouseExited += () => { _hover = false; QueueRedraw(); };
+    }
+    public GlyphNotchSlider() : this("", ["-"], 0, _ => { }) { }
+
+    public int Index => _held >= 0 ? _held : _index;
+
+    private int LabelCols => _text.Length + 2;
+    private int ValueCols => System.Linq.Enumerable.Max(_notches, n => n.Length) + 1;
+    private float TrackStart => LabelCols * Cw + Cw * 0.5f;
+    private float TrackEnd => Size.X - ValueCols * Cw - Cw * 0.5f;
+
+    public override Vector2 _GetMinimumSize() => new((LabelCols + 16 + ValueCols) * Cw, Ch);
+
+    private int At(float x)
+    {
+        float t = Math.Clamp((x - TrackStart) / Math.Max(1, TrackEnd - TrackStart), 0, 1);
+        return (int)MathF.Round(t * (_notches.Length - 1));
+    }
+
+    public override void _GuiInput(InputEvent e)
+    {
+        switch (e)
+        {
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: true } b:
+                _held = At(b.Position.X);
+                QueueRedraw();
+                AcceptEvent();
+                break;
+            case InputEventMouseMotion m when _held >= 0:
+                int at = At(m.Position.X);
+                if (at != _held) { _held = at; QueueRedraw(); }
+                AcceptEvent();
+                break;
+            case InputEventMouseButton { ButtonIndex: MouseButton.Left, Pressed: false } when _held >= 0:
+                bool changed = _held != _index;
+                _index = _held;
+                _held = -1;
+                QueueRedraw();
+                AcceptEvent();
+                if (changed) _committed(_index);
+                break;
+        }
+    }
+
+    public override void _Draw()
+    {
+        if (_hover || _held >= 0) GlyphDraw.Round(this, new Rect2(-Cw * 0.5f, Ch * 0.06f, Size.X + Cw, Ch * 0.88f), GlyphTheme.Tok("text", 0.06f), 4);
+        GlyphDraw.Text(this, _text, Vector2.Zero, LabelCols * Cw, Tok("text"));
+        float h = MathF.Max(2, MathF.Round(Ch * 0.2f)), y = (Size.Y - h) / 2, x0 = TrackStart, x1 = TrackEnd;
+        GlyphDraw.Round(this, new Rect2(x0, y, x1 - x0, h), GlyphTheme.Tok("text", GlyphTheme.Light ? 0.10f : 0.09f), h / 2);
+        int n = _notches.Length;
+        for (int i = 0; i < n; i++)
+        {
+            float nx = x0 + (x1 - x0) * i / Math.Max(1, n - 1);
+            GlyphDraw.Round(this, new Rect2(nx - 1, y + h / 2 - 1, 2, 2), Tok("faint"), 1);
+        }
+        float kx = x0 + (x1 - x0) * Index / Math.Max(1, n - 1);
+        GlyphDraw.Round(this, new Rect2(x0, y, kx - x0, h), Tok("accent"), h / 2);
+        float k = MathF.Round(Ch * 0.55f);
+        GlyphDraw.Round(this, new Rect2(kx - k / 2, (Size.Y - k) / 2, k, k), Tok("accent"), k / 2);
+        GlyphDraw.Text(this, _notches[Index], new Vector2(Size.X - ValueCols * Cw, 0), ValueCols * Cw, Tok("hi"), bold: true, align: HorizontalAlignment.Right);
+    }
+}

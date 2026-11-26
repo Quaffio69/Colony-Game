@@ -1502,6 +1502,9 @@ public sealed partial class Colonist
     private static int TopUp(ColonySim sim, TilePos source, TilePos destination, ItemType type, int carrying, int component)
     {
         int added = 0, limit = ItemInfo.CarryLimit(type);
+        // A stockpile with a cap takes no more than it has left (what is on its way counts already).
+        if (sim.Stockpiles.ZoneAt(destination) is { Cap: > 0 } zone)
+            limit = Math.Min(limit, carrying + zone.Takes(type, zone.Held(type, sim.Items)));
         for (int dy = -TopUpReach; dy <= TopUpReach && carrying + added < limit; dy++)
         for (int dx = -TopUpReach; dx <= TopUpReach && carrying + added < limit; dx++)
         {

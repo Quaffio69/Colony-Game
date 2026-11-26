@@ -53,6 +53,7 @@ public partial class GameUi : CanvasLayer
         Add(new HousingWindow(this), Key.H);
         Add(new WorkWindow(this), Key.J);
         Add(new InspectorWindow(this), Key.V);
+        Add(new StockpileWindow(this), Key.F8);
         Add(new MilitaryWindow(this), Key.M);
         Add(new TradeWindow(this), Key.F6);
         if (GameInfo.DevBuild) Add(new TestsWindow(this), Key.F1); // developer builds only: it loads the test DLL from the source tree

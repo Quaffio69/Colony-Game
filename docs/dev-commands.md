@@ -32,7 +32,7 @@ Every build, run, bench, demo and debug flag.
   `--gpu-profile` go before `--`; bench at the player's screen size (2560x1440 here), the art target scales with it. Findings: iso
   shadows must stay 4 cascades (1, or 2 split at the pivot, lost most shadows); `ShadowsUpTo` (1.5 tiles/px) turns sun shadows
   off further out; shadows are the remaining cost in iso at pixel size 1, 0.5-1 tiles/px (~11-15 ms at 1600x900).
-- **UI dev flags:** `--open=colonists,stocks,...` opens windows (ids: colonists stocks build chronicle housing work inspect
+- **UI dev flags:** `--open=colonists,stocks,...` opens windows (ids: colonists stocks build chronicle housing work inspect stockpile
   tests appearance help), `--tool=MODE` puts a tool in hand (Dig, Edge, Stockpile, ...), `--mouse=X,Y` parks the mouse (the hover card), `--tip=TEXT` shows a tooltip (`
 ` breaks), `--main-menu` starts on the menu, `--dev` starts with dev mode on (orders done at once), `--work-menu`/`--test-menu` (old names), `--ui-selftest` drives
   the window manager with real input events (hotkeys, Esc order, drag, resize, maximise, dock, tabs, menu, theme switch),

@@ -64,9 +64,13 @@ public static class Needs
 
     /// <summary>
     /// Whether the colony may use up goods lying here: anywhere but a factory's input crate (that is the factory's
-    /// stock) or an unbuilt part's footprint (construction materials).
+    /// stock), an unbuilt part's footprint (construction materials) or a reserve stockpile (kept for workshops and trade).
     /// </summary>
-    public static bool Usable(ColonySim sim, TilePos p, int faction = 0) => sim.Factions.Count == 1
+    public static bool Usable(ColonySim sim, TilePos p, int faction = 0) =>
+        Owned(sim, p, faction) && sim.Stockpiles.ZoneAt(p) is not { Reserve: true };
+
+    /// <summary>Whether goods lying here are the colony's to use (reserve stockpiles included): see <see cref="Usable"/>.</summary>
+    public static bool Owned(ColonySim sim, TilePos p, int faction = 0) => sim.Factions.Count == 1
         ? sim.Rooms.PartAt(p) is not { } only || (only.Built && only.Role != PartRole.Input) // one colony: everything is its own
         :
         (sim.Rooms.PartAt(p) is not { } part || (part.Built && part.Role != PartRole.Input && part.Room.Faction == faction))

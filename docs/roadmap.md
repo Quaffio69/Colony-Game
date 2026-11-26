@@ -48,7 +48,7 @@ What is done and what is next, milestone by milestone.
       station size, multi-input crates, recipe per machine, education and the Academy, automatons, build
       menu (B). Raw sources: clay, sand, 8 minerals by depth, wild herbs, grain/herb/glowcap farms.
 - [ ] Next for industry: conveyors between output and input crates; rooms themselves costing
-      (walls/floors); stockpile filters; standing orders ("keep 50 planks") instead of fixed recipes;
+      (walls/floors); standing orders ("keep 50 planks") instead of fixed recipes;
       wonders as aux parts (philosopher's stone, farseer orb, orrery); real ratios.
 - [~] Flora: grass grows back over dug dirt (`Regrowth`). Next: wild growth and spreading/regrowth of plants (staggered, deterministic).
 - [x] Geology: sandstone and limestone bands, slate, granite, basalt over an uneven bedrock floor (derived from the seed, no
@@ -128,6 +128,7 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 
 ### New features
 - [x] Heavy machinery, built in a workshop: a steam excavator (digs 5x as fast) and a power wagon (8 loads a trip), burning charcoal. Driven by colonists, who fetch one only when the run of work round the job pays for the walk (a big dig fetches it from afar, one tile never does; judged by real paths, so a machine behind a wall counts the way round), drive on while that holds, stoke it, and park it where they stop. The wagon ships trade deals too. Next: more machines (ore crusher, steam tractor), repairs and wear, conveyors.
+- [x] Stockpile settings (F8, or Settings in Inspect): name, priority (goods move up to better stockpiles), items by category and one by one, workshop whitelist/blacklist, haul-from distance (500 tiles by default, or any), keep at most N of each item, and reserve (kept for workshops and trade).
 - [ ] Nobility: managers over aspects of production and people.
 - [ ] Colonist inventory: pack meals to eat away from stores.
 - [ ] Pollution.

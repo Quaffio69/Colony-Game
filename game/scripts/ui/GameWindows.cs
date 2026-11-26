@@ -319,7 +319,10 @@ public partial class InspectorWindow : GlyphWindow
     private readonly GameUi _ui;
     private Pick? _hover;
     private Label _mode = null!;
-    private Button _goto = null!, _follow = null!, _clear = null!;
+    private Button _goto = null!, _follow = null!, _clear = null!, _settings = null!;
+
+    /// <summary>The stockpile a selection is (null for anything else, a farm or a trade depot).</summary>
+    private Colony.Core.Items.Stockpile? StockpileOf(Pick? pick) => pick is PickZone { Farm: false } z ? _ui.Sim.Stockpiles.ZoneAt(z.Cell) : null;
 
     public InspectorWindow(GameUi ui) : base("inspect", "Inspect", "Θ", "info", "V")
     {
@@ -340,6 +343,11 @@ public partial class InspectorWindow : GlyphWindow
         _goto = G.Button(" Go to ", () => { if (Sel.Where is { } w) _ui.Main.FocusOn(w); }, "Centre the camera on it");
         _follow = G.Button(" Follow ", () => Sel.Follow = !Sel.Follow, "Keep the camera on this colonist (WASD or a right-drag stops)");
         _clear = G.Button(" × ", () => Sel.Clear(), "Clear the selection (Esc, or a right click)");
+        _settings = G.Button(" Settings ", () =>
+        {
+            if (StockpileOf(Sel.Current) is { } z && _ui.Window("stockpile") is StockpileWindow w) w.ShowZone(z.Id);
+        }, "This stockpile's settings: what it takes, priority, reach, which workshops draw from it (F8)");
+        bar.AddChild(_settings);
         bar.AddChild(_goto);
         bar.AddChild(_follow);
         bar.AddChild(_clear);
@@ -359,6 +367,7 @@ public partial class InspectorWindow : GlyphWindow
         _clear.Visible = Sel.Current != null;
         _follow.Visible = Sel.Current is PickColonist;
         _follow.Text = Sel.Follow ? " Following " : " Follow ";
+        _settings.Visible = StockpileOf(Sel.Current) is { } own && own.Faction == _ui.Me;
         G.Clear(Content);
         switch (pick)
         {
@@ -441,8 +450,22 @@ public partial class InspectorWindow : GlyphWindow
             return;
         }
         bool depot = sim.Stockpiles.IsDepot(z.Cell);
-        Content.AddChild(new GlyphSection(depot ? "Trade depot" : "Stockpile"));
+        var store = sim.Stockpiles.ZoneAt(z.Cell);
+        if (store != null && Sel.Current != z) cells = Sel.ZoneCells(z.Cell, false); // its own cells (a stockpile, not whatever touches it)
+        levels = cells.Select(c => c.Z).Distinct().Count();
+        Content.AddChild(new GlyphSection(depot ? "Trade depot" : store?.Name ?? "Stockpile"));
         if (sim.Factions.Count > 1) KV("Colony", sim.Factions[sim.Stockpiles.OwnerOf(z.Cell)].Name);
+        if (store != null)
+        {
+            int kinds = Catalog.Items.Count(d => d.Kind == ItemKind.Good), takes = Catalog.Items.Count(d => d.Kind == ItemKind.Good && store.Accepts(d.Type));
+            KV("Takes", takes == kinds ? "everything" : takes == 0 ? "nothing" : $"{takes} of {kinds} items", takes == 0 ? "bad" : "hi");
+            KV("Priority", store.Priority == 1 ? "1 (filled first)" : store.Priority.ToString());
+            KV("Hauls from", store.Reach == 0 ? "any distance" : $"within {store.Reach} tiles");
+            if (store.Cap > 0) KV("Keeps at most", $"{store.Cap} of each");
+            if (store.Reserve) KV("Reserve", "only workshops and trade take from it", "warn");
+            if (store.Access != WorkshopAccess.All)
+                KV("Workshops", (store.Access == WorkshopAccess.Only ? "only " : "all but ") + (store.Workshops.Count == 0 ? "none listed" : G.Plural(store.Workshops.Count, "listed", "listed")));
+        }
         if (depot) Content.AddChild(G.Para("Other colonies' traders deliver here what you buy from them (Trade, F6); your haulers carry it on to your stockpiles.", "Faint"));
         int racks = 0, capacity = 0, used = 0;
         var goods = new Dictionary<Colony.Core.Items.ItemType, int>();

@@ -36,10 +36,11 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   are dropped, never lost. Item kinds are data: `ItemType` is an index into `Industry.Catalog` (well-known
   ones as `ItemType.Log` etc.). Digging stone leaves stone 50% of the time, clay/sand/minerals always; felling
   leaves logs scaled by tree size (`ColonySim.MiningYield`/`LogYield`). Piles re-settle when their ground changes (digs,
-  cave-ins). `Stockpiles` are zoned floor cells (all types for now); `Hauling.Plans` pairs the nearest loose
-  piles with the nearest stockpile cell with room (linear scans; spatial index is the scale-up path). A load is `Balance.CarryKg` (30) over the item's `weight` in kg (default by category: 6 logs, 10 stone, 60 herbs); picking up, a
-  hauler tops it up from loose piles of the same item within 2 tiles (`Colonist.TopUp`: gathering leaves many small piles).
-  Who hauls is set by work priorities (see Work priorities). `ItemPiles.UnitsOf(type)` is a running per-type tally
+  cave-ins). `Stockpiles` are zoned floor cells grouped into **stockpiles with settings** (`Items.Stockpile`, see below);
+  `Hauling.Plans` pairs the nearest loose
+  piles with the best stockpile cell that takes them (linear scans; spatial index is the scale-up path). A load is `Balance.CarryKg` (30) over the item's `weight` in kg (default by category: 6 logs, 10 stone, 60 herbs); picking up, a
+  hauler tops it up from loose piles of the same item within 2 tiles (`Colonist.TopUp`: gathering leaves many small piles;
+  never past the destination stockpile's cap).
   (no scan). **Storage racks** (`Stockpiles.Racks`, `StructureKind.Rack`): warehouse shelving built on a stockpile cell
   (command `PlaceRacks` over a box, R turns the fronts; Build, Zones, Storage; removed by `RemoveStructures`, with its
   zone, or walled over: planks refunded via `Stockpiles.RackLost`). It rises into the open cells above, up to 3 levels
@@ -55,6 +56,24 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   (`ErectTicks`), works from the cell above where it stands (`OnScaffold`, `ReachFrom`), takes it down (`StrikeTicks`)
   and leaves it as a pile (haulers return it). Abandoned at any point, the scaffold stays where it stood. Designations
   only (dig and stairs) for now. `ColonistView` raises the colonist on a pole-and-deck scaffold as it goes up.
+- **Stockpile settings (`Items.Stockpile`, `Stockpiles.Zones`/`ZoneAt`, command `ConfigureStockpile`, window Stockpiles F8):**
+  every zoned cell but a trade depot's belongs to one stockpile (id, colony, name "Stockpile N"). A box zoned at once is
+  one stockpile: its first cell joins a stockpile of its colony it touches (8-way or a level up/down; lowest id) or starts
+  a new one; a lone cell joins one it touches; one whose last cell goes is gone. Old saves group connected cells on load
+  (`GroupOldCells`). Settings (`StockpileOption`): **name**; **priority** 1 (filled first) to 5, default 3: haulers take
+  the best priority that takes an item, then the nearest cell (`OfferStores` keys on priority, then distance), and goods
+  already stored move up to a stockpile of strictly better priority with room (`StoreView.BetterHome`; equal priorities
+  never trade goods back and forth); **items it takes** by category and single item (`Accepts`; default everything):
+  goods a stockpile no longer takes count as loose (`Hauling.RoleOf`) and are hauled out to one that does;
+  **haul-from reach**, default `Stockpile.DefaultReach` (500) straight-line tiles, 0 = any distance: loose goods farther
+  from a cell aren't brought to it (clearing a blueprint's footprint ignores reach); **workshop access** All / Only these
+  (whitelist) / All but these (blacklist), by room id: which workshops' input crates and room blueprints may draw from it
+  (`Lets`; walls and other structures always may); **keep at most N of each item** (`Cap`, 0 = no cap: counts what is
+  stored and on its way; `StoreView` gathers counts once per search); **reserve**: colonists don't eat, burn, wear,
+  furnish or fetch scaffolds from it (`Needs.Usable` is `Owned` minus reserves; machine stock limits still count it).
+  The wagon's extra loads spill only into cells of the same stockpile, within its filter and cap. Snapshot 13,
+  `StateHash` (settings and a `Fingerprint` of filter, list and name).
+  Who hauls is set by work priorities (see Work priorities). `ItemPiles.UnitsOf(type)` is a running per-type tally
 - **Production tree is data (`data/tech-tree.json`, embedded in Core, loaded by `Industry.Catalog`):** items
   (stack size, weight, pile model, colour), 12 broad DF-style workshops (`RoomType`), their 32 stations
   (`PartType`s with role Machine; build material by size) and 79 recipes (multi-input `Ingredient`s, output

@@ -623,6 +623,33 @@ public sealed record SetOrderPriority(TilePos A, TilePos B, int Priority) : Comm
     }
 }
 
+// ---- Stockpiles ----------------------------------------------------------------------------------------------
+
+/// <summary>
+/// Changes one setting of a stockpile (by id): its name, priority, reach, cap, reserve, workshop access and list, or
+/// which items it takes (see <see cref="StockpileOption"/> for what <see cref="Value"/>, <see cref="Arg"/> and
+/// <see cref="Text"/> mean for each).
+/// </summary>
+public sealed record ConfigureStockpile(int Stockpile, StockpileOption Option, int Value = 0, int Arg = 0, string Text = "") : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        if (sim.Stockpiles.ZoneById(Stockpile) is not { } zone) return "No such stockpile";
+        if (zone.Faction != Player) return "That stockpile belongs to another colony";
+        if (Option == StockpileOption.Workshop && Arg != 0 && sim.Rooms.All.FirstOrDefault(r => r.Id == Value) is null) return "No such workshop";
+        if (!sim.Stockpiles.Configure(zone, Option, Value, Arg, Text)) return "";
+        return Option switch
+        {
+            StockpileOption.Name => $"Stockpile renamed {zone.Name}",
+            StockpileOption.Priority => $"{zone.Name}: priority {zone.Priority}",
+            StockpileOption.Reach => zone.Reach == 0 ? $"{zone.Name} takes goods from any distance" : $"{zone.Name} takes goods from within {zone.Reach} tiles",
+            StockpileOption.Cap => zone.Cap == 0 ? $"{zone.Name} keeps any amount of each item" : $"{zone.Name} keeps at most {zone.Cap} of each item",
+            StockpileOption.Reserve => zone.Reserve ? $"{zone.Name} is a reserve: kept for workshops and trade" : $"{zone.Name} is open to everyone",
+            _ => "",
+        };
+    }
+}
+
 // ---- Dev mode ----------------------------------------------------------------------------------------------
 
 /// <summary>Turns dev mode on or off (single-player games only): instant, free construction, no schooling needed, and

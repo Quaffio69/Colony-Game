@@ -152,7 +152,9 @@ public partial class SelectionView : Node3D
     /// <summary>The zone's cells (stockpile or farm) joined to <paramref name="start"/>: same level 8-way, or a level up or down.</summary>
     public List<TilePos> ZoneCells(TilePos start, bool farm)
     {
-        bool In(TilePos p) => farm ? _sim.Farms.Contains(p) : _sim.Stockpiles.Contains(p);
+        // A stockpile is its own cells (two touching stockpiles stay apart); farms and depots are what joins up.
+        if (!farm && _sim.Stockpiles.ZoneAt(start) is { } store) return _sim.Stockpiles.CellsOf(store).Take(MaxZone).ToList();
+        bool In(TilePos p) => farm ? _sim.Farms.Contains(p) : _sim.Stockpiles.Contains(p) && _sim.Stockpiles.ZoneAt(p) == null;
         var seen = new HashSet<TilePos> { start };
         var queue = new Queue<TilePos>();
         queue.Enqueue(start);

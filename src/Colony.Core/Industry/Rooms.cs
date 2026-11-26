@@ -475,7 +475,7 @@ public sealed class Rooms
         if (sim.Factions.Count == 1) return sim.Items.UnitsOf(type);
         int n = 0;
         foreach (var (p, pile) in sim.Items.All)
-            if (pile.Type == type && Agents.Needs.Usable(sim, p, faction)) n += pile.Count;
+            if (pile.Type == type && Agents.Needs.Owned(sim, p, faction)) n += pile.Count;
         return n;
     }
 

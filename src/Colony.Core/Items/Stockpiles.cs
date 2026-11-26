@@ -5,8 +5,8 @@ namespace Colony.Core.Items;
 
 /// <summary>
 /// Cells the player has zoned for storage. Haulers bring loose piles here; a pile in a stockpile cell counts
-/// as stored. Cells are walkable floor cells (the open cell above the ground the player marked). Accepts every
-/// item type for now; filters and room-like grouping come with the factory builder.
+/// as stored. Cells are walkable floor cells (the open cell above the ground the player marked), grouped into
+/// <see cref="Stockpile"/>s with their own settings (what they take, priority, reach, which workshops draw from them).
 /// </summary>
 public sealed class Stockpiles
 {
@@ -33,17 +33,95 @@ public sealed class Stockpiles
         {
             // Re-zoning its own cell: a stockpile becomes a trade depot or back.
             if (_owners.Of(cell) != faction || _depots.Contains(cell) == depot) return false;
-            if (depot) _depots.Add(cell);
-            else _depots.Remove(cell);
+            if (depot)
+            {
+                _depots.Add(cell);
+                Unzone(cell);
+            }
+            else
+            {
+                _depots.Remove(cell);
+                Zone(cell, faction);
+            }
             Version++;
             return true;
         }
         if (!Movement.IsStandable(_world, cell) || IsBlocked?.Invoke(cell) == true || !_cells.Add(cell)) return false;
         _owners.Set(cell, faction);
         if (depot) _depots.Add(cell);
+        else Zone(cell, faction);
         Version++;
         return true;
     }
+
+    // ---- Stockpiles and their settings ---------------------------------------------------------------------
+    // Every zoned cell but a trade depot's belongs to one Stockpile. A box zoned at once is one stockpile (the first cell
+    // decides: it joins a stockpile of its colony it touches, else starts a new one); a lone cell joins one it touches.
+
+    private readonly List<Stockpile> _zones = new(); // by id
+    private readonly Dictionary<TilePos, Stockpile> _zoneOf = new();
+    private int _nextZone = 1;
+    private Stockpile? _boxZone; // the stockpile a box being zoned goes into
+
+    /// <summary>The colony's stockpiles, in id order (all colonies' when <paramref name="faction"/> is Any).</summary>
+    public IEnumerable<Stockpile> Zones(int faction = Owners.Any) => _zones.Where(z => faction == Owners.Any || z.Faction == faction);
+
+    /// <summary>The stockpile a cell belongs to (null for a trade depot or an unzoned cell).</summary>
+    public Stockpile? ZoneAt(TilePos p) => _zoneOf.GetValueOrDefault(p);
+
+    public Stockpile? ZoneById(int id)
+    {
+        int i = _zones.BinarySearch(new Stockpile(id, 0), ById);
+        return i >= 0 ? _zones[i] : null;
+    }
+
+    private static readonly Comparer<Stockpile> ById = Comparer<Stockpile>.Create((a, b) => a.Id.CompareTo(b.Id));
+
+    /// <summary>The cells of a stockpile.</summary>
+    public IReadOnlyCollection<TilePos> CellsOf(Stockpile zone) => zone.Cells;
+
+    /// <summary>Changes a stockpile's setting (bumps <see cref="Version"/> so haulers look again). False if nothing changed.</summary>
+    public bool Configure(Stockpile zone, StockpileOption option, int value, int arg = 0, string text = "")
+    {
+        if (!zone.Configure(option, value, arg, text)) return false;
+        Version++;
+        return true;
+    }
+
+    private void Zone(TilePos cell, int faction)
+    {
+        var zone = _boxZone is { } b && b.Faction == faction ? b : Touching(cell, faction) ?? NewZone(faction);
+        if (_boxing) _boxZone = zone;
+        zone.Cells.Add(cell);
+        _zoneOf[cell] = zone;
+    }
+
+    private Stockpile NewZone(int faction)
+    {
+        var zone = new Stockpile(_nextZone++, faction);
+        _zones.Add(zone);
+        return zone;
+    }
+
+    /// <summary>The lowest-id stockpile of the colony with a cell touching this one (8-way, or a level up or down).</summary>
+    private Stockpile? Touching(TilePos cell, int faction)
+    {
+        Stockpile? best = null;
+        for (int dz = -1; dz <= 1; dz++)
+        for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++)
+            if (_zoneOf.TryGetValue(cell.Offset(dx, dy, dz), out var z) && z.Faction == faction && (best is null || z.Id < best.Id)) best = z;
+        return best;
+    }
+
+    private void Unzone(TilePos cell)
+    {
+        if (!_zoneOf.Remove(cell, out var zone)) return;
+        zone.Cells.Remove(cell);
+        if (zone.Cells.Count == 0) _zones.Remove(zone);
+    }
+
+    private bool _boxing;
 
     // ---- Trade depots ------------------------------------------------------------------------------------
     // A trade depot is a stockpile zone where other colonies' traders deliver what they sold us. Goods there are the
@@ -113,6 +191,7 @@ public sealed class Stockpiles
         RemoveRack(cell);
         _cells.Remove(cell);
         _depots.Remove(cell);
+        Unzone(cell);
         _owners.Clear(cell);
         Version++;
         return true;
@@ -125,10 +204,14 @@ public sealed class Stockpiles
     public int AddFloorBox(TilePos a, TilePos b, int faction = 0, bool depot = false)
     {
         int n = 0;
+        _boxing = true; // one box, one stockpile
+        _boxZone = null;
         ForBox(a, b, p =>
         {
             if (TileInfo.IsSolid(_world.Get(p)) && Add(p.Offset(0, 0, 1), faction, depot)) n++;
         });
+        _boxing = false;
+        _boxZone = null;
         return n;
     }
 
@@ -160,6 +243,8 @@ public sealed class Stockpiles
         _owners.Compact();
         Net.SnapIO.Compact(_racks);
         Net.SnapIO.Compact(_depots);
+        foreach (var z in _zones) Net.SnapIO.Compact(z.Cells);
+        Net.SnapIO.Compact(_zoneOf);
     }
 
     internal void SnapSave(BinaryWriter w)
@@ -173,6 +258,14 @@ public sealed class Stockpiles
         w.Write(RackVersion);
         w.Write(_depots.Count);
         foreach (var p in _depots) Net.SnapIO.Write(w, p);
+        w.Write(_nextZone);
+        w.Write(_zones.Count);
+        foreach (var z in _zones)
+        {
+            z.SnapSave(w);
+            w.Write(z.Cells.Count);
+            foreach (var p in z.Cells) Net.SnapIO.Write(w, p);
+        }
     }
 
     internal void SnapLoad(BinaryReader r)
@@ -181,13 +274,62 @@ public sealed class Stockpiles
         for (int i = 0; i < n; i++) _cells.Add(Net.SnapIO.ReadPos(r));
         _owners.SnapLoad(r);
         Version = r.ReadInt32();
-        if (Net.SnapIO.Before(3)) return;
+        if (Net.SnapIO.Before(3)) { GroupOldCells(); return; }
         int racks = r.ReadInt32();
         for (int i = 0; i < racks; i++) _racks[Net.SnapIO.ReadPos(r)] = new Rack(r.ReadByte(), r.ReadByte());
         RackVersion = r.ReadInt32();
-        if (Net.SnapIO.Before(4)) return;
+        if (Net.SnapIO.Before(4)) { GroupOldCells(); return; }
         int depots = r.ReadInt32();
         for (int i = 0; i < depots; i++) _depots.Add(Net.SnapIO.ReadPos(r));
+        if (Net.SnapIO.Before(13))
+        {
+            GroupOldCells();
+            return;
+        }
+        _nextZone = r.ReadInt32();
+        int zones = r.ReadInt32();
+        for (int i = 0; i < zones; i++)
+        {
+            var z = Stockpile.SnapLoad(r);
+            _zones.Add(z);
+            int cells = r.ReadInt32();
+            for (int k = 0; k < cells; k++)
+            {
+                var p = Net.SnapIO.ReadPos(r);
+                z.Cells.Add(p);
+                _zoneOf[p] = z;
+            }
+        }
+    }
+
+    /// <summary>A save from before stockpiles had settings: each connected group of a colony's cells becomes one, with defaults.</summary>
+    private void GroupOldCells()
+    {
+        var order = _cells.Where(c => !_depots.Contains(c)).OrderBy(c => c.Z).ThenBy(c => c.Y).ThenBy(c => c.X).ToList();
+        foreach (var start in order)
+        {
+            if (_zoneOf.ContainsKey(start)) continue;
+            int faction = _owners.Of(start);
+            var zone = NewZone(faction);
+            var queue = new Queue<TilePos>();
+            queue.Enqueue(start);
+            zone.Cells.Add(start);
+            _zoneOf[start] = zone;
+            while (queue.Count > 0)
+            {
+                var c = queue.Dequeue();
+                for (int dz = -1; dz <= 1; dz++)
+                for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    var n = c.Offset(dx, dy, dz);
+                    if (!_cells.Contains(n) || _depots.Contains(n) || _zoneOf.ContainsKey(n) || _owners.Of(n) != faction) continue;
+                    zone.Cells.Add(n);
+                    _zoneOf[n] = zone;
+                    queue.Enqueue(n);
+                }
+            }
+        }
     }
 }
 

@@ -635,18 +635,21 @@ public sealed partial class Colonist
 
     /// <summary>
     /// Reserves room for up to <paramref name="want"/> more units in the stockpile cells round the haul's destination (same
-    /// level, same colony, nearest first), adding to the spill. Returns how many it found room for.
+    /// level, same stockpile, within its filter and cap; nearest first), adding to the spill. Returns how many it found room for.
     /// </summary>
     private int ReserveSpillRoom(ColonySim sim, int want, int component)
     {
-        int owner = sim.Stockpiles.OwnerOf(_haul.Destination), got = 0;
+        // Only into the same stockpile, and as far as its filter and cap allow.
+        if (sim.Stockpiles.ZoneAt(_haul.Destination) is not { } home) return 0;
+        want = Math.Min(want, home.Takes(_haul.Type, home.Held(_haul.Type, sim.Items)));
+        int got = 0;
         for (int r = 1; r <= WagonReach && got < want; r++)
         for (int dy = -r; dy <= r && got < want; dy++)
         for (int dx = -r; dx <= r && got < want; dx++)
         {
             if (Math.Max(Math.Abs(dx), Math.Abs(dy)) != r) continue;
             var c = _haul.Destination.Offset(dx, dy, 0);
-            if (!sim.Stockpiles.Contains(c) || sim.Stockpiles.IsDepot(c) || sim.Stockpiles.OwnerOf(c) != owner) continue;
+            if (sim.Stockpiles.ZoneAt(c) != home) continue;
             if (sim.Rooms.PartAt(c) != null || sim.Constructions.At(c) != null || sim.Connectivity.ComponentOf(c) != component) continue;
             int n = Math.Min(want - got, sim.Items.RoomAt(c, _haul.Type));
             if (n <= 0 || !sim.Items.ReserveIncoming(c, _haul.Type, n)) continue;
