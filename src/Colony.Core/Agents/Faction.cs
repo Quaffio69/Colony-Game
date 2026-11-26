@@ -19,6 +19,15 @@ public sealed class Faction
     public Housing Housing { get; }
     internal bool MagisterArrived;
 
+    /// <summary>
+    /// Who plays it online ("" while nobody has: a free colony). Set by the host (<see cref="Commands.ClaimColony"/>)
+    /// when a player takes it, and kept in saves, so a saved game hosted again gives each player back their own colony.
+    /// </summary>
+    public string Player { get; internal set; } = "";
+    /// <summary>A hash of that player's key (<see cref="Net.NetPlayer.KeyHash"/>): who they are, whatever name they use.</summary>
+    public string PlayerKey { get; internal set; } = "";
+    public bool Claimed => Player.Length > 0;
+
     public Faction(int id, string name)
     {
         Id = id;

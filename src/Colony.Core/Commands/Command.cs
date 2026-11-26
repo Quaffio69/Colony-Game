@@ -650,6 +650,27 @@ public sealed record ConfigureStockpile(int Stockpile, StockpileOption Option, i
     }
 }
 
+// ---- Online play -------------------------------------------------------------------------------------------
+
+/// <summary>
+/// The host records who plays a colony (<see cref="Name"/>, and a hash of their key), or with an empty name frees it for
+/// anyone. Kept in the game and its saves: a player who comes back to a saved game gets their own colony again. Only the
+/// host (colony 0) issues it; a guest's copy is refused.
+/// </summary>
+public sealed record ClaimColony(int Colony, string Name, string KeyHash) : Command
+{
+    public override string Apply(ColonySim sim)
+    {
+        if (Player != 0) return "Only the host hands out colonies";
+        if (Colony < 0 || Colony >= sim.Factions.Count) return "No such colony";
+        var f = sim.Factions[Colony];
+        bool freeing = Name.Trim().Length == 0;
+        f.Player = freeing ? "" : Name.Trim();
+        f.PlayerKey = freeing ? "" : KeyHash;
+        return freeing ? $"{f.Name} is free for anyone to join" : $"{f.Name} is {f.Player}'s";
+    }
+}
+
 // ---- Dev mode ----------------------------------------------------------------------------------------------
 
 /// <summary>Turns dev mode on or off (single-player games only): instant, free construction, no schooling needed, and

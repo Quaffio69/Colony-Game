@@ -27,6 +27,14 @@ public static class StateHash
         return h;
     }
 
+    /// <summary>A string as a number (FNV-1a: fixed, unlike string.GetHashCode).</summary>
+    private static long Text(string s)
+    {
+        ulong h = 14695981039346656037UL;
+        foreach (char c in s) h = (h ^ c) * 1099511628211UL;
+        return (long)h;
+    }
+
     private static long Pos(TilePos p) => ((long)p.Z << 42) | ((long)(p.Y & 0x1fffff) << 21) | (uint)(p.X & 0x1fffff);
 
     public static ulong Compute(ColonySim sim)
@@ -44,6 +52,8 @@ public static class StateHash
             sum += Of(4, Pos(p), sim.Stockpiles.OwnerOf(p));
         foreach (var (p, rack) in sim.Stockpiles.Racks)
             sum += Of(10, Pos(p), rack.Levels, rack.Facing);
+        foreach (var f in sim.Factions)
+            sum += Of(17, f.Id, Text(f.Player), Text(f.PlayerKey));
         foreach (var z in sim.Stockpiles.Zones())
             sum += Of(16, z.Id, z.Faction, z.Priority, z.Reach, z.Cap, z.Reserve ? 1 : 0, (long)z.Access, z.CellCount, z.Fingerprint);
         sum += Of(11, sim.Regrowth.Count, sim.Regrowth.Greened);

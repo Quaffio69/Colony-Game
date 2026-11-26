@@ -18,9 +18,9 @@ public class NetTests
     private static readonly GameSettings Small = new(Seed: 21, Width: 64, Depth: 64, Height: 40, Colonists: 3, Colonies: 2);
 
     /// <summary>Joins in the background while the host keeps polling (the welcome needs the host's attention).</summary>
-    private static LockstepClient Join(LockstepHost host, string name = "Guest")
+    private static LockstepClient Join(LockstepHost host, string name = "Guest", string key = "")
     {
-        var joining = Task.Run(() => LockstepClient.Connect("127.0.0.1", host.Port, name));
+        var joining = Task.Run(() => LockstepClient.Connect("127.0.0.1", host.Port, name, key: key));
         var clock = System.Diagnostics.Stopwatch.StartNew();
         while (!joining.IsCompleted && clock.ElapsedMilliseconds < 10000)
         {
@@ -166,5 +166,115 @@ public class NetTests
         Assert.Equal(StateHash.Compute(a), StateHash.Compute(b));
         b.Commands.Execute(new AddStockpile(new TilePos(10, 10, 0), new TilePos(40, 40, 39)));
         Assert.NotEqual(StateHash.Compute(a), StateHash.Compute(b));
+    }
+
+    // ---- Coming back: colonies remember their players ------------------------------------------------------
+
+    /// <summary>A join the host turns down: the reason it gives.</summary>
+    private static string Refused(LockstepHost host, string name, string key)
+    {
+        var e = Assert.ThrowsAny<Exception>(() => Join(host, name, key));
+        return (e is AggregateException a ? a.InnerException! : e).Message;
+    }
+
+    /// <summary>Leaves, and waits for the host to notice.</summary>
+    private static void Leave(LockstepHost host, LockstepClient client, int colony)
+    {
+        client.Dispose();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        while (host.IsOnline(colony) && clock.ElapsedMilliseconds < 5000)
+        {
+            host.Poll();
+            Thread.Sleep(2);
+        }
+        Assert.False(host.IsOnline(colony));
+    }
+
+    [Fact]
+    public void APlayerWhoLeaves_GetsTheirOwnColonyBack_AndNobodyElseTakesIt()
+    {
+        var hostSim = Small.Create();
+        using var host = new LockstepHost(hostSim, Small, port: 0, "Hana", "host-key");
+        Assert.Equal("Hana", hostSim.Factions[0].Player);
+        var ann = Join(host, "Ann", "ann-key");
+        Assert.Equal(1, ann.Faction);
+        Assert.Equal("Ann", hostSim.Factions[1].Player);
+        Assert.Equal(NetPlayer.KeyHash("ann-key"), hostSim.Factions[1].PlayerKey);
+        Assert.NotEqual("ann-key", hostSim.Factions[1].PlayerKey); // only a digest is kept
+        Leave(host, ann, 1);
+
+        // Someone else can't take Ann's colony while she is away.
+        Assert.Contains("held for Ann", Refused(host, "Bob", "bob-key"));
+
+        // Ann is back (under another name, same key): her colony, and the claim follows her new name.
+        using var back = Join(host, "Annie", "ann-key");
+        Assert.Equal(1, back.Faction);
+        var backSim = back.BuildWorld();
+        Assert.Equal("Annie", backSim.Factions[1].Player);
+        Assert.Equal(StateHash.Compute(hostSim), StateHash.Compute(backSim));
+    }
+
+    [Fact]
+    public void ASavedOnlineGame_HostedAgain_SeatsEachPlayerInTheirColony()
+    {
+        var settings = Small with { Colonies = 3 };
+        var first = settings.Create();
+        byte[] saved;
+        using (var host = new LockstepHost(first, settings, port: 0, "Hana", "host-key"))
+        {
+            var ann = Join(host, "Ann", "ann-key");
+            var bob = Join(host, "Bob", "bob-key");
+            Assert.Equal((1, 2), (ann.Faction, bob.Faction));
+            for (int i = 0; i < 50; i++) first.Step();
+            saved = Snapshot.Take(first, settings); // the host saves the game
+            ann.Dispose();
+            bob.Dispose();
+        }
+
+        // Another evening: the save is hosted again, and the players come back in the other order.
+        var again = Snapshot.Load(saved);
+        Assert.Equal(("Hana", "Ann", "Bob"), (again.Factions[0].Player, again.Factions[1].Player, again.Factions[2].Player));
+        using var host2 = new LockstepHost(again, settings, port: 0, "Hana", "host-key");
+        using var bob2 = Join(host2, "Bob", "bob-key");
+        Assert.Equal(2, bob2.Faction);
+        Assert.Contains("held for Ann", Refused(host2, "Cid", "cid-key"));
+
+        // Ann can't make it: the host frees her colony, and a newcomer takes it.
+        Assert.False(host2.Free(2)); // Bob is here
+        Assert.True(host2.Free(1));
+        Assert.False(again.Factions[1].Claimed);
+        using var cid = Join(host2, "Cid", "cid-key");
+        Assert.Equal(1, cid.Faction);
+        Assert.Equal("Cid", again.Factions[1].Player);
+    }
+
+    [Fact]
+    public void AColonyFromBeforeKeys_GoesByName_AndTwoCopiesOnOneComputerAreTwoPlayers()
+    {
+        var hostSim = (Small with { Colonies = 3 }).Create();
+        hostSim.Commands.Execute(new ClaimColony(2, "Old Timer", "")); // a save from before keys: a name only
+        using var host = new LockstepHost(hostSim, Small with { Colonies = 3 }, port: 0, "Hana", "shared-key");
+        using var old = Join(host, "old timer", "new-key");
+        Assert.Equal(2, old.Faction);
+        Assert.Equal(NetPlayer.KeyHash("new-key"), hostSim.Factions[2].PlayerKey); // its key from now on
+
+        // A second copy of the game on the host's computer (the same key): a player of its own, not refused.
+        using var twin = Join(host, "Twin", "shared-key");
+        Assert.Equal(1, twin.Faction);
+        Assert.Equal("", hostSim.Factions[1].PlayerKey);
+    }
+
+    [Fact]
+    public void AGuest_CantHandOutColonies()
+    {
+        var hostSim = Small.Create();
+        using var host = new LockstepHost(hostSim, Small, port: 0, "Hana", "host-key");
+        using var client = Join(host, "Ann", "ann-key");
+        var clientSim = client.BuildWorld();
+        client.Send(new ClaimColony(0, "Ann", "x")); // trying to take the host's colony
+        for (int f = 0; f < 20; f++) Frame(hostSim, host, clientSim, client);
+        Assert.Equal("Hana", hostSim.Factions[0].Player);
+        Assert.Equal("Hana", clientSim.Factions[0].Player);
+        Assert.Equal(StateHash.Compute(hostSim), StateHash.Compute(clientSim));
     }
 }

@@ -247,8 +247,21 @@ public partial class MainMenu : Control
         {
             _box.AddChild(G.Text(main.NetStatus, "Accent", align: HorizontalAlignment.Center));
             var players = main.Host?.Players ?? main.Client?.Players ?? [];
-            foreach (var p in players)
-                _box.AddChild(new GlyphKV("☺", ColonistView.FactionColor(p.Faction), p.Name, _ui.Sim.Factions[p.Faction].Name));
+            // Every colony: who plays it, and whether they're here. A colony held for an absent player waits for them
+            // (their own again when they rejoin, even from a save); the host can free it for a newcomer.
+            foreach (var colony in _ui.Sim.Factions)
+            {
+                var f = colony;
+                bool here = players.Any(p => p.Faction == f.Id);
+                var row = new HBoxContainer();
+                row.AddChild(new GlyphKV("☺", ColonistView.FactionColor(f.Id), f.Name,
+                    here ? $"{players.First(p => p.Faction == f.Id).Name} · here" : f.Claimed ? $"{f.Player} · away" : "free")
+                { SizeFlagsHorizontal = SizeFlags.ExpandFill });
+                if (main.Host is { } host && !here && f.Claimed && f.Id > 0)
+                    row.AddChild(G.Button(" Free ", () => { host.Free(f.Id); Build(); }, $"Stop holding {f.Name} for {f.Player}: the next player to join may take it"));
+                _box.AddChild(row);
+            }
+            _box.AddChild(G.Para("A player who leaves gets their own colony back when they rejoin, even after the game is saved and hosted again.", "Faint"));
             _box.AddChild(G.Gap(0.5f));
             Item("Leave", "", () => { main.LeaveOnline(); Build(); }, "Stop hosting, or leave the game you joined (this world stays open, offline)");
             Item("Back", "", () => Go(""), "Back to the menu");
@@ -267,8 +280,9 @@ public partial class MainMenu : Control
             return field;
         }
 
-        _name = Field("Name", main.PlayerName, "What other players see");
-        _port = Field("Port", Main.DefaultPort.ToString(), "The TCP port the host listens on (forward it on your router to play over the internet)");
+        var prefs = MultiplayerPrefs.Current;
+        _name = Field("Name", main.PlayerName, "What other players see (hosts know you by this computer's key, so changing it keeps your colony)");
+        _port = Field("Port", (prefs.LastPort > 0 ? prefs.LastPort : Main.DefaultPort).ToString(), "The TCP port the host listens on (forward it on your router to play over the internet)");
         int Port() => int.TryParse(_port!.Text.Trim(), out int p) && p is > 0 and < 65536 ? p : Main.DefaultPort;
         void TakeName() { if (_name!.Text.Trim() is { Length: > 0 } n) main.PlayerName = n; }
 
@@ -280,7 +294,7 @@ public partial class MainMenu : Control
             _problem = main.HostGame(Port());
             Build();
         }, main.Shareable && _ui.Sim.Factions.Count > 1
-            ? $"Others join this world as its other colonies ({_ui.Sim.Factions.Count - 1} free)"
+            ? $"Others join this world as its other colonies ({_ui.Sim.Factions.Skip(1).Count(c => !c.Claimed)} free" + (_ui.Sim.Factions.Skip(1).Any(c => c.Claimed) ? $"; held for {string.Join(", ", _ui.Sim.Factions.Skip(1).Where(c => c.Claimed).Select(c => c.Player))}, theirs again when they rejoin)" : ")")
             : "Only a world made by New colony (or Host a new world) with room for guests can be shared");
         hostHere.Disabled = !main.Shareable || _ui.Sim.Factions.Count < 2;
         var coloniesRow = new HBoxContainer();
@@ -296,13 +310,23 @@ public partial class MainMenu : Control
 
         _box.AddChild(G.Gap(0.5f));
         _box.AddChild(new GlyphSection("Join"));
-        _address = Field("Address", "127.0.0.1", "The host's address (their IP, or 127.0.0.1 for a game on this computer)");
+        if (prefs.LastAddress.Length > 0)
+        {
+            Item($"Rejoin {prefs.LastAddress}:{prefs.LastPort}", "Primary", () =>
+            {
+                TakeName();
+                _problem = main.JoinGame(prefs.LastAddress, prefs.LastPort);
+                if (_problem != null) Build();
+            }, "Back to the last game you joined: you get your own colony again");
+            _box.AddChild(G.Gap(0.35f));
+        }
+        _address = Field("Address", prefs.LastAddress.Length > 0 ? prefs.LastAddress : "127.0.0.1", "The host's address (their IP, or 127.0.0.1 for a game on this computer)");
         Item("Join", "Primary", () =>
         {
             TakeName();
             _problem = main.JoinGame(_address!.Text.Trim(), Port());
             if (_problem != null) Build();
-        }, "Connect, receive the game so far and take a free colony (building the world takes a moment)");
+        }, "Connect, receive the game so far and take your colony (the one you played before, else a free one; building the world takes a moment)");
         if (_problem != null) _box.AddChild(G.Para(_problem, "Bad"));
         _box.AddChild(G.Gap(0.5f));
         Item("Back", "", () => Go(""), "Back to the menu");

@@ -11,7 +11,7 @@ Lockstep networking, state hashes, snapshots and saves, the command system, fact
 
 - **Host-relayed lockstep over TCP** (plain .NET sockets in Core, no Godot: tested headless over loopback). The host's
   sim is the reference and never waits. `LockstepHost`: accepts clients (`Peer`: length-prefixed frames, a reader
-  thread filling an inbox drained on the main thread), gives each a free colony (refuses when full or on a protocol
+  thread filling an inbox drained on the main thread), seats each in a colony (see **Coming back** below; refuses when none is free or on a protocol
   mismatch), sends a Welcome (colony, `GameSettings`, the tick, a `Snapshot` of the game), stamps the client's colony on
   every command it sends (`with { Player = faction }`: nobody acts for another colony) and submits it; each frame
   `Broadcast` flushes (so commands apply even while paused) and sends each client a Turn: newly logged commands with
@@ -22,6 +22,20 @@ Lockstep networking, state hashes, snapshots and saves, the command system, fact
   `DesyncTick`), `Send`. Guests trail the host by their latency and catch up. On a desync the client stops (no more
   ticks) and sends `Msg.Resync`; the host answers `Msg.State` (its tick and a fresh snapshot, like a join; turns go on
   from there), the client drops what it had queued, and the game opens it (`ResyncReady`, `TakeResync`, a scene reload).
+- **Coming back (rejoining, saved sessions):** each colony records who plays it (`Faction.Player`, `PlayerKey`: a
+  24-hex SHA-256 digest of the player's key, `NetPlayer.KeyHash`; the key never leaves the host), set by the host's
+  `ClaimColony` command (guests' copies are refused), so every peer, snapshot and save agrees (snapshot 14, `StateHash`).
+  Each install makes a random key once (game `MultiplayerPrefs`, `user://multiplayer.json`: name, key, last address and
+  port) and sends it in the Hello. `LockstepHost.Seat`: the colony whose key matches (an absent player: theirs, under
+  any name), else one recorded with a name but no key (a save from before keys) matching the name, else a colony nobody
+  has played; colonies held for absent players wait for them ("held for Ann until they come back"). A key matching a
+  connected player is a second copy of the game on one computer: it joins as a keyless player of its own. The host
+  plays colony 0 and claims it at start; `Free(colony)` releases an absent player's colony to the next newcomer. So a
+  saved online game, loaded and hosted again another day, seats everyone in their own colony. Main menu Multiplayer:
+  name, port and address remembered, Rejoin (last game), and online every colony with "here" / "away" / "free" and Free
+  for the host. Dev: `--key=` (a key for this run; with `--name`, nothing is saved). Tested over loopback (rejoining by
+  key under a new name, a save hosted again with players returning in another order, freeing, keyless saves by name,
+  two copies on one computer, a guest's claim refused) and across two processes (`--key`, matching hashes).
 - **`StateHash`:** colonists, piles, designations, stockpiles, rooms, blueprints, edge/cover revisions, combined
   order-independently with a fixed 64-bit mix (never `HashCode`: seeded per process; also never enumerate
   string-keyed dictionaries in sim logic, their order differs between processes).

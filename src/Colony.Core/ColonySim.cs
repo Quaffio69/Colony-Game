@@ -862,6 +862,8 @@ public sealed partial class ColonySim
             w.Write(f.Landing.HasValue);
             if (f.Landing is { } l) Net.SnapIO.Write(w, l);
             w.Write(f.MagisterArrived);
+            w.Write(f.Player);
+            w.Write(f.PlayerKey);
             f.Society.SnapSave(w);
             f.Housing.SnapSave(w);
         }
@@ -926,6 +928,7 @@ public sealed partial class ColonySim
             f.Name = name;
             f.Landing = landing;
             f.MagisterArrived = r.ReadBoolean();
+            if (!Net.SnapIO.Before(14)) { f.Player = r.ReadString(); f.PlayerKey = r.ReadString(); }
             f.Society.SnapLoad(r);
             f.Housing.SnapLoad(r, sim.Rooms, byId);
         }

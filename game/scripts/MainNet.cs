@@ -30,7 +30,22 @@ public partial class Main
     public bool Online => s_host != null || s_client != null;
     /// <summary>This world can be saved and shared (snapshots hold everything; only test worlds lack the settings).</summary>
     public bool Shareable => ReferenceEquals(s_replayable, _sim) && s_settings != null;
-    public string PlayerName { get; set; } = System.Environment.UserName is { Length: > 0 } n ? n : "Player";
+    /// <summary>The name other players see (remembered in <see cref="MultiplayerPrefs"/>; --name overrides it for the run).</summary>
+    public string PlayerName
+    {
+        get => s_nameOverride ?? MultiplayerPrefs.Current.Name;
+        set
+        {
+            s_nameOverride = null;
+            if (MultiplayerPrefs.Current.Name == value) return;
+            MultiplayerPrefs.Current.Name = value;
+            MultiplayerPrefs.Current.Save();
+        }
+    }
+    private static string? s_nameOverride, s_keyOverride;
+    private static bool s_devNet; // joined or hosted by a dev flag: nothing remembered
+    /// <summary>This install's private key: hosts know a returning player by it (--key overrides it for the run).</summary>
+    private static string PlayerKey => s_keyOverride ?? MultiplayerPrefs.Current.Key;
 
     /// <summary>Remembers how a freshly generated world was made (called once it exists).</summary>
     private void RememberSettings()
@@ -48,14 +63,14 @@ public partial class Main
         if (_sim.Factions.Count < 2) return "This world has one colony: start a new one with room for guests";
         try
         {
-            s_host = new LockstepHost(_sim, s_settings!, port, PlayerName);
+            s_host = new LockstepHost(_sim, s_settings!, port, PlayerName, PlayerKey);
         }
         catch (Exception e)
         {
             return $"Can't host on port {port}: {e.Message}";
         }
         HookSession();
-        UI.GlyphStatus.Say($"Hosting on port {s_host.Port}: {_sim.Factions.Count - 1} colonies free for guests");
+        UI.GlyphStatus.Say($"Hosting on port {s_host.Port}: {_sim.Factions.Skip(1).Count(f => !f.Claimed)} colonies free" + (_sim.Factions.Skip(1).Any(f => f.Claimed) ? $", held for {string.Join(", ", _sim.Factions.Skip(1).Where(f => f.Claimed).Select(f => f.Player))}" : ""));
         return null;
     }
 
@@ -72,9 +87,11 @@ public partial class Main
         if (Online) return "Already online";
         try
         {
-            var client = LockstepClient.Connect(address, port, PlayerName);
+            var client = LockstepClient.Connect(address, port, PlayerName, key: PlayerKey);
             var sim = client.BuildWorld(); // the same world, replayed to where the host was when we joined
             s_client = client;
+            var prefs = MultiplayerPrefs.Current; // for Rejoin next time
+            if (!s_devNet && (prefs.LastAddress != address || prefs.LastPort != port)) { prefs.LastAddress = address; prefs.LastPort = port; prefs.Save(); }
             s_settings = client.Settings;
             s_replayable = sim;
             s_player = client.Faction;
@@ -218,7 +235,9 @@ public partial class Main
     /// <summary>Dev flags: --host[=PORT], --join=ADDRESS[:PORT], --name=NAME, --speed=0..2.</summary>
     private void NetDevArgs()
     {
-        if (Arg("--name") is { Length: > 0 } name) PlayerName = name;
+        if (Arg("--name") is { Length: > 0 } name) s_nameOverride = name; // for this run only
+        if (Arg("--key") is { Length: > 0 } key) s_keyOverride = key;
+        s_devNet |= Arg("--join") != null || Arg("--host") != null;
         if (int.TryParse(Arg("--speed"), out int speed)) SpeedIndex = speed;
         if (Arg("--host") is { } host && !Online)
         {

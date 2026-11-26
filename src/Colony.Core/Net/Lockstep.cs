@@ -116,10 +116,19 @@ internal sealed class Peer : IDisposable
 }
 
 /// <summary>A player in a networked game.</summary>
-public sealed record NetPlayer(int Faction, string Name);
+public sealed record NetPlayer(int Faction, string Name)
+{
+    /// <summary>
+    /// What the host keeps of a player's key (a random secret each install makes once): a short SHA-256 digest, so the
+    /// key itself never travels on to other players or into saves. Empty for no key.
+    /// </summary>
+    public static string KeyHash(string key) => key.Length == 0 ? ""
+        : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)))[..24];
+}
 
 /// <summary>
-/// The host of a lockstep game: its sim is the reference. Clients connect, each gets a free colony and a copy of the
+/// The host of a lockstep game: its sim is the reference. Clients connect, each gets its colony (its own again when it
+/// comes back, by its key: see <see cref="Seat"/>; else a free one) and a copy of the
 /// game as it stands (a snapshot); their commands are applied on the host before its next tick, stamped with
 /// their colony. After each frame <see cref="Broadcast"/> streams the newly logged commands and the host's tick, so
 /// every client applies the same commands before the same ticks, and a state hash now and then catches desyncs.
@@ -127,7 +136,7 @@ public sealed record NetPlayer(int Faction, string Name);
 /// </summary>
 public sealed class LockstepHost : IDisposable
 {
-    public const int Protocol = 16;
+    public const int Protocol = 17;
     /// <summary>Ticks between desync checks (5 s at 1x).</summary>
     public const int HashInterval = 100;
 
@@ -150,7 +159,7 @@ public sealed class LockstepHost : IDisposable
     public int Port { get; }
     public event Action<string>? Message;
 
-    public LockstepHost(ColonySim sim, GameSettings settings, int port, string hostName = "Host")
+    public LockstepHost(ColonySim sim, GameSettings settings, int port, string hostName = "Host", string hostKey = "")
     {
         _sim = sim;
         _settings = settings;
@@ -158,6 +167,9 @@ public sealed class LockstepHost : IDisposable
         _listener = new TcpListener(IPAddress.Any, port);
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+        // The host plays the first colony; recorded like anyone's, so its saves know whose it is.
+        string hash = NetPlayer.KeyHash(hostKey);
+        if (sim.Factions[0].Player != hostName || sim.Factions[0].PlayerKey != hash) sim.Commands.Execute(new ClaimColony(0, hostName, hash));
     }
 
     public IReadOnlyList<NetPlayer> Players =>
@@ -196,13 +208,18 @@ public sealed class LockstepHost : IDisposable
                     Refuse(c, $"version mismatch (host {Protocol}, you {version})");
                     return;
                 }
-                var taken = _clients.Where(o => o.Faction > 0).Select(o => o.Faction).ToHashSet();
-                int free = Enumerable.Range(1, Math.Max(0, _sim.Factions.Count - 1)).FirstOrDefault(f => !taken.Contains(f));
-                if (free == 0)
+                string key = r.BaseStream.Position < r.BaseStream.Length ? r.ReadString() : "";
+                string hash = NetPlayer.KeyHash(key);
+                if (_sim.Factions.Where((_, i) => IsOnline(i)).Any(o => hash.Length > 0 && o.PlayerKey == hash)) hash = ""; // a second copy on one computer: a player of its own
+                var (free, back, why) = Seat(c.Name, hash);
+                if (free <= 0)
                 {
-                    Refuse(c, $"the game is full ({_sim.Factions.Count} colonies)");
+                    Refuse(c, why);
                     return;
                 }
+                // Recorded in the game (and its saves) through a command, so every peer agrees on whose colony it is.
+                var colony = _sim.Factions[free];
+                if (colony.Player != c.Name || colony.PlayerKey != hash) _sim.Commands.Execute(new ClaimColony(free, c.Name, hash));
                 // A snapshot of the game as it stands (settling it is a command: guests already here settle before this tick too).
                 var state = Snapshot.Take(_sim, _settings);
                 c.Faction = free;
@@ -217,7 +234,7 @@ public sealed class LockstepHost : IDisposable
                     w.Write(log.Length);
                     w.Write(log);
                 }));
-                Message?.Invoke($"{c.Name} joined as {_sim.Factions[free].Name}");
+                Message?.Invoke(back ? $"{c.Name} is back, playing {colony.Name}" : $"{c.Name} joined as {colony.Name}");
                 SendPlayers();
                 break;
             case Msg.Resync when c.Faction > 0:
@@ -237,6 +254,45 @@ public sealed class LockstepHost : IDisposable
                 c.Peer.Closed = true;
                 break;
         }
+    }
+
+    /// <summary>
+    /// The colony a player joining with this name and key hash takes: their own if they played one before (the key
+    /// decides; a colony recorded with no key, as in a save from before keys, goes by name), else a free one nobody has
+    /// played; colonies held for absent players wait for them (the host can free one: <see cref="Free"/>). 0 with the
+    /// reason when there is none.
+    /// </summary>
+    private (int Colony, bool Back, string Why) Seat(string name, string hash)
+    {
+        var online = _clients.Where(o => o.Faction > 0).Select(o => o.Faction).Append(0).ToHashSet();
+        var colonies = _sim.Factions;
+        for (int f = 0; f < colonies.Count; f++)
+            if (hash.Length > 0 && colonies[f].PlayerKey == hash && !online.Contains(f)) return (f, true, "");
+        // (The same key as a connected player: a second copy of the game on one computer. It joins as a player of its own.)
+        for (int f = 1; f < colonies.Count; f++)
+            if (!online.Contains(f) && colonies[f].PlayerKey.Length == 0 && string.Equals(colonies[f].Player, name, StringComparison.OrdinalIgnoreCase))
+                return (f, true, "");
+        for (int f = 1; f < colonies.Count; f++)
+            if (!online.Contains(f) && !colonies[f].Claimed) return (f, false, "");
+        var away = Enumerable.Range(1, colonies.Count - 1).Where(f => !online.Contains(f)).Select(f => colonies[f].Player).ToList();
+        return (0, false, away.Count > 0
+            ? $"every colony is taken: the others are held for {string.Join(", ", away)} until they come back (or the host frees one)"
+            : $"the game is full ({colonies.Count} colonies)");
+    }
+
+    /// <summary>Whether a colony's player is connected (the host always is).</summary>
+    public bool IsOnline(int colony) => colony == 0 || _clients.Any(c => c.Faction == colony);
+
+    /// <summary>
+    /// The host frees a colony held for an absent player: the next newcomer may take it (false while its player is
+    /// connected, or for the host's own).
+    /// </summary>
+    public bool Free(int colony)
+    {
+        if (colony <= 0 || colony >= _sim.Factions.Count || IsOnline(colony)) return false;
+        _sim.Commands.Execute(new ClaimColony(colony, "", ""));
+        SendPlayers();
+        return true;
     }
 
     private void Refuse(Client c, string reason)
@@ -350,12 +406,12 @@ public sealed class LockstepClient : IDisposable
     }
 
     /// <summary>Connects, says hello and waits for the welcome (or a refusal, thrown as an exception with the host's reason).</summary>
-    public static LockstepClient Connect(string host, int port, string name, int timeoutMs = 10000)
+    public static LockstepClient Connect(string host, int port, string name, int timeoutMs = 10000, string key = "")
     {
         var tcp = new TcpClient();
         if (!tcp.ConnectAsync(host, port).Wait(timeoutMs)) throw new TimeoutException($"no answer from {host}:{port}");
         var peer = new Peer(tcp);
-        peer.Send(Msg.Hello, Peer.Pack(w => { w.Write(LockstepHost.Protocol); w.Write(name); }));
+        peer.Send(Msg.Hello, Peer.Pack(w => { w.Write(LockstepHost.Protocol); w.Write(name); w.Write(key); }));
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var early = new List<(Msg, byte[])>();
         while (clock.ElapsedMilliseconds < timeoutMs)

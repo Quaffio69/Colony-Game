@@ -82,7 +82,7 @@ public static class CommandCodec
         RemoveStructures, PlaceEdge, RemoveEdge, EdgeLine, PlaceOutline, ClearWalls, Covers, SetWorkPriority, SetHomePolicy,
         SetPolicyTier, SetPolicyPerResident, SetPolicyShared, AddPolicy, SettleGame, SetDrafted, SquadMove, SquadAttack, DebugSpawnNest, PlaceRacks, Demolish,
         AddTradeDepot, ProposeTrade, CounterTrade, AcceptTrade, RejectTrade, SetMachineLimit, PlaceHouse, SetOrderPriority, SetDevMode, DevSpawn,
-        ConfigureStockpile,
+        ConfigureStockpile, ClaimColony,
     }
 
     private static void Terms(BinaryWriter w, Trade.TradeTerms t)
@@ -172,6 +172,7 @@ public static class CommandCodec
             case SetDevMode x: Head(Tag.SetDevMode); w.Write(x.On); w.Write(x.InstantOrders); break;
             case DevSpawn x: Head(Tag.DevSpawn); P(w, x.At); w.Write(x.ItemId); w.Write(x.Count); break;
             case ConfigureStockpile x: Head(Tag.ConfigureStockpile); w.Write(x.Stockpile); w.Write((byte)x.Option); w.Write(x.Value); w.Write(x.Arg); w.Write(x.Text); break;
+            case ClaimColony x: Head(Tag.ClaimColony); w.Write(x.Colony); w.Write(x.Name); w.Write(x.KeyHash); break;
             case ClearWalls x: Head(Tag.ClearWalls); P(w, x.A); P(w, x.B); break;
             case Covers x: Head(Tag.Covers); w.Write((byte)x.Kind); P(w, x.A); P(w, x.B); w.Write(x.Material); w.Write(x.Remove); break;
             case SetWorkPriority x: Head(Tag.SetWorkPriority); w.Write(x.ColonistId); w.Write((byte)x.Work); w.Write(x.Priority); break;
@@ -229,6 +230,7 @@ public static class CommandCodec
             Tag.SetDevMode => new SetDevMode(r.ReadBoolean(), r.ReadBoolean()),
             Tag.DevSpawn => new DevSpawn(P(r), r.ReadString(), r.ReadInt32()),
             Tag.ConfigureStockpile => new ConfigureStockpile(r.ReadInt32(), (Items.StockpileOption)r.ReadByte(), r.ReadInt32(), r.ReadInt32(), r.ReadString()),
+            Tag.ClaimColony => new ClaimColony(r.ReadInt32(), r.ReadString(), r.ReadString()),
             Tag.ClearWalls => new ClearWalls(P(r), P(r)),
             Tag.Covers => new Covers((StructureKind)r.ReadByte(), P(r), P(r), r.ReadInt32(), r.ReadBoolean()),
             Tag.SetWorkPriority => new SetWorkPriority(r.ReadInt32(), (Work)r.ReadByte(), r.ReadInt32()),

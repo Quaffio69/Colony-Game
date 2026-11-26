@@ -112,7 +112,7 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [x] Mining gets harder deeper down (rock kinds, and slower per level below zero), with bigger deposits and gems as the reward.
 
 ### Multiplayer
-- [ ] Saved multiplayer sessions that players can rejoin.
+- [x] Saved multiplayer sessions that players can rejoin: each colony remembers its player (by a per-install key, kept only as a digest), so a returning player gets their own colony back, even from a save hosted again another day; the host can free an absent player's colony; Rejoin in the menu.
 - [ ] Option to see other colonies' work orders.
 
 ### World
