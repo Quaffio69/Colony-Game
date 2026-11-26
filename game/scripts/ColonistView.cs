@@ -31,7 +31,8 @@ public partial class ColonistView : Node3D
         public MeshInstance3D? Seat; // a machine's driver, in its colour, while someone drives it
         public Label3D Tag = null!;
         public Colonist? ShownDriver;
-        public float Heading; // a machine faces where it drives
+        public float Heading; // where a machine's tracks or wheels point
+        public Node3D? House; public float Slew; // the excavator's house and where it faces (world angle)
         public ItemType? ShownWeapon, ShownShield, ShownArmour;
     }
 
@@ -118,7 +119,7 @@ public partial class ColonistView : Node3D
 
     // ---- Heavy machinery: dwarven steam engines on tracks and wheels (facing +x, turned by Heading) ----------------
 
-    private static Mesh? _excavatorMesh, _wagonMesh, _boomMesh, _stickMesh, _bucketMesh;
+    private static Mesh? _tracksMesh, _houseMesh, _wagonMesh, _boomMesh, _stickMesh, _bucketMesh;
 
     private static StandardMaterial3D Mat(string hex, float metal = 0f, float rough = 0.6f) =>
         new() { AlbedoColor = Color.FromHtml(hex), Metallic = metal, Roughness = rough };
@@ -134,7 +135,17 @@ public partial class ColonistView : Node3D
     {
         bool excavator = v.Colonist.Machine == MachineKind.Excavator;
         v.Body.Scale = Vector3.One * 1.3f; // heavy machinery: bigger than a person, still within its cell
-        v.Body.AddChild(new MeshInstance3D { Mesh = excavator ? _excavatorMesh ??= BuildExcavator() : _wagonMesh ??= BuildWagon() });
+        // The excavator's house turns on its slew ring apart from the tracks: the cab, boom and driver ride on it.
+        Node3D top = v.Body;
+        if (excavator)
+        {
+            v.Body.AddChild(new MeshInstance3D { Mesh = _tracksMesh ??= BuildTracks() });
+            v.House = new Node3D { Name = "House" };
+            v.House.AddChild(new MeshInstance3D { Mesh = _houseMesh ??= BuildHouse() });
+            v.Body.AddChild(v.House);
+            top = v.House;
+        }
+        else v.Body.AddChild(new MeshInstance3D { Mesh = _wagonMesh ??= BuildWagon() });
         // Its driver: head and shoulders out of the cab's roof hatch, or standing on the wagon's footplate behind the boiler.
         v.Seat = new MeshInstance3D
         {
@@ -142,7 +153,7 @@ public partial class ColonistView : Node3D
             Position = excavator ? new Vector3(0.14f, 0.66f, -0.13f) : new Vector3(-0.34f, 0.47f, 0),
             Visible = false,
         };
-        v.Body.AddChild(v.Seat);
+        top.AddChild(v.Seat);
         if (!excavator) return;
         // Boom -> stick -> bucket, each a pivot turned about the side (z) axis, mounted beside the cab.
         v.Boom = new Node3D { Position = new Vector3(0.14f, 0.42f, 0.08f), Rotation = new Vector3(0, 0, BoomRest) };
@@ -153,7 +164,7 @@ public partial class ColonistView : Node3D
         v.Bucket.AddChild(new MeshInstance3D { Mesh = _bucketMesh ??= BuildBucket() });
         v.Stick.AddChild(v.Bucket);
         v.Boom.AddChild(v.Stick);
-        v.Body.AddChild(v.Boom);
+        top.AddChild(v.Boom);
     }
 
     private const float BoomLength = 0.5f, StickLength = 0.36f;
@@ -176,9 +187,24 @@ public partial class ColonistView : Node3D
         v.Bucket!.Rotation = new Vector3(0, 0, Mathf.Lerp(v.Bucket.Rotation.Z, bucket, k));
     }
 
-    /// <summary>The steam excavator's tracks and house: iron tracks under a slew ring, a riveted deck with the driver's cab
-    /// up front, a copper boiler and smokestack behind it, a glowing firebox and an iron counterweight at the back.</summary>
-    private static Mesh BuildExcavator()
+    /// <summary>The steam excavator's undercarriage: iron tracks on brass road wheels under the slew ring.</summary>
+    private static Mesh BuildTracks()
+    {
+        var iron = Mat("#3a3634", 0.4f, 0.7f);
+        var brass = Mat("#d0a040", 0.85f, 0.3f);
+        var p = new MeshKit.Parts();
+        foreach (float z in new[] { -0.27f, 0.27f })
+        {
+            p.Add(MeshKit.Box(0.86f, 0.2f, 0.17f), 0, 0.1f, z, iron); // tracks
+            foreach (float x in new[] { -0.3f, 0f, 0.3f }) p.Add(MeshKit.Cyl(0.08f, 0.19f, 10), MeshKit.AlongZ(x, 0.1f, z), brass); // road wheels
+        }
+        p.Add(MeshKit.Cyl(0.24f, 0.06f, 16), 0, 0.23f, 0, brass); // slew ring
+        return MeshKit.Compose(p);
+    }
+
+    /// <summary>The house that slews on the ring: a riveted deck with the driver's cab up front, a copper boiler and
+    /// smokestack behind it, a glowing firebox and an iron counterweight at the back.</summary>
+    private static Mesh BuildHouse()
     {
         var iron = Mat("#3a3634", 0.4f, 0.7f);
         var chassis = Mat("#5e554e", 0.5f, 0.55f);
@@ -187,12 +213,6 @@ public partial class ColonistView : Node3D
         var soot = Mat("#262222", 0.3f, 0.8f);
         var glass = Mat("#ffd890", 0.2f, 0.2f);
         var p = new MeshKit.Parts();
-        foreach (float z in new[] { -0.27f, 0.27f })
-        {
-            p.Add(MeshKit.Box(0.86f, 0.2f, 0.17f), 0, 0.1f, z, iron); // tracks
-            foreach (float x in new[] { -0.3f, 0f, 0.3f }) p.Add(MeshKit.Cyl(0.08f, 0.19f, 10), MeshKit.AlongZ(x, 0.1f, z), brass); // road wheels
-        }
-        p.Add(MeshKit.Cyl(0.24f, 0.06f, 16), 0, 0.23f, 0, brass); // slew ring
         p.Add(MeshKit.Box(0.66f, 0.1f, 0.5f), -0.04f, 0.31f, 0, chassis); // deck
         p.Add(MeshKit.Box(0.26f, 0.28f, 0.22f), 0.14f, 0.5f, -0.13f, chassis); // cab
         p.Add(MeshKit.Box(0.27f, 0.03f, 0.23f), 0.14f, 0.655f, -0.13f, iron); // cab roof
@@ -356,11 +376,30 @@ public partial class ColonistView : Node3D
 
             if (c.IsMachine)
             {
-                // Machines turn to face where they're driven (or what they dig), and the excavator's arm scoops while it digs.
                 var op = c.Driver;
                 bool working = op is { State: ColonistState.Working } && !c.Downed;
-                Vector3? toward = c.NextStep is { } ns ? Foot(ns) - Foot(c.Position) : working && op!.JobTarget is { } jt ? SimSpace.TileCenter(jt) - pos : null;
-                if (toward is { } d && new Vector2(d.X, d.Z).LengthSquared() > 0.001f) v.Heading = Mathf.LerpAngle(v.Heading, Mathf.Atan2(-d.Z, d.X), Mathf.Min(1f, (float)delta * 8f));
+                float turn = Mathf.Min(1f, (float)delta * 8f);
+                Vector3? work = working && op!.JobTarget is { } jt ? SimSpace.TileCenter(jt) - pos : null;
+                if (v.House != null)
+                {
+                    // The excavator: its tracks drive forward or back along their line, so they turn only to move off it (by at
+                    // most a quarter turn, whichever end leads); its house slews on the ring to face the dig, and otherwise
+                    // keeps facing where it was while the tracks move under it.
+                    if (c.NextStep is { } ns && Flat(Foot(ns) - Foot(c.Position)) is { } move)
+                    {
+                        float ahead = Mathf.Atan2(-move.Z, move.X);
+                        if (Mathf.Abs(Mathf.AngleDifference(v.Heading, ahead)) > Mathf.Pi / 2) ahead += Mathf.Pi; // reverse
+                        v.Heading = Mathf.LerpAngle(v.Heading, ahead, turn);
+                    }
+                    if (work is { } w && Flat(w) is { } at) v.Slew = Mathf.LerpAngle(v.Slew, Mathf.Atan2(-at.Z, at.X), turn);
+                    v.House.Rotation = new Vector3(0, v.Slew - v.Heading, 0);
+                }
+                else
+                {
+                    // The wagon turns to face where it is driven (or its work).
+                    Vector3? toward = c.NextStep is { } ns ? Foot(ns) - Foot(c.Position) : work;
+                    if (toward is { } d && Flat(d) is { } f) v.Heading = Mathf.LerpAngle(v.Heading, Mathf.Atan2(-f.Z, f.X), turn);
+                }
                 v.Body.Rotation = new Vector3(0, v.Heading, 0);
                 if (v.Boom != null) Scoop(v, working && op!.Task == ColonistTask.Designation, (float)delta);
                 if (op != v.ShownDriver)
@@ -428,4 +467,7 @@ public partial class ColonistView : Node3D
     }
 
     private static Vector3 Foot(TilePos p) => new(p.X + 0.5f, p.Z, p.Y + 0.5f);
+
+    /// <summary>A direction with any horizontal part (null when straight up or down, or nothing).</summary>
+    private static Vector3? Flat(Vector3 d) => new Vector2(d.X, d.Z).LengthSquared() > 0.001f ? d : null;
 }

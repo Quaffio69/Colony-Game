@@ -152,7 +152,11 @@ Pacing knobs (Balance.cs), the industry direction, flora, items and hauling, rac
   is let go on settle), `StateHash`. **Look (`ColonistView`):** the excavator on iron tracks, its house turning on a slew
   ring (cab, copper boiler, smokestack, glowing firebox, counterweight), a brass boom and stick with steam rams and a
   toothed bucket that scoops while it digs; the wagon a plank bed on four wheels with a boiler up front and its driver's
-  load heaped in the bed; both turn to face where they are driven and stand 1.3x a person. A driver vanishes into its
+  load heaped in the bed; both stand 1.3x a person. The excavator's tracks (`BuildTracks`) drive forward or back along
+  their line like a real one, turning only to move off it (at most a quarter turn, whichever end leads), while its house
+  (`BuildHouse`: cab, boiler, boom, driver) slews on the ring to face the dig and keeps its facing while the tracks move;
+  so digging a line towards itself it backs up a tile at a time without turning round. The wagon turns to face where it
+  is driven. A driver vanishes into its
   machine: a small figure in its colour in the cab's roof hatch (on the wagon's footplate), its name on the machine's tag
   ("Excavator 1 · Edric"). Hover card: fuel and who drives it; machines are left out of the work grid. `--machines-demo`
   shows both at work.
