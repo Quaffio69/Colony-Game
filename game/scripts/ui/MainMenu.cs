@@ -21,7 +21,7 @@ public partial class MainMenu : Control
     private LineEdit? _name, _address, _port;
     private int _size = 1, _colonies = 1;
     private LineEdit? _seed;
-    private static readonly int[] Sizes = [512, 1024, 2048];
+    private static readonly int[] Sizes = [512, 1024, 2048, 4096];
 
     public MainMenu(GameUi ui)
     {
@@ -346,7 +346,8 @@ public partial class MainMenu : Control
         sizeRow.AddChild(G.Text("Map", "Dim", cols: 9));
         sizeRow.AddChild(new GlyphSegmented(Array.ConvertAll(Sizes, s => $"{s}²"), _size, i => _size = i)
         {
-            Tips = ["Small: quick to make, good for trying things", "Medium", "Large: the full world (takes a few seconds)"],
+            Tips = ["Small: quick to make, good for trying things", "Medium", "Large (takes a few seconds)",
+                "Huge: four times Large (about 10 s to make, 2.5 GB of memory; far water rests until someone comes near)"],
         });
         _box.AddChild(sizeRow);
         _box.AddChild(G.Gap(0.35f));
