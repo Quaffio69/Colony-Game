@@ -150,6 +150,10 @@ public static class GameLooks
         int w = (int)Colony.Core.Meshing.FarMesher.Water;
         palette[w] = new Vector4(0.16f, 0.40f, 0.60f, 1f);
         groups[w] = capGroups[w] = GlyphAtlas.Water;
+        // Woodland in coarse far blocks (FarMesher.Forest): a canopy colour and tree symbols.
+        int f = (int)Colony.Core.Meshing.FarMesher.Forest;
+        palette[f] = new Vector4(0.22f, 0.40f, 0.18f, 1f);
+        groups[f] = capGroups[f] = GlyphAtlas.Oak;
         return (palette, groups, capGroups);
     }
 

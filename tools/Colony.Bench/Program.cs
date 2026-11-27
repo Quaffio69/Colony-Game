@@ -605,6 +605,55 @@ if (args.Length > 0 && args[0] == "upipe")
     return;
 }
 
+if (args.Length > 0 && args[0] == "mem")
+{
+    // Memory by system after generation: dotnet run -c Release --project tools/Colony.Bench -- mem [size]
+    int msize = args.Length > 1 ? int.Parse(args[1]) : 2048;
+    var ms = ColonySim.Generate(new WorldGenSettings(12345, msize, msize, 384), 7);
+    Console.WriteLine($"world {msize}: {ms.StartupReport}");
+    ms.Connectivity.Update();
+    GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+    double heapMb = GC.GetTotalMemory(true) / 1048576.0;
+    long tiles = 0, edges = 0, covers = 0, unseen = 0, uniform = 0;
+    foreach (var c in ms.World.Chunks)
+    {
+        if (c.Raw != null) tiles += c.Raw.Length; else uniform++;
+        if (c.Edges != null) edges += c.Edges.Length * 2L;
+        if (c.Covers != null) covers += c.Covers.Length;
+        if (c.Unseen != null) unseen += c.Unseen.Length * 8L;
+    }
+    long chunkObjects = ms.World.Chunks.Count * 64L;
+    // Connectivity: per-chunk nav objects and label arrays (private: reflection).
+    var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+    var nav = (Array)typeof(Connectivity).GetField("_nav", flags)!.GetValue(ms.Connectivity)!;
+    long labels = 0, labelled = 0, cellLinks = 0;
+    foreach (var n in nav)
+    {
+        var l = (Array?)n!.GetType().GetField("Labels")!.GetValue(n);
+        if (l != null) { labels += l.Length * 2L; labelled++; }
+        var links = (System.Collections.ICollection)n.GetType().GetField("CellLinks")!.GetValue(n)!;
+        cellLinks += links.Count * 16L;
+    }
+    long navObjects = nav.Length * 120L;
+    // Water blocks: every array field of every block.
+    var blocks = (Array)typeof(Colony.Core.Fluids.Water).GetField("_blocks", flags)!.GetValue(ms.Water)!;
+    long waterBytes = 0; int waterBlocks = 0;
+    foreach (var b in blocks)
+    {
+        if (b == null) continue;
+        waterBlocks++;
+        foreach (var f in b.GetType().GetFields())
+            if (f.GetValue(b) is Array a) waterBytes += a.Length * (long)System.Runtime.InteropServices.Marshal.SizeOf(a.GetType().GetElementType()!);
+    }
+    static string MB(long b) => $"{b / 1048576.0:0} MB";
+    Console.WriteLine($"managed total {heapMb:0} MB");
+    Console.WriteLine($"  chunks: {ms.World.Chunks.Count} ({uniform} uniform), tiles {MB(tiles)}, edges {MB(edges)}, covers {MB(covers)}, unseen {MB(unseen)}, objects ~{MB(chunkObjects)}");
+    Console.WriteLine($"  connectivity: labels {MB(labels)} in {labelled} chunks, cell links ~{MB(cellLinks)}, nav objects ~{MB(navObjects)}");
+    Console.WriteLine($"  water: {waterBlocks} blocks, arrays {MB(waterBytes)}");
+    Console.WriteLine($"  flora: {ms.Flora.Count} plants");
+    return;
+}
+
 if (args.Length > 0 && args[0] == "water")
 {
     // Water only: dotnet run -c Release --project tools/Colony.Bench -- water [size] [steps]

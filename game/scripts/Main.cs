@@ -306,6 +306,7 @@ public partial class Main : Node3D
         OrbitCheck();
         HandleDevArgs(delta);
         UpdateRenderer();
+        UpdateWorldWindow();
         GameLooks.Tick(delta);
 
         // A client's sim runs only what the host confirms; everyone else runs at their own speed (a host also streams turns).

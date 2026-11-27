@@ -77,16 +77,75 @@ public partial class FloraView : Node3D
             foreach (var m in _materials) m.SetShaderParameter("cut_height", (float)(_appliedLevel + 1));
         }
 
+        // Regions out of reach go (beyond a margin, so panning back and forth doesn't rebuild them).
+        var (center, reach) = Reach();
+        float keep = reach + 2 * Flora.RegionSize;
+        _drop.Clear();
+        foreach (int r in _built)
+        {
+            int rx = r % _flora.RegionsX, ry = r / _flora.RegionsX;
+            if (RegionDistance(center, rx, ry) > keep) _drop.Add(r);
+        }
+        foreach (int r in _drop)
+        {
+            _regionNodes[r]?.QueueFree();
+            _regionNodes[r] = null;
+            _builtVersions[r] = -1;
+            _built.Remove(r);
+        }
+
+        // Regions in reach whose plants changed, nearest first (rings outwards by the box round the centre).
         var clock = Stopwatch.StartNew();
-        for (int ry = 0; ry < _flora.RegionsY; ry++)
-        for (int rx = 0; rx < _flora.RegionsX; rx++)
+        ForRegionsInReach(center, reach, (rx, ry) =>
         {
             int r = ry * _flora.RegionsX + rx;
             int v = _flora.RegionVersion(rx, ry);
-            if (v == _builtVersions[r]) continue;
-            if (clock.Elapsed.TotalMilliseconds > BuildBudgetMs) return;
+            if (v == _builtVersions[r]) return true;
+            if (clock.Elapsed.TotalMilliseconds > BuildBudgetMs) return false;
             BuildRegion(rx, ry);
             _builtVersions[r] = v;
+            _built.Add(r);
+            return true;
+        });
+    }
+
+    // ---- Reach: plants exist only round the camera ------------------------------------------------------
+    // Trees and plants are drawn within the view's reach (capped, so a huge map costs no more than this), every region
+    // beyond it freed: an art pixel covers several tiles out there and the far blocks draw the ground.
+
+    /// <summary>Plants are drawn at most this far from the view's centre (tiles).</summary>
+    private const float MaxReach = 4096f;
+    private readonly HashSet<int> _built = new();
+    private readonly List<int> _drop = new();
+
+    private (Vector2 Center, float Reach) Reach()
+    {
+        var (center, _) = _world.View;
+        return (center, Math.Min(_world.FloraReach, MaxReach));
+    }
+
+    private static float RegionDistance(Vector2 p, int rx, int ry)
+    {
+        float x0 = rx * Flora.RegionSize, y0 = ry * Flora.RegionSize, x1 = x0 + Flora.RegionSize, y1 = y0 + Flora.RegionSize;
+        float dx = Math.Max(0, Math.Max(x0 - p.X, p.X - x1)), dy = Math.Max(0, Math.Max(y0 - p.Y, p.Y - y1));
+        return MathF.Sqrt(dx * dx + dy * dy);
+    }
+
+    /// <summary>Calls <paramref name="visit"/> for every region within reach, in rings outwards from the centre, until it returns false.</summary>
+    private void ForRegionsInReach(Vector2 center, float reach, Func<int, int, bool> visit)
+    {
+        int cx = Math.Clamp((int)(center.X / Flora.RegionSize), 0, _flora.RegionsX - 1), cy = Math.Clamp((int)(center.Y / Flora.RegionSize), 0, _flora.RegionsY - 1);
+        int rings = (int)(reach / Flora.RegionSize) + 1;
+        for (int ring = 0; ring <= rings; ring++)
+        for (int ry = cy - ring; ry <= cy + ring; ry++)
+        {
+            if (ry < 0 || ry >= _flora.RegionsY) continue;
+            bool edgeRow = ry == cy - ring || ry == cy + ring;
+            for (int rx = cx - ring; rx <= cx + ring; rx += edgeRow ? 1 : 2 * ring)
+            {
+                if (rx >= 0 && rx < _flora.RegionsX && RegionDistance(center, rx, ry) <= reach && !visit(rx, ry)) return;
+                if (ring == 0) break;
+            }
         }
     }
 
@@ -198,9 +257,12 @@ public partial class FloraView : Node3D
         get
         {
             int n = 0;
-            for (int ry = 0; ry < _flora.RegionsY; ry++)
-            for (int rx = 0; rx < _flora.RegionsX; rx++)
+            var (center, reach) = Reach();
+            ForRegionsInReach(center, reach, (rx, ry) =>
+            {
                 if (_flora.RegionVersion(rx, ry) != _builtVersions[ry * _flora.RegionsX + rx]) n++;
+                return true;
+            });
             return n;
         }
     }

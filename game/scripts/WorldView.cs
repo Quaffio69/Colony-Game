@@ -13,17 +13,19 @@ using Godot;
 namespace ColonyGame;
 
 /// <summary>
-/// Renders a <see cref="VoxelWorld"/> as greedy-meshed sections of
-/// <see cref="SectionX"/>x<see cref="SectionY"/>x<see cref="SectionZ"/> tiles.
+/// Renders a <see cref="VoxelWorld"/> round the camera; what it costs depends on the view, not on the map's size.
 /// <list type="bullet">
-/// <item>Sections re-mesh only when a chunk they cover changes version. Snapshots are taken on the main
-/// thread (cheap), meshing runs on the thread pool, and uploads are spread over frames under a time budget.</item>
-/// <item>The view-level slice is a shader cut plus a texture-driven "cap" quad for the cut surface, so
-/// changing level never re-meshes.</item>
-/// <item>Far out (<see cref="FarView"/>: one art pixel covers several tiles) the sections give way to far blocks: a
-/// coarse heightfield of ground and standing water per <see cref="FarBlock"/>² columns (<see cref="FarMesher"/>), a few
-/// dozen draws for the whole map instead of ten thousand. They are built in the background once the world is meshed,
-/// rebuilt (throttled) where chunks change and refreshed in turn for the water; the switch waits until all exist.</item>
+/// <item><b>Near window</b> (<see cref="SetView"/>): greedy-meshed sections of <see cref="SectionX"/>x<see cref="SectionY"/>x<see cref="SectionZ"/>
+/// tiles exist only on the <see cref="FarBlock"/>² near blocks the window touches (and a margin kept for panning back); further
+/// ones are freed. A section re-meshes only when a chunk it covers changes version: snapshots on the main thread, meshing on
+/// the thread pool, uploads within a per-frame budget.</item>
+/// <item><b>Far blocks</b> draw everything else: coarse heightfields of the visible top (ground or standing water) in a quadtree
+/// of five levels (cells of 2 to 32 tiles, blocks of 256 to 4096 columns, <see cref="FarMesher"/>), each level chosen by how
+/// many tiles an art pixel covers there, only within the camera's reach. A near block's sections replace its far block once
+/// every one is meshed, so panning shows coarse ground first, never holes. Zoomed out (<see cref="FarView"/>) the near window
+/// closes and the blocks draw the whole view.</item>
+/// <item>The view-level slice is a shader cut plus a texture-driven "cap" quad for the cut surface, so changing level never
+/// re-meshes.</item>
 /// </list>
 /// Also draws dig/stair designations.
 /// </summary>
@@ -34,18 +36,20 @@ public partial class WorldView : Node3D
     /// <summary>Main-thread milliseconds per frame for snapshotting and uploading meshes.</summary>
     [Export] public double MeshBudgetMs { get; set; } = 6.0;
     [Export] public int MaxInFlight { get; set; } = 128;
-    /// <summary>Budget while more than <see cref="LoadingBacklog"/> sections are pending (startup).</summary>
+    /// <summary>Budget while more than <see cref="LoadingBacklog"/> sections are pending (startup, a big jump).</summary>
     [Export] public double LoadingBudgetMs { get; set; } = 40.0;
     private const int LoadingBacklog = 2000;
     private double _budgetMs = 6.0;
     private int _maxInFlight = 128;
+    private bool _loaded;
 
     private sealed class Section
     {
         public required int Index, X0, Y0, Z0, SX, SY, SZ;
         public required Chunk[] Chunks;
+        public required NearBlock Block;
         public int[] BuiltVersions = [];
-        public bool InFlight;
+        public bool InFlight, Queued, Live = true, EverBuilt;
         public MeshInstance3D? Instance;
         public int QuadCount;
 
@@ -58,6 +62,17 @@ public partial class WorldView : Node3D
         }
 
         public int[] CurrentVersions() => Array.ConvertAll(Chunks, c => c.Version);
+    }
+
+    /// <summary>A <see cref="FarBlock"/>² block of columns holding sections (in or near the window).</summary>
+    private sealed class NearBlock
+    {
+        public required int Key, X0, Y0;
+        public readonly List<Section> Sections = new();
+        public int Unbuilt;      // sections never meshed yet
+        public bool InWindow;    // wanted now (else kept for panning back, until out of the retained range; not meshed)
+        public bool WasInWindow;
+        public bool Shown;       // its sections draw instead of its far block
     }
 
     private sealed record MeshResult(Section Section, int[] Versions, MeshArrays Arrays);
@@ -84,12 +99,13 @@ public partial class WorldView : Node3D
     }
 
     private ColonySim _sim = null!;
-    private readonly List<Section> _sections = new();
+    private readonly Dictionary<int, Section> _live = new();
+    private readonly Dictionary<int, NearBlock> _nearBlocks = new();
+    private readonly List<NearBlock> _nearList = new();
     private readonly ConcurrentQueue<MeshResult> _results = new();
-    // Sections waiting to be checked/meshed, fed by VoxelWorld.ChunkChanged: no per-frame scans of every section.
-    private readonly Queue<int> _dirtyQueue = new();
-    private bool[] _queued = [];
-    private int _sectionsX, _sectionsY;
+    // Sections waiting to be checked/meshed, fed by the window and VoxelWorld.ChunkChanged: no per-frame scans.
+    private readonly Queue<Section> _dirtyQueue = new();
+    private int _sectionsX, _sectionsY, _sectionsZ, _blocksX, _blocksY;
     private readonly HashSet<int> _capDirty = new(); // changed chunks on the cap's two levels
     private int _inFlight;
     private ShaderMaterial _terrainMaterial = null!;
@@ -108,34 +124,108 @@ public partial class WorldView : Node3D
     private int _viewLevel;
     private int _appliedViewLevel = -1;
 
-    // Far view.
+    // ---- The camera's window (Main sets it every frame) -----------------------------------------------------------
+
+    /// <summary>The near window never reaches further than this (tiles); far blocks draw beyond it.</summary>
+    public const float MaxNearRadius = 1024f;
+    /// <summary>Near blocks stay meshed this much beyond the window (tiles), so panning back costs nothing.</summary>
+    private const float RetainMargin = 384f;
+
+    private Vector2 _center;
+    private float _nearRadius = 384f, _farRadius = 2048f, _texel = 0.1f, _rigDistance = 120f;
+    private Vector3 _eye;
+    private bool _ortho = true, _viewSet;
+    private Vector2 _windowCenter = new(float.NaN, float.NaN);
+    private float _windowRadius = -1f;
+    private bool _windowFar;
+
+    /// <summary>
+    /// Where the camera looks: <paramref name="center"/> = the sim column under the view, <paramref name="nearRadius"/> = how far
+    /// full sections reach (capped at <see cref="MaxNearRadius"/>), <paramref name="farRadius"/> = how far anything is drawn,
+    /// <paramref name="eye"/> = the camera (Godot space), <paramref name="texel"/> = tiles per art pixel at the centre (far blocks
+    /// pick their level of detail by it; in perspective it grows with distance past <paramref name="rigDistance"/>).
+    /// </summary>
+    public void SetView(Vector2 center, float nearRadius, float farRadius, Vector3 eye, float texel, bool ortho, float rigDistance)
+    {
+        _center = center;
+        _nearRadius = Math.Clamp(nearRadius, 64f, MaxNearRadius);
+        _farRadius = Math.Max(farRadius, _nearRadius + FarBlock);
+        _eye = eye;
+        _texel = Math.Max(0.001f, texel);
+        _ortho = ortho;
+        _rigDistance = Math.Max(1f, rigDistance);
+        _viewSet = true;
+    }
+
+    /// <summary>The near window's centre and radius now (0 in the far view).</summary>
+    public (Vector2 Center, float Radius) Window => (_center, _farShown ? 0f : _nearRadius);
+
+    /// <summary>The view's centre and how far anything in it shows (far blocks reach this far).</summary>
+    public (Vector2 Center, float Reach) View => (_center, _farRadius);
+
+    /// <summary>
+    /// How far from the view's centre trees and plants are drawn: where far blocks stay at level 0 (an art pixel covers under
+    /// 3 tiles). Beyond, coarse blocks mark woodland instead (each tree would be a fraction of a pixel).
+    /// </summary>
+    public float FloraReach => _texel >= 3f ? 0f : _ortho ? _farRadius : Math.Min(_farRadius, 3f * _rigDistance / _texel);
+
+    /// <summary>Near blocks whose sections draw (WaterView meshes water there only).</summary>
+    public IEnumerable<(int X0, int Y0)> ShownBlocks()
+    {
+        foreach (var b in _nearList) if (b.Shown) yield return (b.X0, b.Y0);
+    }
+
+    /// <summary>Whether the near block over a column draws its sections (else its far block draws there).</summary>
+    public bool IsShown(int x, int y) =>
+        x >= 0 && y >= 0 && x < World.Width && y < World.Depth && _nearBlocks.TryGetValue(BlockKey(x / FarBlock, y / FarBlock), out var b) && b.Shown;
+
+    /// <summary>A near block started or stopped drawing its sections (x0, y0, shown).</summary>
+    public event Action<int, int, bool>? ShownChanged;
+
+    /// <summary>Bumped whenever the set of shown near blocks changes.</summary>
+    public int ShownVersion { get; private set; }
+
+    private int BlockKey(int bx, int by) => by * _blocksX + bx;
+
+    // ---- Far blocks ----------------------------------------------------------------------------------------------
+
     public const int FarBlock = 256, FarCell = 2;
+    /// <summary>Levels of detail: level L has cells of FarCell &lt;&lt; L tiles and blocks of FarBlock &lt;&lt; L columns.</summary>
+    public const int FarLevels = 5;
+
     private sealed class FarBlockState
     {
-        public required int X0, Y0;
+        public required int Level, X0, Y0, Size, Cell;
+        public required long Key;
         public MeshInstance3D? Node;
         public MeshInstance3D? Shadow; // the same mesh, shadows only (FarShadows)
-        public bool Built, Dirty = true, InFlight;
-        public bool Sampled;
+        public bool Built, Dirty = true, InFlight, Sampled, Removed, Covered;
         public float Top; // highest sampled top (ring included): the iso camera stands back just far enough to clear it
         public double BuiltAt = -1e9;
+        public float Distance;
     }
     private sealed record FarResult(FarBlockState Block, MeshArrays? Arrays);
-    private readonly List<FarBlockState> _farBlocks = new();
+    private readonly Dictionary<long, FarBlockState> _far = new();
+    private readonly HashSet<long> _wantedFar = new();
+    private readonly List<FarBlockState> _wantedList = new();
     private readonly ConcurrentQueue<FarResult> _farResults = new();
-    private int _farBlocksX, _farBuilt, _farInFlight, _farRefresh;
-    private double _now, _farSampledAt;
+    private int _farWantedBuilt, _farRefresh;
+    private double _now, _farSampledAt, _farSelectedAt = -1e9;
+    private Vector2 _farSelectedCenter = new(float.NaN, float.NaN);
+    private float _farSelectedTexel = -1f;
     private Node3D _nearRoot = null!, _farRoot = null!;
     private bool _farWanted, _farShown;
-    /// <summary>Far blocks drawn instead of sections (set each frame by Main; takes effect once every far block exists).</summary>
+    /// <summary>The whole view drawn by far blocks (set each frame by Main; takes effect once every far block in view exists).</summary>
     public bool FarView { get => _farShown; set => _farWanted = value; }
     /// <summary>Main-thread ms spent sampling far blocks (diagnostics).</summary>
     public double FarSampleMs;
 
-    // Zoomed out, the sun's shadows come from the far blocks (shadow-only copies: 64 draws a cascade at most) instead of the
+    private static long FarKey(int level, int bx, int by) => ((long)level << 56) | ((long)by << 28) | (uint)bx;
+
+    // Zoomed out, the sun's shadows come from the far blocks (shadow-only copies: a few dozen draws a cascade) instead of the
     // sections: every cascade draws its casters again, and at 1440p, 1 tile an art pixel, that was ~5000 of 8300 draw calls
     // (the frame was CPU-bound). The blocks are a 2-tile heightfield of the highest tops, so a shadow's edge moves by up
-    // to a cell: a pixel or two at these zooms. Takes effect once every block is built; their edits follow within 2 s.
+    // to a cell: a pixel or two at these zooms. Their edits follow within 2 s.
     private bool _farShadowsWanted, _farShadowsOn;
     /// <summary>Far blocks cast the terrain's shadows instead of sections (set each frame by Main).</summary>
     public bool FarShadows { get => _farShadowsOn; set => _farShadowsWanted = value; }
@@ -143,8 +233,8 @@ public partial class WorldView : Node3D
     private void ApplyFarShadows()
     {
         var cast = _farShadowsOn ? GeometryInstance3D.ShadowCastingSetting.Off : GeometryInstance3D.ShadowCastingSetting.On;
-        foreach (var s in _sections) if (s.Instance != null) s.Instance.CastShadow = cast;
-        foreach (var b in _farBlocks) if (b.Shadow != null) b.Shadow.Visible = _farShadowsOn;
+        foreach (var s in _live.Values) if (s.Instance != null) s.Instance.CastShadow = cast;
+        foreach (var b in _far.Values) RefreshFarVisibility(b);
     }
 
     public VoxelWorld World => _sim.World;
@@ -153,8 +243,9 @@ public partial class WorldView : Node3D
     public double SnapshotMs, UploadMs;
     private long _workerTicks;
     public double WorkerMs => _workerTicks * 1000.0 / Stopwatch.Frequency;
-    public int SectionCount => _sections.Count;
-    /// <summary>Sections waiting to be (re)meshed or uploaded. Zero once the world is fully built.</summary>
+    /// <summary>Sections that exist now (in and near the window).</summary>
+    public int SectionCount => _live.Count;
+    /// <summary>Sections waiting to be (re)meshed or uploaded. Zero once the window is fully built.</summary>
     public int PendingSections { get; private set; }
 
     public int ViewLevel
@@ -207,6 +298,7 @@ public partial class WorldView : Node3D
         TileType.Bedrock => new Color(0.16f, 0.14f, 0.16f),
         TileInfo.Hidden => new Color(0.02f, 0.018f, 0.024f), // unexplored rock (fog of war)
         FarMesher.Water => new Color(0.24f, 0.46f, 0.62f), // standing water in far blocks
+        FarMesher.Forest => new Color(0.20f, 0.38f, 0.17f), // woodland in coarse far blocks
         _ => Colors.Magenta,
     };
 
@@ -229,41 +321,18 @@ public partial class WorldView : Node3D
         _terrainMaterial = new ShaderMaterial { Shader = GameLooks.Shader("res://shaders/terrain.gdshader") };
         StyleTiles(_terrainMaterial);
         _nearRoot = new Node3D { Name = "Near" };
-        _farRoot = new Node3D { Name = "Far" }; // blocks show by range (FarRange), or all of them in the far view
+        _farRoot = new Node3D { Name = "Far" };
         AddChild(_nearRoot);
         AddChild(_farRoot);
         _nearRoot.AddToGroup(GameLooks.SweepSkip); // built with the terrain material: nothing for the look's sweep to convert
         _farRoot.AddToGroup(GameLooks.SweepSkip);
-        _farBlocksX = (World.Width + FarBlock - 1) / FarBlock;
-        for (int y0 = 0; y0 < World.Depth; y0 += FarBlock)
-        for (int x0 = 0; x0 < World.Width; x0 += FarBlock)
-            _farBlocks.Add(new FarBlockState { X0 = x0, Y0 = y0 });
-
-        for (int z0 = 0; z0 < World.Height; z0 += SectionZ)
-        for (int y0 = 0; y0 < World.Depth; y0 += SectionY)
-        for (int x0 = 0; x0 < World.Width; x0 += SectionX)
-        {
-            var chunks = new List<Chunk>();
-            for (int cz = z0 >> Chunk.Shift; cz <= (Math.Min(z0 + SectionZ, World.Height) - 1) >> Chunk.Shift; cz++)
-            for (int cy = y0 >> Chunk.Shift; cy <= (Math.Min(y0 + SectionY, World.Depth) - 1) >> Chunk.Shift; cy++)
-            for (int cx = x0 >> Chunk.Shift; cx <= (Math.Min(x0 + SectionX, World.Width) - 1) >> Chunk.Shift; cx++)
-                chunks.Add(World.GetChunk(cx, cy, cz)!);
-
-            _sections.Add(new Section
-            {
-                Index = _sections.Count,
-                X0 = x0, Y0 = y0, Z0 = z0,
-                SX = Math.Min(SectionX, World.Width - x0),
-                SY = Math.Min(SectionY, World.Depth - y0),
-                SZ = Math.Min(SectionZ, World.Height - z0),
-                Chunks = chunks.ToArray(),
-            });
-        }
 
         _sectionsX = (World.Width + SectionX - 1) / SectionX;
         _sectionsY = (World.Depth + SectionY - 1) / SectionY;
-        _queued = new bool[_sections.Count];
-        for (int i = 0; i < _sections.Count; i++) Enqueue(i);
+        _sectionsZ = (World.Height + SectionZ - 1) / SectionZ;
+        _blocksX = (World.Width + FarBlock - 1) / FarBlock;
+        _blocksY = (World.Depth + FarBlock - 1) / FarBlock;
+        _center = new Vector2(World.Width / 2f, World.Depth / 2f);
         World.ChunkChanged += OnChunkChanged;
         World.ChunkRevealed += OnChunkChanged; // a cavern breached: redraw it (and the cut surface over it)
 
@@ -288,23 +357,160 @@ public partial class WorldView : Node3D
     public override void _Process(double delta)
     {
         if (_sim == null) return;
+        _now += delta;
 
         if (_appliedViewLevel != _viewLevel) ApplyViewLevel();
 
         var clock = Stopwatch.StartNew();
-        // While the initial world (or a huge change) is still being built, frames are a loading screen anyway:
+        UpdateWindow();
+        // While the window (or a huge change) is still being built, frames are a loading screen anyway:
         // spend most of each one meshing instead of trickling sections in.
-        bool loading = PendingSections > LoadingBacklog;
+        // Only before the first view is complete: later the far blocks cover what is not built yet, so play stays smooth.
+        bool loading = !_loaded && PendingSections > LoadingBacklog;
+        if (_viewSet && PendingSections == 0 && _nearList.Count > 0) _loaded = true;
         _budgetMs = loading ? LoadingBudgetMs : MeshBudgetMs;
         _maxInFlight = loading ? MaxInFlight * 8 : MaxInFlight;
         ApplyResults(clock);
         ScheduleDirty(clock);
-        UpdateFar(delta);
+        UpdateFar();
+        UpdateShown();
         if (_capDirty.Count > 0) UpdateCap();
 
         var designations = _sim.Designations;
         if (designations.Version != _designationsDrawnVersion || _viewLevel != _designationsDrawnLevel)
             RedrawDesignations();
+    }
+
+    // ---- Near window ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Re-picks the near blocks when the window has moved by a sixteenth of its radius (or changed size, or the far view
+    /// switched): blocks it touches get their sections (nearest first), blocks beyond the retained range lose theirs.
+    /// </summary>
+    private void UpdateWindow()
+    {
+        bool far = _farShown || _farWanted; // asked for: the far blocks draw everything, nothing more to mesh
+        float radius = far ? 0f : _nearRadius;
+        float moved = float.IsNaN(_windowCenter.X) ? float.MaxValue : _windowCenter.DistanceTo(_center);
+        if (moved < Math.Max(16f, _nearRadius / 16f) && Math.Abs(radius - _windowRadius) <= _windowRadius * 0.05f && _windowFar == far) return;
+        _windowCenter = _center;
+        _windowRadius = radius;
+        _windowFar = far;
+
+        // Blocks the window touches.
+        var wanted = new List<(NearBlock Block, float Dist)>();
+        foreach (var b in _nearList) (b.WasInWindow, b.InWindow) = (b.InWindow, false);
+        if (radius > 0)
+        {
+            int bx0 = Math.Max(0, (int)((_center.X - radius) / FarBlock)), bx1 = Math.Min(_blocksX - 1, (int)((_center.X + radius) / FarBlock));
+            int by0 = Math.Max(0, (int)((_center.Y - radius) / FarBlock)), by1 = Math.Min(_blocksY - 1, (int)((_center.Y + radius) / FarBlock));
+            for (int by = by0; by <= by1; by++)
+            for (int bx = bx0; bx <= bx1; bx++)
+            {
+                float d = DistanceToRect(_center, bx * FarBlock, by * FarBlock, FarBlock);
+                if (d > radius) continue;
+                int key = BlockKey(bx, by);
+                if (!_nearBlocks.TryGetValue(key, out var nb))
+                {
+                    nb = new NearBlock { Key = key, X0 = bx * FarBlock, Y0 = by * FarBlock };
+                    _nearBlocks[key] = nb;
+                    _nearList.Add(nb);
+                    wanted.Add((nb, d));
+                }
+                nb.InWindow = true;
+                if (!nb.WasInWindow) foreach (var s in nb.Sections) Enqueue(s); // back in the window: whatever changed meanwhile
+            }
+        }
+        // New blocks' sections, nearest block first.
+        wanted.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+        foreach (var (nb, _) in wanted) CreateSections(nb);
+
+        // Blocks out of the retained range go (their far block draws there).
+        float retain = _nearRadius + RetainMargin;
+        for (int i = _nearList.Count - 1; i >= 0; i--)
+        {
+            var nb = _nearList[i];
+            if (nb.InWindow || DistanceToRect(_center, nb.X0, nb.Y0, FarBlock) <= retain) continue;
+            DropBlock(nb);
+            _nearList.RemoveAt(i);
+            _nearBlocks.Remove(nb.Key);
+        }
+    }
+
+    private static float DistanceToRect(Vector2 p, float x0, float y0, float size)
+    {
+        float dx = Math.Max(0, Math.Max(x0 - p.X, p.X - (x0 + size)));
+        float dy = Math.Max(0, Math.Max(y0 - p.Y, p.Y - (y0 + size)));
+        return MathF.Sqrt(dx * dx + dy * dy);
+    }
+
+    private void CreateSections(NearBlock nb)
+    {
+        int sx0 = nb.X0 / SectionX, sy0 = nb.Y0 / SectionY;
+        int sx1 = Math.Min(_sectionsX, (nb.X0 + FarBlock) / SectionX), sy1 = Math.Min(_sectionsY, (nb.Y0 + FarBlock) / SectionY);
+        for (int sy = sy0; sy < sy1; sy++)
+        for (int sx = sx0; sx < sx1; sx++)
+        for (int sz = 0; sz < _sectionsZ; sz++)
+        {
+            int x0 = sx * SectionX, y0 = sy * SectionY, z0 = sz * SectionZ;
+            var chunks = new List<Chunk>(4);
+            for (int cz = z0 >> Chunk.Shift; cz <= (Math.Min(z0 + SectionZ, World.Height) - 1) >> Chunk.Shift; cz++)
+            for (int cy = y0 >> Chunk.Shift; cy <= (Math.Min(y0 + SectionY, World.Depth) - 1) >> Chunk.Shift; cy++)
+            for (int cx = x0 >> Chunk.Shift; cx <= (Math.Min(x0 + SectionX, World.Width) - 1) >> Chunk.Shift; cx++)
+                chunks.Add(World.GetChunk(cx, cy, cz)!);
+            var s = new Section
+            {
+                Index = (sz * _sectionsY + sy) * _sectionsX + sx,
+                X0 = x0, Y0 = y0, Z0 = z0,
+                SX = Math.Min(SectionX, World.Width - x0),
+                SY = Math.Min(SectionY, World.Depth - y0),
+                SZ = Math.Min(SectionZ, World.Height - z0),
+                Chunks = chunks.ToArray(),
+                Block = nb,
+            };
+            _live[s.Index] = s;
+            nb.Sections.Add(s);
+            nb.Unbuilt++;
+            Enqueue(s);
+        }
+    }
+
+    private void DropBlock(NearBlock nb)
+    {
+        if (nb.Shown) SetShown(nb, false);
+        foreach (var s in nb.Sections)
+        {
+            s.Live = false;
+            _live.Remove(s.Index);
+            VisibleQuads -= s.QuadCount;
+            s.QuadCount = 0;
+            s.Instance?.QueueFree();
+            s.Instance = null;
+        }
+        nb.Sections.Clear();
+    }
+
+    /// <summary>
+    /// A near block draws its sections once all of them are meshed and its far block exists (so taking it away never leaves
+    /// a hole), and stops when it leaves the window or the far view comes on.
+    /// </summary>
+    private void UpdateShown()
+    {
+        foreach (var nb in _nearList)
+        {
+            bool shown = nb.InWindow && nb.Unbuilt == 0 && _far.TryGetValue(FarKey(0, nb.X0 / FarBlock, nb.Y0 / FarBlock), out var fb) && fb.Built;
+            if (shown != nb.Shown) SetShown(nb, shown);
+        }
+    }
+
+    private void SetShown(NearBlock nb, bool shown)
+    {
+        nb.Shown = shown;
+        foreach (var s in nb.Sections)
+            if (s.Instance != null) s.Instance.Visible = shown && s.Z0 <= _viewLevel;
+        if (_far.TryGetValue(FarKey(0, nb.X0 / FarBlock, nb.Y0 / FarBlock), out var fb)) RefreshFarVisibility(fb);
+        ShownVersion++;
+        ShownChanged?.Invoke(nb.X0, nb.Y0, shown);
     }
 
     // ---- Sections ------------------------------------------------------------------------------------
@@ -317,24 +523,19 @@ public partial class WorldView : Node3D
         long t0 = Stopwatch.GetTimestamp();
         _appliedViewLevel = _viewLevel;
         _terrainMaterial.SetShaderParameter("cut_height", (float)(_viewLevel + 1));
-        foreach (var s in _sections)
-            if (s.Instance != null && s.Instance.Visible != (s.Z0 <= _viewLevel))
-            {
-                s.Instance.Visible = s.Z0 <= _viewLevel;
-                LinkFar(s);
-            }
+        foreach (var s in _live.Values)
+            if (s.Instance != null) s.Instance.Visible = s.Block.Shown && s.Z0 <= _viewLevel;
         RebuildCapFull();
         LevelMs = Stopwatch.GetElapsedTime(t0).TotalMilliseconds;
     }
 
-    private void Enqueue(int section)
+    private void Enqueue(Section s)
     {
-        if (_queued[section]) return;
-        _queued[section] = true;
-        _dirtyQueue.Enqueue(section);
+        if (s.Queued) return;
+        s.Queued = true;
+        _dirtyQueue.Enqueue(s);
     }
 
-    /// <summary>A chunk's tiles (or a neighbour's border tiles) changed: requeue its section, patch the cap.</summary>
     // The test menu reloads the scene onto another sim and may bring this one back later: let go of its world.
     public override void _ExitTree()
     {
@@ -343,23 +544,25 @@ public partial class WorldView : Node3D
         World.ChunkRevealed -= OnChunkChanged;
     }
 
+    /// <summary>A chunk's tiles (or a neighbour's border tiles) changed: requeue its section if it exists, mark the far blocks over it, patch the cap.</summary>
     private void OnChunkChanged(int chunkIndex)
     {
         var c = World.Chunks[chunkIndex].Coord;
-        int sx = (c.X << Chunk.Shift) / SectionX, sy = (c.Y << Chunk.Shift) / SectionY, sz = (c.Z << Chunk.Shift) / SectionZ;
-        Enqueue((sz * _sectionsY + sy) * _sectionsX + sx);
-        _farBlocks[((c.Y << Chunk.Shift) / FarBlock) * _farBlocksX + (c.X << Chunk.Shift) / FarBlock].Dirty = true;
+        int x = c.X << Chunk.Shift, y = c.Y << Chunk.Shift;
+        int sx = x / SectionX, sy = y / SectionY, sz = (c.Z << Chunk.Shift) / SectionZ;
+        if (_live.TryGetValue((sz * _sectionsY + sy) * _sectionsX + sx, out var s)) Enqueue(s);
+        for (int level = 0; level < FarLevels; level++)
+            if (_far.TryGetValue(FarKey(level, x / (FarBlock << level), y / (FarBlock << level)), out var fb)) fb.Dirty = true;
         if (c.Z >= (_capLevel - 1) >> Chunk.Shift && c.Z <= (_capLevel + 1) >> Chunk.Shift) _capDirty.Add(chunkIndex);
     }
 
     /// <summary>Snapshots queued sections and hands them to worker threads, within the frame budget.</summary>
     private void ScheduleDirty(Stopwatch clock)
     {
-        while (_dirtyQueue.TryPeek(out int index))
+        while (_dirtyQueue.TryPeek(out var s))
         {
-            var s = _sections[index];
-            // In flight: its result's arrival re-checks it. Clean: nothing to do.
-            if (s.InFlight || !s.IsDirty())
+            // Gone, in flight (its result's arrival re-checks it) or clean: nothing to do.
+            if (!s.Live || !s.Block.InWindow || s.InFlight || !s.IsDirty()) // out of the window: requeued when it comes back
             {
                 Dequeue();
                 continue;
@@ -395,7 +598,7 @@ public partial class WorldView : Node3D
         }
         PendingSections = _dirtyQueue.Count + _inFlight + _results.Count;
 
-        void Dequeue() => _queued[_dirtyQueue.Dequeue()] = false;
+        void Dequeue() => _dirtyQueue.Dequeue().Queued = false;
     }
 
     /// <summary>
@@ -466,26 +669,26 @@ public partial class WorldView : Node3D
             var s = r.Section;
             s.InFlight = false;
             _inFlight--;
+            if (!s.Live) continue; // its block left the window meanwhile
             s.BuiltVersions = r.Versions;
-            if (s.IsDirty()) Enqueue(s.Index); // the world moved on while it was being meshed
-
-            if (r.Arrays.Quads == 0)
-            {
-                SetMesh(s, null, 0);
-                continue;
-            }
-            SetMesh(s, r.Arrays.ToMesh(), r.Arrays.Quads);
+            if (s.IsDirty()) Enqueue(s); // the world moved on while it was being meshed
+            SetMesh(s, r.Arrays.Quads == 0 ? null : r.Arrays.ToMesh(), r.Arrays.Quads);
         }
         UploadMs += (Stopwatch.GetTimestamp() - u0) * 1000.0 / Stopwatch.Frequency;
     }
 
     private void SetMesh(Section s, ArrayMesh? mesh, int quads)
     {
+        if (!s.EverBuilt)
+        {
+            s.EverBuilt = true;
+            s.Block.Unbuilt--;
+        }
         VisibleQuads += quads - s.QuadCount;
         s.QuadCount = quads;
         if (mesh == null)
         {
-            if (s.Instance != null) { s.Instance.VisibilityParent = new NodePath(); s.Instance.Mesh = null; } // see LinkFar
+            if (s.Instance != null) s.Instance.Mesh = null;
             return;
         }
         if (s.Instance == null)
@@ -495,179 +698,266 @@ public partial class WorldView : Node3D
             _nearRoot.AddChild(s.Instance);
         }
         s.Instance.Mesh = mesh;
-        s.Instance.Visible = s.Z0 <= _viewLevel;
-        LinkFar(s);
+        s.Instance.Visible = s.Block.Shown && s.Z0 <= _viewLevel;
     }
 
-    // ---- Far view ------------------------------------------------------------------------------------
+    // ---- Far blocks ----------------------------------------------------------------------------------
 
     /// <summary>
-    /// Far blocks: all built in the background once the near world is meshed (or as soon as the far view is wanted),
-    /// before the first switch. While the far view shows, changed blocks rebuild at most every 2 s each, and one block
-    /// every half second is refreshed in turn (water moves without chunk changes). Sampling reads the live world and
-    /// water, so it runs on the main thread (a couple of ms a block); meshing runs on workers.
+    /// Every quarter second (or when the view moves or zooms enough): picks the far blocks the view wants, a quadtree split
+    /// down to the level of detail each place calls for (level 0 wherever the near window reaches), within the far radius.
+    /// Blocks no longer wanted stay until what replaces them is built, then go. Then samples wanted blocks that are missing
+    /// or changed, nearest first, within a budget: sampling reads the live world and water, so it runs on the main thread
+    /// (a couple of ms a block at any level); meshing runs on workers. Changed blocks rebuild at most every 2 s; one block
+    /// every half second is refreshed in turn (water moves without chunk changes).
     /// </summary>
-    private void UpdateFar(double delta)
+    private void UpdateFar()
     {
-        _now += delta;
-        while (_farResults.TryDequeue(out var r))
-        {
-            var b = r.Block;
-            b.InFlight = false;
-            _farInFlight--;
-            if (!b.Built) { b.Built = true; _farBuilt++; }
-            if (r.Arrays is not { Quads: > 0 } arrays)
-            {
-                if (b.Node != null) b.Node.Mesh = null;
-                if (b.Shadow != null) b.Shadow.Mesh = null;
-                continue;
-            }
-            if (b.Node == null)
-            {
-                b.Node = new MeshInstance3D { Name = $"Far_{b.X0}_{b.Y0}", MaterialOverride = _terrainMaterial };
-                _farRoot.AddChild(b.Node);
-                b.Node.VisibilityRangeBegin = _farShown ? AlwaysNear : _farRange;
-                LinkSections(b);
-                FarBlockAdded?.Invoke(b.X0, b.Y0, b.Node);
-            }
-            b.Node.Mesh = arrays.ToMesh();
-            if (b.Shadow == null)
-            {
-                b.Shadow = new MeshInstance3D
-                {
-                    Name = $"FarShadow_{b.X0}_{b.Y0}", MaterialOverride = _terrainMaterial,
-                    CastShadow = GeometryInstance3D.ShadowCastingSetting.ShadowsOnly, Visible = _farShadowsOn,
-                };
-                _farRoot.AddChild(b.Shadow);
-            }
-            b.Shadow.Mesh = b.Node.Mesh;
-        }
-        bool all = _farBuilt == _farBlocks.Count;
+        while (_farResults.TryDequeue(out var r)) ApplyFar(r);
+        if (!_viewSet && _far.Count > 0) return;
+
+        if (_now - _farSelectedAt > 0.25 || float.IsNaN(_farSelectedCenter.X) || _farSelectedCenter.DistanceTo(_center) > 64f ||
+            Math.Abs(_texel - _farSelectedTexel) > _farSelectedTexel * 0.25f)
+            SelectFar();
+
+        bool all = _farWantedBuilt == _wantedList.Count;
         bool show = _farWanted && all;
-        if (show != _farShown)
-        {
-            _farShown = show; // the sections hide by visibility parent (hiding their root upsets Godot's dependency lists)
-            ApplyFarRanges();
-        }
+        if (show != _farShown) _farShown = show;
         if ((_farShadowsWanted && all) != _farShadowsOn)
         {
             _farShadowsOn = _farShadowsWanted && all;
             ApplyFarShadows();
         }
 
-        if (!_sim.WaterReady || (PendingSections > 0 && !_farWanted)) return; // the near world first
-        if (_farShown && _now - _farSampledAt > 0.5)
+        if (!_sim.WaterReady) return;
+        if (_now - _farSampledAt > 0.5 && _wantedList.Count > 0)
         {
             _farSampledAt = _now;
-            var turn = _farBlocks[_farRefresh++ % _farBlocks.Count];
-            turn.Dirty = true;
-            turn.BuiltAt = -1e9;
+            var turn = _wantedList[_farRefresh++ % _wantedList.Count];
+            if (turn.Built && turn.Node is { Visible: true }) { turn.Dirty = true; turn.BuiltAt = -1e9; }
         }
         var clock = Stopwatch.StartNew();
-        double budget = _farWanted && !all ? 8.0 : 1.5;
-        foreach (var b in _farBlocks)
+        double budget = !all ? 8.0 : 1.5;
+        foreach (var b in _wantedList) // nearest first
         {
             if (clock.Elapsed.TotalMilliseconds > budget) break;
-            if (b.InFlight || !b.Dirty || (b.Built && (!(_farShown || _farShadowsOn) || _now - b.BuiltAt < 2.0))) continue;
-            b.Dirty = false;
-            b.InFlight = true;
-            _farInFlight++;
-            b.BuiltAt = _now;
-            int cx = Math.Min(FarBlock, World.Width - b.X0 + FarCell - 1) / FarCell;
-            int cy = Math.Min(FarBlock, World.Depth - b.Y0 + FarCell - 1) / FarCell;
-            var heights = new float[(cx + 2) * (cy + 2)];
-            var types = new TileType[heights.Length];
-            long t0 = Stopwatch.GetTimestamp();
-            FarMesher.Sample(World, _sim.Water, b.X0, b.Y0, cx, cy, FarCell, heights, types);
-            float top = 0;
-            foreach (float hgt in heights) top = Math.Max(top, hgt);
-            b.Top = top;
-            b.Sampled = true;
-            FarSampleMs += (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
-            Task.Run(() =>
-            {
-                var quads = new List<Quad>();
-                FarMesher.Build(heights, types, cx, cy, b.X0, b.Y0, FarCell, quads);
-                _farResults.Enqueue(new FarResult(b, quads.Count > 0 ? ToArrays(quads) : null));
-            });
+            if (b.InFlight || !b.Dirty || (b.Built && _now - b.BuiltAt < 2.0)) continue;
+            // A hidden level-0 block under shown sections waits until it shows again (or casts the shadows).
+            if (b.Built && b.Level == 0 && !_farShadowsOn && IsShown(b.X0, b.Y0)) continue;
+            SampleFar(b);
         }
     }
 
-    /// <summary>Far blocks built so far, of all (loading progress, diagnostics).</summary>
-    public (int Built, int Total) FarProgress => (_farBuilt, _farBlocks.Count);
-
-    // ---- Far blocks as level of detail (perspective) ------------------------------------------------------
-    // A far block is the visibility parent of the sections (and water sections) on its columns: beyond FarRange from the
-    // camera Godot shows the block and hides them. In perspective that draws the horizon coarse and the near ground in
-    // full; in iso every block is the same scale, so the range is off and the whole-view switch (FarView) does it.
-    private float _farRange = 1e9f;
-
-    /// <summary>Camera distance beyond which a block draws coarse (1e9: never). Set each frame by Main; applied on a 5% change.</summary>
-    public float FarRange
+    private void SampleFar(FarBlockState b)
     {
-        get => _farRange;
-        set
+        b.Dirty = false;
+        b.InFlight = true;
+        b.BuiltAt = _now;
+        int cell = b.Cell;
+        int cx = Math.Min(b.Size, World.Width - b.X0 + cell - 1) / cell;
+        int cy = Math.Min(b.Size, World.Depth - b.Y0 + cell - 1) / cell;
+        var heights = new float[(cx + 2) * (cy + 2)];
+        var types = new TileType[heights.Length];
+        long t0 = Stopwatch.GetTimestamp();
+        // Coarse levels mark woodland: the trees themselves are drawn only where blocks are at level 0 (FloraReach).
+        FarMesher.Sample(World, _sim.WaterReady ? _sim.Water : null, b.X0, b.Y0, cx, cy, cell, heights, types, b.Level > 0 ? _sim.Flora : null);
+        float top = 0;
+        foreach (float hgt in heights) top = Math.Max(top, hgt);
+        b.Top = top;
+        b.Sampled = true;
+        FarSampleMs += (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+        float skirt = cell * 2f; // blocks of other levels meet at its border, each with its own heights across the seam
+        Task.Run(() =>
         {
-            if (Mathf.Abs(value - _farRange) <= _farRange * 0.05f) return;
-            _farRange = value;
-            ApplyFarRanges();
+            var quads = new List<Quad>();
+            FarMesher.Build(heights, types, cx, cy, b.X0, b.Y0, cell, quads, skirt);
+            _farResults.Enqueue(new FarResult(b, quads.Count > 0 ? ToArrays(quads) : null));
+        });
+    }
+
+    private void ApplyFar(FarResult r)
+    {
+        var b = r.Block;
+        b.InFlight = false;
+        if (b.Removed) return;
+        if (!b.Built)
+        {
+            b.Built = true;
+            if (_wantedFar.Contains(b.Key)) _farWantedBuilt++;
+        }
+        if (r.Arrays is not { Quads: > 0 } arrays)
+        {
+            if (b.Node != null) b.Node.Mesh = null;
+            if (b.Shadow != null) b.Shadow.Mesh = null;
+            RemoveCovered();
+            return;
+        }
+        if (b.Node == null)
+        {
+            b.Node = new MeshInstance3D { Name = $"Far{b.Level}_{b.X0}_{b.Y0}", MaterialOverride = _terrainMaterial };
+            _farRoot.AddChild(b.Node);
+            b.Shadow = new MeshInstance3D
+            {
+                Name = $"FarShadow{b.Level}_{b.X0}_{b.Y0}", MaterialOverride = _terrainMaterial,
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.ShadowsOnly,
+            };
+            _farRoot.AddChild(b.Shadow);
+        }
+        b.Node.Mesh = arrays.ToMesh();
+        b.Shadow!.Mesh = b.Node.Mesh;
+        RefreshFarVisibility(b);
+        RemoveCovered();
+    }
+
+    /// <summary>
+    /// The level of detail a block wants: cells of 2 &lt;&lt; L tiles while an art pixel covers about 1.5 x 2^L to 3 x 2^L
+    /// tiles there (iso: the same everywhere; perspective: growing with the distance from the camera).
+    /// </summary>
+    private int DesiredLevel(int x0, int y0, int size)
+    {
+        float texel = _texel;
+        if (!_ortho)
+        {
+            float dx = Math.Max(0, Math.Max(x0 - _eye.X, _eye.X - (x0 + size)));
+            float dz = Math.Max(0, Math.Max(y0 - _eye.Z, _eye.Z - (y0 + size)));
+            float dist = MathF.Sqrt(dx * dx + dz * dz + _eye.Y * _eye.Y * 0.25f);
+            texel *= Math.Max(1f, dist / _rigDistance);
+        }
+        return Math.Clamp((int)MathF.Floor(MathF.Log2(texel / 1.5f)), 0, FarLevels - 1);
+    }
+
+    private void SelectFar()
+    {
+        _farSelectedAt = _now;
+        _farSelectedCenter = _center;
+        _farSelectedTexel = _texel;
+        // Level 0 wherever sections may draw; none forced once the far view is asked for (it waits for these blocks, so
+        // keying on whether it shows would flip between the two sets).
+        float near = _farWanted ? 0f : _nearRadius;
+        _wantedFar.Clear();
+        int top = FarLevels - 1, topSize = FarBlock << top;
+        int bx0 = Math.Max(0, (int)((_center.X - _farRadius) / topSize)), bx1 = Math.Min((World.Width - 1) / topSize, (int)((_center.X + _farRadius) / topSize));
+        int by0 = Math.Max(0, (int)((_center.Y - _farRadius) / topSize)), by1 = Math.Min((World.Depth - 1) / topSize, (int)((_center.Y + _farRadius) / topSize));
+        for (int by = by0; by <= by1; by++)
+        for (int bx = bx0; bx <= bx1; bx++)
+            Visit(top, bx, by);
+
+        void Visit(int level, int bx, int by)
+        {
+            int size = FarBlock << level, x0 = bx * size, y0 = by * size;
+            if (x0 >= World.Width || y0 >= World.Depth) return;
+            float d = DistanceToRect(_center, x0, y0, size);
+            if (d > _farRadius) return;
+            if (level > 0 && (d <= near || DesiredLevel(x0, y0, size) < level))
+            {
+                for (int k = 0; k < 4; k++) Visit(level - 1, bx * 2 + (k & 1), by * 2 + (k >> 1));
+                return;
+            }
+            _wantedFar.Add(FarKey(level, bx, by));
+        }
+
+        // Wanted blocks (new ones made), nearest first.
+        _wantedList.Clear();
+        _farWantedBuilt = 0;
+        foreach (long key in _wantedFar)
+        {
+            if (!_far.TryGetValue(key, out var b))
+            {
+                int level = (int)(key >> 56), by = (int)((key >> 28) & 0xFFFFFFF), bx = (int)(key & 0xFFFFFFF);
+                int size = FarBlock << level;
+                b = new FarBlockState { Level = level, X0 = bx * size, Y0 = by * size, Size = size, Cell = FarCell << level, Key = key };
+                _far[key] = b;
+            }
+            b.Distance = DistanceToRect(_center, b.X0, b.Y0, b.Size);
+            _wantedList.Add(b);
+            if (b.Built) _farWantedBuilt++;
+        }
+        _wantedList.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+        RemoveCovered();
+    }
+
+    private readonly List<FarBlockState> _farScratch = new();
+
+    /// <summary>
+    /// Blocks no longer wanted go once every wanted block over their ground is built (or none is: out of reach). A wanted
+    /// block stays hidden while an old, coarser block still covers it (they'd draw over each other).
+    /// </summary>
+    private void RemoveCovered()
+    {
+        _farScratch.Clear();
+        foreach (var b in _far.Values)
+            if (!_wantedFar.Contains(b.Key) && Replaced(b)) _farScratch.Add(b);
+        foreach (var b in _farScratch)
+        {
+            b.Removed = true;
+            b.Node?.QueueFree();
+            b.Shadow?.QueueFree();
+            _far.Remove(b.Key);
+        }
+        foreach (var b in _wantedList)
+        {
+            bool covered = false;
+            for (int level = b.Level + 1; level < FarLevels && !covered; level++)
+                covered = _far.ContainsKey(FarKey(level, b.X0 / (FarBlock << level), b.Y0 / (FarBlock << level)));
+            if (covered != b.Covered)
+            {
+                b.Covered = covered;
+                RefreshFarVisibility(b);
+            }
         }
     }
 
-    /// <summary>Blocks begin at FarRange; in the whole-view far view at once (a range that starts at the camera: every block
-    /// in range, so every section hidden; 0 would switch the range off).</summary>
-    private void ApplyFarRanges()
+    /// <summary>Whether every wanted block over an unwanted block's ground is built (coarser ones above it, finer ones within).</summary>
+    private bool Replaced(FarBlockState b)
     {
-        foreach (var b in _farBlocks) if (b.Node != null) b.Node.VisibilityRangeBegin = _farShown ? AlwaysNear : _farRange;
+        for (int level = b.Level + 1; level < FarLevels; level++)
+        {
+            long up = FarKey(level, b.X0 / (FarBlock << level), b.Y0 / (FarBlock << level));
+            if (_wantedFar.Contains(up)) return _far[up].Built;
+        }
+        return FinerBuilt(b.Level, b.X0 / b.Size, b.Y0 / b.Size);
+
+        bool FinerBuilt(int level, int bx, int by)
+        {
+            if (level == 0) return true;
+            for (int k = 0; k < 4; k++)
+            {
+                int cx = bx * 2 + (k & 1), cy = by * 2 + (k >> 1);
+                long key = FarKey(level - 1, cx, cy);
+                if (_wantedFar.Contains(key)) { if (!_far[key].Built) return false; }
+                else if (!FinerBuilt(level - 1, cx, cy)) return false;
+            }
+            return true;
+        }
     }
 
-    private const float AlwaysNear = 0.001f;
+    /// <summary>A far block draws unless an old coarser block still covers it or (level 0) its near block's sections draw.</summary>
+    private void RefreshFarVisibility(FarBlockState b)
+    {
+        if (b.Node == null) return;
+        bool visible = !b.Covered && !(b.Level == 0 && IsShown(b.X0, b.Y0));
+        b.Node.Visible = visible;
+        if (b.Shadow != null) b.Shadow.Visible = _farShadowsOn && !b.Covered;
+    }
 
-    /// <summary>A far block's node was created (WaterView links its sections there).</summary>
-    public event Action<int, int, MeshInstance3D>? FarBlockAdded;
-
-    private FarBlockState FarBlockAt(int x, int y) => _farBlocks[(y / FarBlock) * _farBlocksX + x / FarBlock];
+    /// <summary>Far blocks in view built so far, of all wanted (loading progress, diagnostics).</summary>
+    public (int Built, int Total) FarProgress => (_farWantedBuilt, _wantedList.Count);
 
     /// <summary>
     /// The highest terrain top (Godot Y) over blocks within <paramref name="radius"/> of (x, z): sampled per far block, so
-    /// edits show after the block's rebuild (a couple of seconds). The world's height until every block there is sampled.
+    /// edits show after the block's rebuild (a couple of seconds). The world's height until a block there is sampled.
     /// </summary>
     public float TopAround(float x, float z, float radius)
     {
-        int bx0 = Math.Max(0, (int)((x - radius) / FarBlock)), bx1 = Math.Min(_farBlocksX - 1, (int)((x + radius) / FarBlock));
-        int by0 = Math.Max(0, (int)((z - radius) / FarBlock)), by1 = Math.Min(_farBlocks.Count / _farBlocksX - 1, (int)((z + radius) / FarBlock));
         float top = 0;
-        for (int by = by0; by <= by1; by++)
-        for (int bx = bx0; bx <= bx1; bx++)
+        bool any = false;
+        foreach (var b in _far.Values)
         {
-            var b = _farBlocks[by * _farBlocksX + bx];
-            if (!b.Sampled) return World.Height;
+            if (!b.Sampled || b.X0 > x + radius || b.X0 + b.Size < x - radius || b.Y0 > z + radius || b.Y0 + b.Size < z - radius) continue;
             top = Math.Max(top, b.Top);
+            any = true;
         }
-        return top;
-    }
-
-    /// <summary>The far block node over a column, to parent other views' nodes to (null until built).</summary>
-    public MeshInstance3D? FarParent(int x, int y) => x >= 0 && y >= 0 && x < World.Width && y < World.Depth ? FarBlockAt(x, y).Node : null;
-
-    private void LinkSections(FarBlockState b)
-    {
-        for (int sz = 0; sz * SectionZ < World.Height; sz++)
-        for (int sy = b.Y0 / SectionY; sy < Math.Min(_sectionsY, (b.Y0 + FarBlock) / SectionY); sy++)
-        for (int sx = b.X0 / SectionX; sx < Math.Min(_sectionsX, (b.X0 + FarBlock) / SectionX); sx++)
-            LinkFar(_sections[(sz * _sectionsY + sy) * _sectionsX + sx]);
-    }
-
-    /// <summary>
-    /// A section hides where its far block shows (visibility parent) only while it is drawn: Godot errors on a
-    /// dependency whose instance has no mesh or is hidden (sections above the view level are).
-    /// </summary>
-    private void LinkFar(Section s)
-    {
-        if (s.Instance == null) return;
-        bool drawn = s.Instance.Mesh != null && s.Instance.Visible;
-        var path = drawn && FarBlockAt(s.X0, s.Y0).Node is { } block ? block.GetPath() : new NodePath();
-        if (s.Instance.VisibilityParent.ToString() != path.ToString()) s.Instance.VisibilityParent = path;
+        return any ? top : World.Height;
     }
 
     // ---- Cut-surface cap -----------------------------------------------------------------------------

@@ -15,6 +15,9 @@ public static class FarMesher
 {
     /// <summary>The tile code far meshes use for standing water (no world tile has it; tile tables give it water's look).</summary>
     public const TileType Water = (TileType)31;
+    /// <summary>The tile code coarse far cells use for woodland (two of their four sampled columns carry a tree): far out the
+    /// trees themselves are not drawn (each would be a fraction of a pixel), so the ground shows they are there.</summary>
+    public const TileType Forest = (TileType)29;
 
     /// <summary>
     /// Greedy rectangles meet in T-junctions, which rasterise with hairline cracks; under a far top there is nothing, so a
@@ -33,7 +36,7 @@ public static class FarMesher
     /// counts as water when a third of its columns hold standing water, at their highest surface.
     /// </summary>
     public static void Sample(VoxelWorld world, Fluids.Water? water, int x0, int y0, int cellsX, int cellsY, int cell,
-        float[] heights, TileType[] types)
+        float[] heights, TileType[] types, Nature.Flora? flora = null)
     {
         int stride = cellsX + 2, rows = cellsY + 2;
         if (heights.Length < stride * rows || types.Length < stride * rows) throw new ArgumentException("Arrays too small.");
@@ -46,6 +49,11 @@ public static class FarMesher
         var waterTop = new float[n];
         Array.Clear(heights, 0, n);
         Array.Fill(types, TileType.Air, 0, n);
+        if (cell > 2)
+        {
+            SampleSparse(world, water, flora, ax, ay, cx0, cy0, cx1, cy1, stride, cell, heights, types, wet, waterTop);
+            return;
+        }
 
         Span<short> top = stackalloc short[Chunk.Size * Chunk.Size];
         Span<TileType> kind = stackalloc TileType[Chunk.Size * Chunk.Size];
@@ -73,6 +81,81 @@ public static class FarMesher
         int third = Math.Max(1, cell * cell / 3);
         for (int i = 0; i < n; i++)
             if (wet[i] >= third) { heights[i] = Math.Max(waterTop[i], 1); types[i] = Water; }
+    }
+
+    /// <summary>
+    /// Coarse cells (more than 2 tiles): a 2x2 grid of columns per cell (at a quarter and three quarters across), not every
+    /// column, so a block costs the same to sample at every level of detail (a far level's block covers 4x the columns of the
+    /// level below). The highest of the four is the cell's top; it counts as water when two of the four stand in water, and
+    /// (with <paramref name="flora"/>) as <see cref="Forest"/> where trees stand on 4% of its columns.
+    /// </summary>
+    private static void SampleSparse(VoxelWorld world, Fluids.Water? water, Nature.Flora? flora, int ax, int ay, int cx0, int cy0, int cx1, int cy1,
+        int stride, int cell, float[] heights, TileType[] types, Span<int> wet, float[] waterTop)
+    {
+        int q = cell / 4, n = heights.Length;
+        for (int i = 0; i < n; i++)
+        {
+            int gx = ax + i % stride * cell, gy = ay + i / stride * cell;
+            for (int s = 0; s < 4; s++)
+            {
+                int x = gx + q + (s & 1) * 2 * q, y = gy + q + (s >> 1) * 2 * q;
+                if (x < cx0 || x >= cx1 || y < cy0 || y >= cy1) continue;
+                int z = ColumnTop(world, x, y, out var t);
+                if (z < 0) continue;
+                float ground = z + 1;
+                if (ground > heights[i]) { heights[i] = ground; types[i] = world.LookAt(x, y, z, t); }
+                if (water != null && z + 1 < world.Height && water.SurfaceAt(x, y, z + 1) is { } sf && sf > ground + 0.1f)
+                {
+                    wet[i]++;
+                    waterTop[i] = Math.Max(waterTop[i], sf);
+                }
+            }
+        }
+        // Woodland by the cell's real tree count (flora's region lists, not the four read columns: trees stand on a few
+        // percent of columns even in a wood, so two of four columns rarely both carry one).
+        var trees = flora != null ? new int[n] : null;
+        if (flora != null)
+        {
+            int rows = n / stride, x1 = ax + stride * cell, y1 = ay + rows * cell;
+            for (int ry = Math.Max(0, ay) >> Nature.Flora.RegionShift; ry <= Math.Min(flora.RegionsY - 1, (y1 - 1) >> Nature.Flora.RegionShift); ry++)
+            for (int rx = Math.Max(0, ax) >> Nature.Flora.RegionShift; rx <= Math.Min(flora.RegionsX - 1, (x1 - 1) >> Nature.Flora.RegionShift); rx++)
+                foreach (var p in flora.InRegion(rx, ry))
+                {
+                    int x = p.Position.X, y = p.Position.Y;
+                    if (x < ax || y < ay || x >= x1 || y >= y1 || !Nature.PlantInfo.IsTree(p.Kind)) continue;
+                    trees![(y - ay) / cell * stride + (x - ax) / cell]++;
+                }
+        }
+        int wood = Math.Max(1, cell * cell * 4 / 100);
+        for (int i = 0; i < n; i++)
+            if (wet[i] >= 2) { heights[i] = Math.Max(waterTop[i], 1); types[i] = Water; }
+            else if (trees != null && trees[i] >= wood && heights[i] > 0) types[i] = Forest;
+    }
+
+    /// <summary>The highest occluding tile of one column (-1: none) and its type; uniform chunks are skipped whole.</summary>
+    public static int ColumnTop(VoxelWorld world, int x, int y, out TileType type)
+    {
+        int kx = x >> Chunk.Shift, ky = y >> Chunk.Shift, lx = x & Chunk.Mask, ly = y & Chunk.Mask;
+        for (int kz = world.ChunksZ - 1; kz >= 0; kz--)
+        {
+            var ch = world.GetChunk(kx, ky, kz);
+            if (ch == null) continue;
+            if (ch.IsUniform)
+            {
+                if (!TileInfo.Occludes(ch.UniformType)) continue;
+                type = ch.UniformType;
+                return (kz << Chunk.Shift) + Chunk.Size - 1;
+            }
+            for (int lz = Chunk.Size - 1; lz >= 0; lz--)
+            {
+                var t = ch.Get(lx, ly, lz);
+                if (!TileInfo.Occludes(t)) continue;
+                type = t;
+                return (kz << Chunk.Shift) + lz;
+            }
+        }
+        type = TileType.Air;
+        return -1;
     }
 
     /// <summary>Highest occluding tile of each column of a chunk column (-1: none) and its type. Skips uniform chunks whole.</summary>
@@ -114,7 +197,10 @@ public static class FarMesher
     /// Meshes a sampled block (see <see cref="Sample"/>): one top per run of equal cells (greedy rectangles), and a side
     /// wherever a cell stands above its neighbour, down to the neighbour's height (merged along the edge).
     /// </summary>
-    public static void Build(float[] heights, TileType[] types, int cellsX, int cellsY, int x0, int y0, int cell, List<Quad> output)
+    /// <param name="borderSkirt">Along the block's own border every top hangs a side at least this deep (0: only where the ring
+    /// is lower). Blocks of different levels of detail meet there, each with its own idea of the heights across the seam.</param>
+    public static void Build(float[] heights, TileType[] types, int cellsX, int cellsY, int x0, int y0, int cell, List<Quad> output,
+        float borderSkirt = 0f)
     {
         output.Clear();
         int stride = cellsX + 2;
@@ -183,17 +269,25 @@ public static class FarMesher
             bool alongX = dy != 0;                        // the run walks along x for faces facing +-y
             int lines = alongX ? cellsY : cellsX, len = alongX ? cellsX : cellsY;
             for (int line = 0; line < lines; line++)
+            {
+                // The block's own edge on this side: neighbours across it are seen as at least borderSkirt lower.
+                bool border = borderSkirt > 0 && (alongX ? (dy < 0 ? line == 0 : line == cellsY - 1) : (dx < 0 ? line == 0 : line == cellsX - 1));
+                float Across(int qx, int qy)
+                {
+                    float own = heights[At(qx, qy)], other = heights[At(qx + dx, qy + dy)];
+                    return border && own > 0 ? Math.Min(other, own - borderSkirt) : other;
+                }
             for (int p = 0; p < len;)
             {
                 int cx = alongX ? p : line, cy = alongX ? line : p;
-                float h = heights[At(cx, cy)], nh = heights[At(cx + dx, cy + dy)];
+                float h = heights[At(cx, cy)], nh = Across(cx, cy);
                 var t = types[At(cx, cy)];
                 if (h <= nh) { p++; continue; }
                 int run = 1;
                 while (p + run < len)
                 {
                     int qx = alongX ? p + run : line, qy = alongX ? line : p + run;
-                    if (heights[At(qx, qy)] != h || heights[At(qx + dx, qy + dy)] != nh || types[At(qx, qy)] != t) break;
+                    if (heights[At(qx, qy)] != h || Across(qx, qy) != nh || types[At(qx, qy)] != t) break;
                     run++;
                 }
                 // The face plane and its extent (overlapping its neighbours and the lower top: see Seam).
@@ -209,6 +303,7 @@ public static class FarMesher
                     output.Add(Make(new Vector3(x, ya, lo), new Vector3(x, yb, lo), new Vector3(x, yb, h), new Vector3(x, ya, h), dir, t));
                 }
                 p += run;
+            }
             }
         }
     }

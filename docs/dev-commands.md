@@ -18,7 +18,8 @@ Every build, run, bench, demo and debug flag.
 - Sim benchmark: `dotnet run -c Release --project tools/Colony.Bench -- [size] [colonists] [ticks]`
   (or `-- water [size] [steps]` for the water simulation alone, whole map; `-- colony [size] [days]` for population,
   food and settlers over game days with no player)
-  (prints per-phase totals, slow-tick breakdowns and GC counts; the render bench prints a startup breakdown).
+  (prints per-phase totals, slow-tick breakdowns and GC counts; the render bench prints a startup breakdown); `-- mem [size]`
+  generates a world and prints managed memory by system (chunk tiles, connectivity labels and links, water arrays, flora).
 - VS Code: F5 "Play Game" or "Open Godot Editor" (see `.vscode/launch.json`).
 - **Render perf flags:** `--level-sweep[=N]` (with `--bench`: steps the view down N levels, default 40, one every other frame; per change the frame time and the world view's share; `--no-vsync` for real times), `--bench-zooms=4,60,450,...` (after the world is built, per rig distance: avg/p95/max ms, draws, primitives,
   art size, tiles per pixel, far view, shadows; the tool for frame-rate work), `--ortho`, `--persp`, `--default-look`, `--pixel=N`,

@@ -1,9 +1,21 @@
 # Performance architecture
 
-How the game stays fast on 2048x2048x384 maps: meshing, reachability, jobs, pathfinding, change tracking, the far view, water stepping. Read before touching rendering throughput, pathfinding, connectivity or the water step.
+How the game stays fast on big maps (2048x2048x384 default, 4096 measured): the camera window, meshing, reachability, jobs, pathfinding, change tracking, the far view, water stepping. Read before touching rendering throughput, pathfinding, connectivity or the water step.
 
 ## Performance architecture
 
+- **The views follow the camera; their cost depends on the view, not the map.** Main projects the four screen corners
+  onto the ground each frame (`MainRender.UpdateWorldWindow`) and calls `WorldView.SetView` (centre, near radius, reach,
+  eye, tiles per art pixel). Terrain sections exist only on the 256² **near blocks** the near window touches (capped at
+  `MaxNearRadius` 1024 tiles; kept `RetainMargin` further for panning back, freed beyond; blocks outside the window
+  aren't meshed, and requeue their sections on return). A near block draws its sections once every one is meshed and its
+  level-0 far block exists, so panning shows coarse ground first, never holes. Water sections (WaterView) exist only on
+  shown near blocks; which water blocks there are wet is cached until `Water.WetSetVersion` or `WorldView.ShownVersion`
+  changes; the water cut cap patches those blocks only. Flora regions exist only within `WorldView.FloraReach` (where
+  far blocks stay level 0: under 3 tiles an art pixel; capped at 4096), nearest first. The 40 ms "loading" meshing
+  budget applies only until the first view is complete; later big zooms mesh at 6 ms a frame behind the far blocks.
+  At 4096, 1440p: close 2.1 ms, 60 tiles 4.6 ms, whole map 2.3 ms (were 11 ms with 26 ms p95, 12 ms, 21 ms); 6k sections
+  instead of 393k; 0.5 GB VRAM instead of 2.4 GB; water meshing 0.25 ms a frame instead of 5.7.
 - **Rendering:** 32x32x16 sections, greedy-meshed (`Meshing.SectionMesher`) on the thread pool from
   main-thread `TileBox` snapshots; uploads are budgeted per frame. The view-level slice is a shader
   discard plus a texture-driven cap quad, so changing level never re-meshes. The cap texture (`Meshing.CutCap`, one byte
@@ -27,23 +39,32 @@ How the game stays fast on 2048x2048x384 maps: meshing, reachability, jobs, path
   graph (~2 ms at 2048, 156k region edges).
 - `Colony.Core` compiles with `<Optimize>true</Optimize>` even in Debug: the Godot editor runs Debug, and
   unoptimized meshing made startup ~3x slower. Keep it that way.
-- Default map 2048x2048x384: gen ~1.3 s, first frame ~2 s, fully meshed ~6 s (WorldView spends up to 40 ms
-  per frame and 8x the in-flight cap while >2000 sections are pending), ~650 MB managed. Use
-  `--size=1024x1024x384` for faster iteration. Sim bench at 2048 (20 colonists, digging, felling, hauling):
-  ~0.2-0.45 ms/tick avg; worst ticks ~5 ms per dig-driven connectivity rebuild.
-- **Far view (`WorldView.FarView`, `Meshing.FarMesher`):** once an art pixel covers 1.5+ tiles (off below 1.2; styled render
-  only) the sections give way to 64 far blocks (256² columns each, cells of 2 tiles; meshes vertex-compressed, `FlagCompressAttributes` with tangents: ~175 MB less VRAM, no visible change): a heightfield of each cell's highest
-  top, or standing water (`FarMesher.Water` = tile code 31, coloured and given water symbols in `GameLooks.TileTables`)
-  when a third of its columns are wet; greedy tops, each hanging outward `FarMesher.Skirt`s where a level top of another rectangle meets it (T-junction cracks showed the sky as stray outlined pixels; overlapping tops instead z-fought), plus sides, same terrain material (sliced by the shader). Sampling reads
-  the live world/water on the main thread (~2 ms a block), meshing on workers; all blocks are built in the background once
-  the near world is meshed and the switch waits for them; changed blocks rebuild at most every 2 s, one block refreshes
-  every 0.5 s (water), and WaterView hides and stops meshing its sections meanwhile. Full map at 2048: 30 ms / 23.6k draws
-  -> 9.8 ms / 1.3k. The render bench prints visible instances per view, art size, tiles/texel and the far state.
-  **In perspective** blocks are also level of detail: each is the Godot visibility parent of the sections and water
-  sections on its columns, shown beyond `FarRange` (where an art pixel covers 1.5 tiles, plus half a block diagonal), so the
-  horizon draws coarse (close up 44.7k -> 1.6k draws); in iso the range is off and the whole-view switch sets every block
-  in range. Roots are never hidden and a section only keeps its parent while it has a mesh and is visible (`LinkFar`):
-  Godot errors (`dep_instance->array_index == -1`) on dependencies of hidden or empty instances. Each block keeps its highest sampled top (`TopAround`): the iso camera stands back only far enough to clear the local terrain (the world top put it, and its shadow cascades, hundreds of tiles into empty air: shadows lost, more draws). The bench waits for them.
+- Default map 2048x2048x384: gen ~3 s (terrain 2 s, connectivity 1 s; water settles in the background ~5 s), ~1.2 GB
+  managed. 4096: gen ~11 s (terrain 6.3 s, connectivity 2.2 s, water settling 18 s in the background), 3.7 GB managed in
+  Core alone (`-- mem 4096`: tiles 1.1 GB in 281k non-uniform chunks, connectivity ~1.1 GB (labels 0.8 GB), water 0.9 GB);
+  Core memory and generation are now what limits map size, not the views. Use `--size=1024x1024x384` for faster
+  iteration. Sim bench (20 colonists, digging, felling, hauling; water stepped synchronously every 4 ticks): 2.45 ms/tick
+  avg at 2048, 10.6 ms at 4096, nearly all of it the water step (~10 ms and ~40 ms a step; in the game it runs off
+  the main thread, which keeps up at 1x and 3x but not 10x at 4096).
+- **Far blocks (`WorldView`, `Meshing.FarMesher`)** draw everything outside the shown near blocks: a quadtree of
+  `FarLevels` (5) levels, level L with cells of 2 << L tiles and blocks of 256 << L columns (128² cells each), picked
+  every quarter second (or on a move or zoom) within the view's reach: split to level 0 wherever the near window reaches,
+  else to the level where an art pixel covers 1.5·2^L..3·2^L tiles (iso: one level for the view; perspective: by distance
+  from the camera). Blocks no longer wanted stay until what replaces them is built; a wanted block hides while an older
+  coarser one still covers it. Meshes vertex-compressed (`FlagCompressAttributes` with tangents). A cell is the highest
+  top, or standing water (`FarMesher.Water` = tile code 31, water's colour and symbols in `GameLooks.TileTables`) when a
+  third of its columns are wet; coarse cells (over 2 tiles) read a 2x2 grid of columns (`SampleSparse`), so a block costs
+  the same at every level, and count as woodland (`FarMesher.Forest` = code 29, canopy colour, oak symbols) where trees
+  stand on 4% of their columns (flora's region lists): far out the trees themselves aren't drawn (586k tree markers were
+  29M of 30M triangles at 4096). Greedy tops hang outward `FarMesher.Skirt`s where a level top of another rectangle meets
+  them (T-junction cracks showed the sky); every block border hangs a side `2 x cell` deep (blocks of other levels meet
+  there). Sampling reads the live world/water on the main thread (~2 ms a block at any level), meshing on workers; changed
+  blocks rebuild at most every 2 s (a hidden level-0 block under shown sections waits), one block refreshes every 0.5 s
+  (water). **Far view (`WorldView.FarView`):** once an art pixel covers 1.5+ tiles (off below 1.2; styled render only) the
+  near window closes (no sections drawn or meshed) and the blocks draw the whole view; the switch waits until every block
+  in view is built (selection keys on the request, not the switch, or the two sets would alternate). Each block keeps its
+  highest sampled top (`TopAround`): the iso camera stands back only far enough to clear the local terrain (the world top
+  put it, and its shadow cascades, hundreds of tiles into empty air). The bench waits for the blocks in view.
   **Far shadows** (`WorldView.FarShadows`, iso, from 0.5 tiles an art pixel): each block has a shadows-only copy
   (`FarShadow_*`, same mesh) that casts the terrain's shadows while sections stop casting: every cascade draws its casters
   again, and at 1440p, 1 tile a pixel, sections in four cascades were ~5k of 8.3k draws (CPU-bound, 9.9 ms -> 4.9 ms).

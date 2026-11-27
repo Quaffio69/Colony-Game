@@ -265,6 +265,12 @@ public sealed class Water
 
     /// <summary>Blocks (chunk columns, <c>cy * ChunksX + cx</c>) holding water, for views.</summary>
     public IEnumerable<int> WetBlockIndices() => _wet;
+
+    /// <summary>Whether a block (a 16x16 chunk column, index by * ChunksX + bx) holds any water (views ask about the blocks near the camera only).</summary>
+    public bool IsWetBlock(int block) => _wet.Contains(block);
+
+    /// <summary>Increments whenever a block joins or leaves the wet set (views cache which nearby blocks are wet). Not sim state.</summary>
+    public int WetSetVersion { get; private set; }
     /// <summary>Bumped when a block's water surfaces visibly change (or its spans were rebuilt).</summary>
     public int BlockVersion(int block) => _blocks[block]?.Version ?? 0;
 
@@ -502,7 +508,7 @@ public sealed class Water
             _evaporated += b.Evaporated;
             b.Drained = 0;
             (b.Vol, b.NewVol) = (b.NewVol, b.Vol);
-            if (b.Wet > 0) _wet.Add(b.Index); else _wet.Remove(b.Index);
+            if (b.Wet > 0 ? _wet.Add(b.Index) : _wet.Remove(b.Index)) WetSetVersion++;
             if (b.HasFull) _fullBlocks.Add(b.Index); else _fullBlocks.Remove(b.Index);
             if (b.Changed)
             {
@@ -944,7 +950,7 @@ public sealed class Water
         {
             b.Version++;
             Version++;
-            _wet.Add(b.Index);
+            if (_wet.Add(b.Index)) WetSetVersion++;
         }
         if (b.Awake) return;
         b.Awake = true;
@@ -1135,6 +1141,7 @@ public sealed class Water
         }
         void Set(ICollection<int> s) { s.Clear(); int n = r.ReadInt32(); for (int i = 0; i < n; i++) s.Add(r.ReadInt32()); }
         Set(_wet);
+        WetSetVersion++;
         Set(_dirty);
         Set(_fullBlocks);
         _confined.Clear();

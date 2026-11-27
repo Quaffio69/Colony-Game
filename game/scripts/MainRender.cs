@@ -133,10 +133,6 @@ public partial class Main
         // From half a tile an art pixel (iso), the far blocks cast the terrain's shadows: 64 draws a cascade instead of
         // thousands of sections, for shadow edges a pixel or two coarser. --no-far-shadows compares.
         _world.FarShadows = look.Orthographic && Arg("--no-far-shadows") == null && _renderer.TexelWorld > (_world.FarShadows ? 0.42f : 0.49f);
-        // Perspective sees to the horizon: blocks beyond the distance where an art pixel covers 1.5 tiles draw coarse (plus
-        // half a block's diagonal, so a block's near edge is never coarse). Iso has one scale: the switch above does it.
-        _world.FarRange = look.Orthographic ? 1e9f
-            : 1.5f * _rig.Distance / Mathf.Max(0.01f, _renderer.TexelWorld) + WorldView.FarBlock * 0.71f;
         _renderer.TimeOfDay = _sim.Tick % Colony.Core.Agents.Needs.Day / (float)Colony.Core.Agents.Needs.Day;
         // Shadows reach as far as the view does (Godot measures from the camera, which ortho puts further back).
         // Iso: the farthest ground in view is ~0.65 x the zoom past the pivot (Godot extends casters towards the sun itself),
@@ -147,5 +143,36 @@ public partial class Main
             _shadowMapApplied = (int)look.ShadowMap;
             RenderingServer.DirectionalShadowAtlasSetSize(_shadowMapApplied, true);
         }
+    }
+
+    /// <summary>
+    /// Each frame: tells the world view where the camera looks. The ground under the four screen corners (at the pivot's
+    /// height) gives how far the view reaches; full sections go as far as that (iso) or as far as an art pixel covers less
+    /// than 1.5 tiles (perspective, whose top corners may see to the horizon), far blocks as far as anything shows.
+    /// </summary>
+    private void UpdateWorldWindow()
+    {
+        var cam = _rig.Camera;
+        if (cam == null) return;
+        var size = GetViewport().GetVisibleRect().Size;
+        var pivot = _rig.GlobalPosition;
+        float reach = 0f;
+        foreach (var corner in new[] { Vector2.Zero, new Vector2(size.X, 0), new Vector2(0, size.Y), size })
+        {
+            var from = cam.ProjectRayOrigin(corner);
+            var dir = cam.ProjectRayNormal(corner);
+            float d = cam.Far;
+            if (dir.Y < -1e-4f)
+            {
+                var hit = from + dir * ((pivot.Y - from.Y) / dir.Y);
+                d = Mathf.Min(d, new Vector2(hit.X - pivot.X, hit.Z - pivot.Z).Length());
+            }
+            reach = Mathf.Max(reach, d);
+        }
+        bool ortho = _renderer?.Settings.Orthographic ?? cam.Projection == Camera3D.ProjectionType.Orthogonal;
+        // Tiles per art pixel at the pivot (without the styled renderer: per screen pixel across the view).
+        float texel = _renderer?.TexelWorld ?? 2f * reach / Mathf.Max(1f, size.X);
+        float near = ortho ? reach + 64f : 1.5f * _rig.Distance / Mathf.Max(0.01f, texel) + WorldView.FarBlock * 0.71f;
+        _world.SetView(new Vector2(pivot.X, pivot.Z), Mathf.Min(near, reach + 64f), reach + WorldView.FarBlock, cam.GlobalPosition, texel, ortho, _rig.Distance);
     }
 }

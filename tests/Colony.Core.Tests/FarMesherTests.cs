@@ -60,7 +60,7 @@ public class FarMesherTests
     public void ACell_TakesItsHighestColumn_AndStandsAboveItsNeighbours()
     {
         var w = Flat(64, 32, 4);
-        for (int z = 5; z <= 9; z++) w.Set(33, 34, z, TileType.Stone); // one tall column in the cell (32..35, 32..35)
+        for (int z = 5; z <= 9; z++) w.Set(33, 33, z, TileType.Stone); // one tall column in the cell (32..35, 32..35), one coarse cells read
         var quads = Mesh(w, 16, 16, 8, 8, 4);
         var raised = quads.Single(q => q.Dir == FaceDir.PosZ && q.A.Z == 10f);
         Assert.Equal(TileType.Stone, raised.Tile);
@@ -117,6 +117,54 @@ public class FarMesherTests
                 : s.A.Y == ey && MathF.Min(s.A.X, s.C.X) < mid && mid < MathF.Max(s.A.X, s.C.X));
         }
         Assert.True(checkedEdges > 10, $"only {checkedEdges} level edges between rectangles");
+    }
+
+    [Fact]
+    public void CoarseCells_ReadTwoByTwoColumns_AndFindAPeakOnOne()
+    {
+        // Cells over 2 tiles read four columns each (a quarter and three quarters across), so a block costs the same at
+        // every level of detail. A peak on one of them raises the cell; one between them is missed (far out, a pixel).
+        var w = Flat(128, 40, 4);
+        for (int z = 5; z <= 20; z++) w.Set(68, 68, z, TileType.Stone);  // cell (64..79): q = 4, reads 68 and 76
+        for (int z = 5; z <= 20; z++) w.Set(33, 33, z, TileType.Stone);  // cell (32..47): not a read column
+        var quads = Mesh(w, 0, 0, 8, 8, 16);
+        Assert.Single(quads, q => q.Dir == FaceDir.PosZ && q.A.Z == 21f && MathF.Min(q.A.X, q.C.X) == 64f);
+        Assert.DoesNotContain(quads, q => q.Dir == FaceDir.PosZ && q.A.Z == 21f && MathF.Min(q.A.X, q.C.X) == 32f);
+    }
+
+    [Fact]
+    public void CoarseCells_MarkWoodland_WhereTreesStandOnFourPercentOfColumns()
+    {
+        // Far out the trees are not drawn; coarse cells dense with trees show as woodland instead (16x16 cell: 10 trees).
+        var w = Flat(128, 40, 4);
+        var flora = new Colony.Core.Nature.Flora(w);
+        for (int k = 0; k < 12; k++)
+            Assert.True(flora.Add(new Colony.Core.Nature.Plant(new TilePos(65 + k % 4 * 4, 65 + k / 4 * 4, 5), Colony.Core.Nature.PlantKind.Oak, 255, 0)));
+        Assert.True(flora.Add(new Colony.Core.Nature.Plant(new TilePos(36, 36, 5), Colony.Core.Nature.PlantKind.Oak, 255, 0))); // one tree: not woodland
+        int n = 10 * 10;
+        var heights = new float[n];
+        var types = new TileType[n];
+        FarMesher.Sample(w, null, 0, 0, 8, 8, 16, heights, types, flora);
+        Assert.Equal(FarMesher.Forest, types[(4 + 1) * 10 + 4 + 1]); // cell (64..79, 64..79)
+        Assert.Equal(TileType.Grass, types[(2 + 1) * 10 + 2 + 1]);    // cell (32..47)
+        Assert.Equal(5f, heights[(4 + 1) * 10 + 4 + 1]);               // woodland keeps the ground's height
+    }
+
+    [Fact]
+    public void BorderSkirt_HangsASideAlongEveryBlockEdge()
+    {
+        // Blocks of different levels meet along their borders, each with its own heights across the seam: with a border
+        // skirt every border top hangs a side at least that deep, even where the neighbour is level or higher.
+        var w = Flat(64, 32, 4);
+        int n = 10 * 10;
+        var heights = new float[n];
+        var types = new TileType[n];
+        FarMesher.Sample(w, null, 16, 16, 8, 8, 4, heights, types);
+        var quads = new List<Quad>();
+        FarMesher.Build(heights, types, 8, 8, 16, 16, 4, quads, borderSkirt: 6f);
+        var deep = quads.Where(q => q.Dir != FaceDir.PosZ && Height(q) >= 6f).ToList();
+        Assert.Equal(4, deep.Count); // one merged side per border
+        Assert.All(deep, q => Assert.Equal(6f + FarMesher.Skirt, Height(q), 0.01f));
     }
 
     [Fact]

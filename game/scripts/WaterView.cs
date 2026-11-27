@@ -71,7 +71,6 @@ public partial class WaterView : Node3D
         _surfaces = new Node3D { Name = "Surfaces" };
         AddChild(_surfaces);
         _surfaces.AddToGroup(GameLooks.SweepSkip); // water material from the start
-        _worldView.FarBlockAdded += LinkToFarBlock;
 
         var world = sim.World;
         _capData = new byte[world.Width * world.Depth];
@@ -126,7 +125,7 @@ public partial class WaterView : Node3D
             _cap.Position = new Vector3(_sim.World.Width / 2f, level + 1.02f, _sim.World.Depth / 2f); // just over a floor at the cut
         }
         _wetNow.Clear();
-        foreach (int bi in water.WetBlockIndices())
+        foreach (int bi in _nearWet) // the cut shows water where the sections draw; far blocks are sliced like the ground
         {
             _wetNow.Add(bi);
             int v = water.BlockVersion(bi);
@@ -217,7 +216,8 @@ public partial class WaterView : Node3D
         if (_sim.WaterReady) // nothing to mesh until the generated water has settled
         {
             var watch = Stopwatch.StartNew();
-            if (!_worldView.FarView) UpdateWater(); // far out the far blocks draw the water: no sections meshed meanwhile
+            RefreshNearWet();
+            UpdateWater(); // far out no near block shows: the far blocks draw the water, and the sections go
             MeshMs += watch.Elapsed.TotalMilliseconds;
             watch.Restart();
             UpdateCap(delta);
@@ -229,18 +229,29 @@ public partial class WaterView : Node3D
             rotor.RotateObjectLocal(Vector3.Forward, (float)delta * (0.2f + wheel.Power * 0.25f));
     }
 
-    /// <summary>A far block appeared: its water sections hide wherever it shows (it draws their water coarsely).</summary>
-    private void LinkToFarBlock(int x0, int y0, MeshInstance3D block)
-    {
-        var path = block.GetPath();
-        foreach (var (key, (node, _, _)) in _sections)
-            if (key.X * 32 >= x0 && key.X * 32 < x0 + WorldView.FarBlock && key.Y * 32 >= y0 && key.Y * 32 < y0 + WorldView.FarBlock && node.Mesh != null)
-                node.VisibilityParent = path;
-    }
+    // ---- Water round the camera ---------------------------------------------------------------------------
+    // Water is drawn as sections only where the world view draws its sections (the near blocks it shows); everywhere else
+    // its far blocks draw the water coarsely. Which water blocks there are wet is cached, refreshed when the shown blocks
+    // or the wet set change, so nothing here walks the map's water.
 
-    public override void _ExitTree()
+    private readonly List<int> _nearWet = new();
+    private int _nearWetShown = -1, _nearWetSet = -1;
+
+    private void RefreshNearWet()
     {
-        if (_worldView != null) _worldView.FarBlockAdded -= LinkToFarBlock;
+        var water = _sim.Water;
+        if (_worldView.ShownVersion == _nearWetShown && water.WetSetVersion == _nearWetSet) return;
+        _nearWetShown = _worldView.ShownVersion;
+        _nearWetSet = water.WetSetVersion;
+        _nearWet.Clear();
+        var world = _sim.World;
+        foreach (var (x0, y0) in _worldView.ShownBlocks())
+            for (int by = y0 >> Chunk.Shift; by < Math.Min(y0 + WorldView.FarBlock, world.Depth + Chunk.Mask) >> Chunk.Shift; by++)
+            for (int bx = x0 >> Chunk.Shift; bx < Math.Min(x0 + WorldView.FarBlock, world.Width + Chunk.Mask) >> Chunk.Shift; bx++)
+            {
+                int bi = by * world.ChunksX + bx;
+                if (water.IsWetBlock(bi)) _nearWet.Add(bi);
+            }
     }
 
     // ---- Water -------------------------------------------------------------------------------------------
@@ -252,7 +263,7 @@ public partial class WaterView : Node3D
         // What each wet section (2x2 blocks of 16x16 columns) should look like now: its blocks' versions, and its
         // neighbouring blocks' (surfaces are smoothed across section borders, and falls drawn against them).
         _wanted.Clear();
-        foreach (int bi in water.WetBlockIndices())
+        foreach (int bi in _nearWet)
         {
             int bx = bi % world.ChunksX, by = bi / world.ChunksX;
             var key = (bx >> 1, by >> 1, 0);
@@ -298,8 +309,6 @@ public partial class WaterView : Node3D
                 _surfaces.AddChild(have.Node);
             }
             have.Node.Mesh = job.Mesh?.ToMesh(_water);
-            // Far blocks draw distant water: hidden where its block shows (an empty instance gets no dependency: Godot errors).
-            have.Node.VisibilityParent = have.Node.Mesh != null && _worldView.FarParent(job.Key.X * 32, job.Key.Y * 32) is { } far ? far.GetPath() : new NodePath();
             _sections[job.Key] = (have.Node, job.Signature, _now);
             SectionsBuilt++;
         }
