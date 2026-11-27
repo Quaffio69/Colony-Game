@@ -28,3 +28,4 @@ project/solution_directory="../"
 [rendering]
 
 anti_aliasing/screen_space_roughness_limiter/enabled=false
+limits/global_shader_variables/buffer_size=262144
