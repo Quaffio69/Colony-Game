@@ -529,7 +529,7 @@ public partial class Main : Node3D
             if (child is Node3D n3 && CountDrawables(n3) is var k and > 0) counts.Add($"{n3.Name} {k}");
         GD.Print("[bench] visible instances: " + string.Join(", ", counts) +
                  (_renderer != null ? $"; art {_renderer.ArtSize.X}x{_renderer.ArtSize.Y}, {_renderer.TexelWorld:0.00} tiles/texel, pixel {_renderer.PixelScreen:0.0} px" : "") +
-                 $"; far view {(_world.FarView ? "on" : "off")}, {_world.FarProgress.Built}/{_world.FarProgress.Total} blocks, sampling {_world.FarSampleMs:0} ms total");
+                 $"; far view {(_world.FarView ? "on" : "off")}, {_world.FarProgress.Built}/{_world.FarProgress.Total} blocks, sampling {_world.FarSampleMs:0} ms total; {_world.FarSummary()}");
 
         if (Arg("--screenshot") is { Length: > 0 } path)
         {

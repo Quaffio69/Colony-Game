@@ -55,14 +55,17 @@ How the game stays fast on big maps (2048x2048x384 default, 4096 measured): the 
   `WaterInterestRadius` of a colonist steps, see world.md), with the same path searches.
 - **Far blocks (`WorldView`, `Meshing.FarMesher`)** draw everything outside the shown near blocks: a quadtree of
   `FarLevels` (5) levels, level L with cells of 2 << L tiles and blocks of 256 << L columns (128² cells each), picked
-  every quarter second (or on a move or zoom) within the view's reach: split to level 0 wherever the near window reaches,
+  every quarter second (or on a move or zoom) within the view's reach: split to level 0 wherever the near window reaches (none
+  in the far view: splitting on distance 0 kept a square of level-0 blocks round the centre, without woodland or trees),
   else to the level where an art pixel covers 1.5·2^L..3·2^L tiles (iso: one level for the view; perspective: by distance
   from the camera). Blocks no longer wanted stay until what replaces them is built; a wanted block hides while an older
   coarser one still covers it. Meshes vertex-compressed (`FlagCompressAttributes` with tangents). A cell is the highest
   top, or standing water (`FarMesher.Water` = tile code 31, water's colour and symbols in `GameLooks.TileTables`) when a
   third of its columns are wet; coarse cells (over 2 tiles) read a 2x2 grid of columns (`SampleSparse`), so a block costs
-  the same at every level, and count as woodland (`FarMesher.Forest` = code 29, canopy colour, oak symbols) where trees
-  stand on 4% of their columns (flora's region lists): far out the trees themselves aren't drawn (586k tree markers were
+  the same at every level, take the kind most of the four show (the highest of them set the height; a lone hilltop or sand
+  bar painted whole cells), and count as woodland (`FarMesher.Forest` = code 29, canopy colour, oak symbols, no block
+  texture: the atlas has no row for it, which drew it orange) where trees
+  stand on 6% of their columns (flora's region lists; a dense wood is ~9%): far out the trees aren't drawn (586k tree markers were
   29M of 30M triangles at 4096). Greedy tops hang outward `FarMesher.Skirt`s where a level top of another rectangle meets
   them (T-junction cracks showed the sky); every block border hangs a side `2 x cell` deep (blocks of other levels meet
   there). Sampling reads the live world/water on the main thread (~2 ms a block at any level), meshing on workers; changed

@@ -21,7 +21,7 @@ public partial class MainMenu : Control
     private LineEdit? _name, _address, _port;
     private int _size = 1, _colonies = 1;
     private LineEdit? _seed;
-    private static readonly int[] Sizes = [512, 1024, 2048, 4096];
+    private static readonly int[] Sizes = [512, 1024, 2048, 4096, 8192];
 
     public MainMenu(GameUi ui)
     {
@@ -106,10 +106,11 @@ public partial class MainMenu : Control
         if (!IsInsideTree()) return; // the scene reloaded (a game joined) before this deferred call ran
         float cw = GlyphTheme.Cw, ch = GlyphTheme.Ch;
         var inner = _box.GetCombinedMinimumSize();
-        var size = new Vector2(44 * cw, inner.Y + 3 * ch);
+        float width = Mathf.Max(38 * cw, Mathf.Ceil(inner.X / cw) * cw); // at least 38 columns, wider when a row needs it
+        var size = new Vector2(width + 6 * cw, inner.Y + 3 * ch);
         _panel.Size = size;
         _panel.Position = ((GetViewportRect().Size - size) / 2).Floor();
-        _box.Size = new Vector2(38 * cw, inner.Y);
+        _box.Size = new Vector2(width, inner.Y);
     }
 
     private Button Item(string text, string variation, Action pressed, string tip)
@@ -347,7 +348,8 @@ public partial class MainMenu : Control
         sizeRow.AddChild(new GlyphSegmented(Array.ConvertAll(Sizes, s => $"{s}²"), _size, i => _size = i)
         {
             Tips = ["Small: quick to make, good for trying things", "Medium", "Large (takes a few seconds)",
-                "Huge: four times Large (about 10 s to make, 2.5 GB of memory; far water rests until someone comes near)"],
+                "Huge: four times Large (about 10 s to make, 2.5 GB of memory; far water rests until someone comes near)",
+                "Vast: sixteen times Large (about 2 minutes to make, 10 GB of memory: for strong machines)"],
         });
         _box.AddChild(sizeRow);
         _box.AddChild(G.Gap(0.35f));

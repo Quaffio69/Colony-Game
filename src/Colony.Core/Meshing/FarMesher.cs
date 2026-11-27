@@ -86,16 +86,20 @@ public static class FarMesher
     /// <summary>
     /// Coarse cells (more than 2 tiles): a 2x2 grid of columns per cell (at a quarter and three quarters across), not every
     /// column, so a block costs the same to sample at every level of detail (a far level's block covers 4x the columns of the
-    /// level below). The highest of the four is the cell's top; it counts as water when two of the four stand in water, and
-    /// (with <paramref name="flora"/>) as <see cref="Forest"/> where trees stand on 4% of its columns.
+    /// level below). The highest of the four is the cell's top and the commonest kind its look; it counts as water when two
+    /// of the four stand in water, and
+    /// (with <paramref name="flora"/>) as <see cref="Forest"/> where trees stand on 6% of its columns.
     /// </summary>
     private static void SampleSparse(VoxelWorld world, Fluids.Water? water, Nature.Flora? flora, int ax, int ay, int cx0, int cy0, int cx1, int cy1,
         int stride, int cell, float[] heights, TileType[] types, Span<int> wet, float[] waterTop)
     {
         int q = cell / 4, n = heights.Length;
+        Span<TileType> kinds = stackalloc TileType[4];
+        Span<int> counts = stackalloc int[4];
         for (int i = 0; i < n; i++)
         {
             int gx = ax + i % stride * cell, gy = ay + i / stride * cell;
+            int distinct = 0, highestKind = -1;
             for (int s = 0; s < 4; s++)
             {
                 int x = gx + q + (s & 1) * 2 * q, y = gy + q + (s >> 1) * 2 * q;
@@ -103,13 +107,25 @@ public static class FarMesher
                 int z = ColumnTop(world, x, y, out var t);
                 if (z < 0) continue;
                 float ground = z + 1;
-                if (ground > heights[i]) { heights[i] = ground; types[i] = world.LookAt(x, y, z, t); }
+                var look = world.LookAt(x, y, z, t);
+                int k = 0;
+                while (k < distinct && kinds[k] != look) k++;
+                if (k == distinct) { kinds[k] = look; counts[k] = 0; distinct++; }
+                counts[k]++;
+                if (ground > heights[i]) { heights[i] = ground; highestKind = k; }
                 if (water != null && z + 1 < world.Height && water.SurfaceAt(x, y, z + 1) is { } sf && sf > ground + 0.1f)
                 {
                     wet[i]++;
                     waterTop[i] = Math.Max(waterTop[i], sf);
                 }
             }
+            // The cell shows the kind most of its columns show (a hilltop or a sand bar in one corner doesn't paint all of
+            // it); a tie goes to the highest column's kind.
+            if (distinct == 0) continue;
+            int best = highestKind;
+            for (int k = 0; k < distinct; k++)
+                if (counts[k] > counts[best]) best = k;
+            types[i] = kinds[best];
         }
         // Woodland by the cell's real tree count (flora's region lists, not the four read columns: trees stand on a few
         // percent of columns even in a wood, so two of four columns rarely both carry one).
@@ -126,7 +142,9 @@ public static class FarMesher
                     trees![(y - ay) / cell * stride + (x - ax) / cell]++;
                 }
         }
-        int wood = Math.Max(1, cell * cell * 4 / 100);
+        // Woodland where trees stand on 6% of the columns: generated trees are at most one per 3x3 tiles (a dense wood is
+        // ~9%), so that is a real wood, not the scatter over meadows.
+        int wood = Math.Max(1, (cell * cell * 6 + 50) / 100);
         for (int i = 0; i < n; i++)
             if (wet[i] >= 2) { heights[i] = Math.Max(waterTop[i], 1); types[i] = Water; }
             else if (trees != null && trees[i] >= wood && heights[i] > 0) types[i] = Forest;

@@ -57,13 +57,13 @@ public class FarMesherTests
     }
 
     [Fact]
-    public void ACell_TakesItsHighestColumn_AndStandsAboveItsNeighbours()
+    public void ACell_TakesItsHighestColumnsHeight_AndStandsAboveItsNeighbours()
     {
         var w = Flat(64, 32, 4);
         for (int z = 5; z <= 9; z++) w.Set(33, 33, z, TileType.Stone); // one tall column in the cell (32..35, 32..35), one coarse cells read
         var quads = Mesh(w, 16, 16, 8, 8, 4);
         var raised = quads.Single(q => q.Dir == FaceDir.PosZ && q.A.Z == 10f);
-        Assert.Equal(TileType.Stone, raised.Tile);
+        Assert.Equal(TileType.Grass, raised.Tile); // the kind most of its read columns show
         Assert.Equal(16f, Area(raised), 0.01f);
         var sides = quads.Where(q => q.Dir != FaceDir.PosZ && !IsSkirt(q)).ToList();
         Assert.Equal(4, sides.Count);
@@ -133,13 +133,13 @@ public class FarMesherTests
     }
 
     [Fact]
-    public void CoarseCells_MarkWoodland_WhereTreesStandOnFourPercentOfColumns()
+    public void CoarseCells_MarkWoodland_WhereTreesStandOnSixPercentOfColumns()
     {
-        // Far out the trees are not drawn; coarse cells dense with trees show as woodland instead (16x16 cell: 10 trees).
+        // Far out the trees are not drawn; coarse cells dense with trees show as woodland instead (16x16 cell: 15 trees, 6%).
         var w = Flat(128, 40, 4);
         var flora = new Colony.Core.Nature.Flora(w);
-        for (int k = 0; k < 12; k++)
-            Assert.True(flora.Add(new Colony.Core.Nature.Plant(new TilePos(65 + k % 4 * 4, 65 + k / 4 * 4, 5), Colony.Core.Nature.PlantKind.Oak, 255, 0)));
+        for (int k = 0; k < 16; k++)
+            Assert.True(flora.Add(new Colony.Core.Nature.Plant(new TilePos(64 + k % 4 * 4, 64 + k / 4 * 4, 5), Colony.Core.Nature.PlantKind.Oak, 255, 0)));
         Assert.True(flora.Add(new Colony.Core.Nature.Plant(new TilePos(36, 36, 5), Colony.Core.Nature.PlantKind.Oak, 255, 0))); // one tree: not woodland
         int n = 10 * 10;
         var heights = new float[n];
@@ -148,6 +148,21 @@ public class FarMesherTests
         Assert.Equal(FarMesher.Forest, types[(4 + 1) * 10 + 4 + 1]); // cell (64..79, 64..79)
         Assert.Equal(TileType.Grass, types[(2 + 1) * 10 + 2 + 1]);    // cell (32..47)
         Assert.Equal(5f, heights[(4 + 1) * 10 + 4 + 1]);               // woodland keeps the ground's height
+    }
+
+    [Fact]
+    public void ACoarseCell_ShowsTheKindMostOfItsColumnsShow_NotItsHighestCorner()
+    {
+        // One read column is a sand mound; the other three are grass: the cell is grass (at the mound's height).
+        var w = Flat(128, 40, 4);
+        for (int z = 5; z <= 7; z++) w.Set(68, 68, z, z == 7 ? TileType.Sand : TileType.Soil);
+        int n = 10 * 10;
+        var heights = new float[n];
+        var types = new TileType[n];
+        FarMesher.Sample(w, null, 0, 0, 8, 8, 16, heights, types);
+        int cell = (4 + 1) * 10 + 4 + 1;
+        Assert.Equal(TileType.Grass, types[cell]);
+        Assert.Equal(8f, heights[cell]);
     }
 
     [Fact]

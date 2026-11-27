@@ -848,7 +848,7 @@ public partial class WorldView : Node3D
             if (x0 >= World.Width || y0 >= World.Depth) return;
             float d = DistanceToRect(_center, x0, y0, size);
             if (d > _farRadius) return;
-            if (level > 0 && (d <= near || DesiredLevel(x0, y0, size) < level))
+            if (level > 0 && ((near > 0 && d <= near) || DesiredLevel(x0, y0, size) < level)) // no window: d = 0 is no reason
             {
                 for (int k = 0; k < 4; k++) Visit(level - 1, bx * 2 + (k & 1), by * 2 + (k >> 1));
                 return;
@@ -942,6 +942,24 @@ public partial class WorldView : Node3D
 
     /// <summary>Far blocks in view built so far, of all wanted (loading progress, diagnostics).</summary>
     public (int Built, int Total) FarProgress => (_farWantedBuilt, _wantedList.Count);
+
+    /// <summary>Diagnostics: far blocks per level (wanted/built/visible, and kept unwanted), the window and reach.</summary>
+    public string FarSummary()
+    {
+        var s = new System.Text.StringBuilder($"near {_nearRadius:0}, reach {_farRadius:0}, texel {_texel:0.00}, {(_ortho ? "iso" : "persp")}, far wanted {_farWanted}; levels");
+        for (int level = 0; level < FarLevels; level++)
+        {
+            int wanted = 0, built = 0, visible = 0, kept = 0;
+            foreach (var b in _far.Values)
+            {
+                if (b.Level != level) continue;
+                if (_wantedFar.Contains(b.Key)) { wanted++; if (b.Built) built++; } else kept++;
+                if (b.Node is { Visible: true }) visible++;
+            }
+            s.Append($" L{level} {wanted}/{built}/{visible}+{kept}");
+        }
+        return s.ToString();
+    }
 
     /// <summary>
     /// The highest terrain top (Godot Y) over blocks within <paramref name="radius"/> of (x, z): sampled per far block, so

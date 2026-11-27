@@ -79,7 +79,7 @@ public partial class FloraView : Node3D
 
         // Regions out of reach go (beyond a margin, so panning back and forth doesn't rebuild them).
         var (center, reach) = Reach();
-        float keep = reach + 2 * Flora.RegionSize;
+        float keep = reach > 0 ? reach + 2 * Flora.RegionSize : -1f; // no reach (zoomed out): none kept
         _drop.Clear();
         foreach (int r in _built)
         {
@@ -134,6 +134,7 @@ public partial class FloraView : Node3D
     /// <summary>Calls <paramref name="visit"/> for every region within reach, in rings outwards from the centre, until it returns false.</summary>
     private void ForRegionsInReach(Vector2 center, float reach, Func<int, int, bool> visit)
     {
+        if (reach <= 0) return; // zoomed out past the trees: none drawn
         int cx = Math.Clamp((int)(center.X / Flora.RegionSize), 0, _flora.RegionsX - 1), cy = Math.Clamp((int)(center.Y / Flora.RegionSize), 0, _flora.RegionsY - 1);
         int rings = (int)(reach / Flora.RegionSize) + 1;
         for (int ring = 0; ring <= rings; ring++)
