@@ -39,13 +39,20 @@ How the game stays fast on big maps (2048x2048x384 default, 4096 measured): the 
   graph (~2 ms at 2048, 156k region edges).
 - `Colony.Core` compiles with `<Optimize>true</Optimize>` even in Debug: the Godot editor runs Debug, and
   unoptimized meshing made startup ~3x slower. Keep it that way.
-- Default map 2048x2048x384: gen ~3 s (terrain 2 s, connectivity 1 s; water settles in the background ~5 s), ~1.2 GB
-  managed. 4096: gen ~11 s (terrain 6.3 s, connectivity 2.2 s, water settling 18 s in the background), 3.7 GB managed in
-  Core alone (`-- mem 4096`: tiles 1.1 GB in 281k non-uniform chunks, connectivity ~1.1 GB (labels 0.8 GB), water 0.9 GB);
-  Core memory and generation are now what limits map size, not the views. Use `--size=1024x1024x384` for faster
-  iteration. Sim bench (20 colonists, digging, felling, hauling; water stepped synchronously every 4 ticks): 2.45 ms/tick
-  avg at 2048, 10.6 ms at 4096, nearly all of it the water step (~10 ms and ~40 ms a step; in the game it runs off
-  the main thread, which keeps up at 1x and 3x but not 10x at 4096).
+- Default map 2048x2048x384: gen ~3 s (terrain 2 s, connectivity 1 s; water settles in the background ~5 s). 4096: gen
+  ~11 s (terrain 6.3 s, connectivity 2.1 s, water settling 18 s in the background); 8192: terrain 31 s, connectivity
+  8.8 s, settling 75 s. Generation (whole-map hydrology and settling) is now what limits map size. Use
+  `--size=1024x1024x384` for faster iteration. **Core memory** (`-- mem SIZE`, after 40 steps): 4096 1.37 GB (was 3.67:
+  tiles 1.1 GB -> 232 MB, connectivity 1.1 GB -> 0.2 GB, water 920 -> 412 MB); 8192 was 15 GB before these:
+  - **Tiles** (`Chunk`): uniform chunks store nothing; others pack 1, 2 or 4 bits a tile against a palette of up to
+    2/4/16 kinds (most chunks hold 4 or fewer: air, grass, soil, a rock), widening on a write that needs room (bytes past
+    16 kinds); `Compact` narrows; readers copy runs (`CopyRun`); snapshots keep a byte a tile (old saves load).
+  - **Connectivity** (`ChunkNav`) exists only for chunks with walkable regions; labels are a bit a cell for one region
+    (512 bytes), a byte up to 255 regions, 16 bits beyond; cell links are packed longs (region << 48 | cell key).
+  - **Water** blocks out of play drop their pipes (see world.md).
+  **Sim cost:** sim bench (20 colonists, digging, felling, hauling; water stepped synchronously every 4 ticks): 0.62
+  ms/tick avg at 4096 (was 10.6: nearly all of it the water step, 40 ms a step on every river; now only water within
+  `WaterInterestRadius` of a colonist steps, see world.md), with the same path searches.
 - **Far blocks (`WorldView`, `Meshing.FarMesher`)** draw everything outside the shown near blocks: a quadtree of
   `FarLevels` (5) levels, level L with cells of 2 << L tiles and blocks of 256 << L columns (128² cells each), picked
   every quarter second (or on a move or zoom) within the view's reach: split to level 0 wherever the near window reaches,
@@ -75,7 +82,8 @@ How the game stays fast on big maps (2048x2048x384 default, 4096 measured): the 
   sleeps once its water is still; flowing rivers never are). Two passes per step (outflows, then volumes), each
   writing only its own block, so blocks run in parallel deterministically; pipes are precomputed per span
   (`BuildLinks`), rebuilt when a block or its neighbours change shape. Steps every `WaterInterval` (4) ticks. Cost
-  ~1 ms/step at 1024, ~7 ms/step at 2048 (every river flows; `Apply` is the bulk). **Off the main thread:** the step
+  ~1 ms/step at 1024, ~10 ms/step at 2048, ~40 ms at 4096 with every block live (`-- water`: no colonists; `Apply` is the
+  bulk); in play only water near colonists steps (`SetInterest`). **Off the main thread:** the step
   begins at the end of a tick and joins at the start of the next (`ColonySim.AsyncWater`, set by the game; tests and
   tools step synchronously): readers meanwhile see the pre-step water, writers (`Add`, `Move`, springs, `ChunkChanged`)
   `Join` first, and the result is bit-identical to a sync step (tested). Rebuild, `Pressurize` and prep stay sync.

@@ -611,13 +611,14 @@ if (args.Length > 0 && args[0] == "mem")
     int msize = args.Length > 1 ? int.Parse(args[1]) : 2048;
     var ms = ColonySim.Generate(new WorldGenSettings(12345, msize, msize, 384), 7);
     Console.WriteLine($"world {msize}: {ms.StartupReport}");
+    for (int i = 0; i < 40; i++) ms.Step(); // play a little: far water freezes and lets go of its pipes
     ms.Connectivity.Update();
     GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
     double heapMb = GC.GetTotalMemory(true) / 1048576.0;
     long tiles = 0, edges = 0, covers = 0, unseen = 0, uniform = 0;
     foreach (var c in ms.World.Chunks)
     {
-        if (c.Raw != null) tiles += c.Raw.Length; else uniform++;
+        if (!c.IsUniform) tiles += c.StorageBytes; else uniform++;
         if (c.Edges != null) edges += c.Edges.Length * 2L;
         if (c.Covers != null) covers += c.Covers.Length;
         if (c.Unseen != null) unseen += c.Unseen.Length * 8L;
@@ -626,30 +627,42 @@ if (args.Length > 0 && args[0] == "mem")
     // Connectivity: per-chunk nav objects and label arrays (private: reflection).
     var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
     var nav = (Array)typeof(Connectivity).GetField("_nav", flags)!.GetValue(ms.Connectivity)!;
-    long labels = 0, labelled = 0, cellLinks = 0;
+    long labels = 0, labelled = 0, cellLinks = 0, navObjects = nav.Length * 8L;
     foreach (var n in nav)
     {
-        var l = (Array?)n!.GetType().GetField("Labels")!.GetValue(n);
-        if (l != null) { labels += l.Length * 2L; labelled++; }
-        var links = (System.Collections.ICollection)n.GetType().GetField("CellLinks")!.GetValue(n)!;
-        cellLinks += links.Count * 16L;
+        if (n == null) continue;
+        labelled++;
+        navObjects += 72;
+        foreach (var name in new[] { "Bits", "Labels8", "Labels16", "CellLinks", "RegionLinks" })
+        {
+            if (n.GetType().GetField(name)!.GetValue(n) is not Array a) continue;
+            long bytes = a.Length * (long)System.Runtime.InteropServices.Marshal.SizeOf(a.GetType().GetElementType()!);
+            if (name.EndsWith("Links")) cellLinks += bytes; else labels += bytes;
+        }
     }
-    long navObjects = nav.Length * 120L;
     // Water blocks: every array field of every block.
     var blocks = (Array)typeof(Colony.Core.Fluids.Water).GetField("_blocks", flags)!.GetValue(ms.Water)!;
-    long waterBytes = 0; int waterBlocks = 0;
+    long waterBytes = 0; int waterBlocks = 0, asleep = 0, dryBlocks = 0;
+    var byField = new SortedDictionary<string, long>();
     foreach (var b in blocks)
     {
         if (b == null) continue;
         waterBlocks++;
         foreach (var f in b.GetType().GetFields())
-            if (f.GetValue(b) is Array a) waterBytes += a.Length * (long)System.Runtime.InteropServices.Marshal.SizeOf(a.GetType().GetElementType()!);
+            if (f.GetValue(b) is Array a)
+            {
+                long bytes = a.Length * (long)System.Runtime.InteropServices.Marshal.SizeOf(a.GetType().GetElementType()!);
+                waterBytes += bytes;
+                byField[f.Name] = byField.GetValueOrDefault(f.Name) + bytes;
+            }
+        if (!(bool)b.GetType().GetField("Awake")!.GetValue(b)!) asleep++;
+        if ((int)b.GetType().GetField("Wet")!.GetValue(b)! == 0) dryBlocks++;
     }
     static string MB(long b) => $"{b / 1048576.0:0} MB";
     Console.WriteLine($"managed total {heapMb:0} MB");
     Console.WriteLine($"  chunks: {ms.World.Chunks.Count} ({uniform} uniform), tiles {MB(tiles)}, edges {MB(edges)}, covers {MB(covers)}, unseen {MB(unseen)}, objects ~{MB(chunkObjects)}");
-    Console.WriteLine($"  connectivity: labels {MB(labels)} in {labelled} chunks, cell links ~{MB(cellLinks)}, nav objects ~{MB(navObjects)}");
-    Console.WriteLine($"  water: {waterBlocks} blocks, arrays {MB(waterBytes)}");
+    Console.WriteLine($"  connectivity: labels {MB(labels)} in {labelled} chunks, links {MB(cellLinks)}, nav objects ~{MB(navObjects)}");
+    Console.WriteLine($"  water: {waterBlocks} blocks ({asleep} asleep, {dryBlocks} dry), arrays {MB(waterBytes)}: " + string.Join(", ", byField.Where(kv => kv.Value > 1048576).Select(kv => $"{kv.Key} {MB(kv.Value)}")));
     Console.WriteLine($"  flora: {ms.Flora.Count} plants");
     return;
 }

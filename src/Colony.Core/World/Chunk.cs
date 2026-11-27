@@ -14,17 +14,27 @@ public sealed class Chunk
 
     public const int Volume = Size * Size * Size;
 
-    // Null while every tile equals _fill (a "uniform" chunk: sky, or deep solid rock). That makes deep worlds
-    // cheap: only chunks with variety store an array. The first differing write materialises it.
+    // Storage, smallest that fits:
+    //  - uniform: no array while every tile equals _fill (sky, deep solid rock), so deep worlds cost almost nothing;
+    //  - packed: _bits (1, 2 or 4) per tile into _packed, indexing _palette (2, 4 or 16 types). A chunk rarely holds more
+    //    than a handful of kinds (air, grass, soil, a rock or two): tiles were 1.1 GB at 4096 as a byte each;
+    //  - bytes: _tiles, a byte per tile, once a chunk holds more than 16 kinds.
+    // A write that needs more room widens the storage; Compact narrows it again.
     private TileType[]? _tiles;
+    private ulong[]? _packed;
+    private TileType[]? _palette;
+    private int _bits, _paletteCount;
     private TileType _fill;
 
     public ChunkCoord Coord { get; }
     public int Version { get; private set; }
 
     /// <summary>True while every tile in the chunk is <see cref="UniformType"/> (no per-tile storage).</summary>
-    public bool IsUniform => _tiles is null;
+    public bool IsUniform => _tiles is null && _packed is null;
     public TileType UniformType => _fill;
+
+    /// <summary>Bytes of per-tile storage (diagnostics).</summary>
+    public int StorageBytes => _tiles != null ? _tiles.Length : _packed != null ? _packed.Length * 8 + _palette!.Length : 0;
 
     /// <summary>Number of non-air tiles; lets meshers and other passes skip empty chunks outright.</summary>
     public int NonAirCount { get; private set; }
@@ -40,25 +50,42 @@ public sealed class Chunk
 
     public Chunk(ChunkCoord coord) => Coord = coord;
 
-    /// <summary>Raw storage, or null for a uniform chunk (see <see cref="UniformType"/>). Indexed by <see cref="Index"/>.</summary>
-    internal TileType[]? Raw => _tiles;
+    public TileType Get(int lx, int ly, int lz) => At(Index(lx, ly, lz));
 
-    public TileType Get(int lx, int ly, int lz) =>
-        _tiles is null ? _fill : _tiles[Index(lx, ly, lz)];
+    /// <summary>The tile at storage index <paramref name="i"/> (see <see cref="Index"/>).</summary>
+    internal TileType At(int i)
+    {
+        if (_packed != null)
+        {
+            int bit = i * _bits;
+            return _palette![(int)(_packed[bit >> 6] >> (bit & 63)) & ((1 << _bits) - 1)];
+        }
+        return _tiles != null ? _tiles[i] : _fill;
+    }
+
+    /// <summary>Copies <paramref name="dest"/>.Length tiles from storage index <paramref name="i"/> (a run along x within one row).</summary>
+    internal void CopyRun(int i, Span<TileType> dest)
+    {
+        if (_tiles != null) _tiles.AsSpan(i, dest.Length).CopyTo(dest);
+        else if (_packed == null) dest.Fill(_fill);
+        else for (int k = 0; k < dest.Length; k++) dest[k] = At(i + k);
+    }
+
+    /// <summary>Every tile, unpacked, in storage order (snapshots keep this format).</summary>
+    internal TileType[] Unpacked()
+    {
+        var all = new TileType[Volume];
+        CopyRun(0, all);
+        return all;
+    }
 
     /// <returns>True if the tile actually changed.</returns>
     internal bool Set(int lx, int ly, int lz, TileType type)
     {
-        if (_tiles is null)
-        {
-            if (type == _fill) return false;
-            _tiles = new TileType[Volume];
-            if (_fill != TileType.Air) Array.Fill(_tiles, _fill);
-        }
-
         int i = Index(lx, ly, lz);
-        var old = _tiles[i];
+        var old = At(i);
         if (old == type) return false;
+        Store(i, type);
 
         if (old == TileType.Air) NonAirCount++;
         else if (type == TileType.Air) NonAirCount--;
@@ -67,9 +94,98 @@ public sealed class Chunk
         if (TileInfo.IsStair(old)) StairCount--;
         if (TileInfo.IsStair(type)) StairCount++;
 
-        _tiles[i] = type;
         Version++;
         return true;
+    }
+
+    /// <summary>Writes a tile at a storage index, widening the storage if it has no room for the type.</summary>
+    private void Store(int i, TileType type)
+    {
+        if (_tiles != null)
+        {
+            _tiles[i] = type;
+            return;
+        }
+        if (_packed == null) // uniform: becomes a two-kind palette
+        {
+            _bits = 1;
+            _palette = new TileType[2];
+            _palette[0] = _fill;
+            _paletteCount = 1;
+            _packed = new ulong[Volume / 64];
+        }
+        int index = Array.IndexOf(_palette!, type, 0, _paletteCount);
+        if (index < 0)
+        {
+            if (_paletteCount == 1 << _bits)
+            {
+                if (_bits == 4)
+                {
+                    var all = Unpacked();
+                    all[i] = type;
+                    _tiles = all;
+                    _packed = null;
+                    _palette = null;
+                    _bits = _paletteCount = 0;
+                    return;
+                }
+                Repack(_bits * 2);
+            }
+            index = _paletteCount++;
+            _palette![index] = type;
+        }
+        int bit = i * _bits;
+        ulong mask = ((1UL << _bits) - 1) << (bit & 63);
+        _packed![bit >> 6] = (_packed[bit >> 6] & ~mask) | ((ulong)index << (bit & 63));
+    }
+
+    /// <summary>Re-encodes the packed tiles at <paramref name="bits"/> per tile (same palette order).</summary>
+    private void Repack(int bits)
+    {
+        var packed = new ulong[Volume * bits / 64];
+        int oldBits = _bits, oldMask = (1 << oldBits) - 1;
+        for (int i = 0; i < Volume; i++)
+        {
+            int ob = i * oldBits, nb = i * bits;
+            ulong v = (_packed![ob >> 6] >> (ob & 63)) & (ulong)oldMask;
+            packed[nb >> 6] |= v << (nb & 63);
+        }
+        var palette = new TileType[1 << bits];
+        Array.Copy(_palette!, palette, _paletteCount);
+        _packed = packed;
+        _palette = palette;
+        _bits = bits;
+    }
+
+    /// <summary>Stores a full tile array as compactly as it fits (uniform, packed or bytes). Counters are the caller's.</summary>
+    private void Adopt(TileType[] tiles)
+    {
+        _tiles = null;
+        _packed = null;
+        _palette = null;
+        _bits = _paletteCount = 0;
+        Span<TileType> kinds = stackalloc TileType[16];
+        int count = 0;
+        foreach (var t in tiles)
+        {
+            int seen = 0;
+            while (seen < count && kinds[seen] != t) seen++;
+            if (seen < count) continue;
+            if (count == 16) { _tiles = tiles; return; }
+            kinds[count++] = t;
+        }
+        _fill = kinds[0];
+        if (count == 1) return;
+        _bits = count <= 2 ? 1 : count <= 4 ? 2 : 4;
+        _palette = new TileType[1 << _bits];
+        kinds[..count].CopyTo(_palette);
+        _paletteCount = count;
+        _packed = new ulong[Volume * _bits / 64];
+        for (int i = 0; i < Volume; i++)
+        {
+            int index = Array.IndexOf(_palette, tiles[i], 0, count), bit = i * _bits;
+            _packed[bit >> 6] |= (ulong)index << (bit & 63);
+        }
     }
 
     internal void Touch() => Version++;
@@ -134,6 +250,9 @@ public sealed class Chunk
     internal void InitUniform(TileType type)
     {
         _tiles = null;
+        _packed = null;
+        _palette = null;
+        _bits = _paletteCount = 0;
         _fill = type;
         NonAirCount = type == TileType.Air ? 0 : Volume;
         SolidCount = TileInfo.IsSolid(type) ? Volume : 0;
@@ -158,20 +277,23 @@ public sealed class Chunk
             InitUniform(first);
             return;
         }
-        _tiles = tiles;
+        Adopt(tiles);
         NonAirCount = nonAir;
         SolidCount = solid;
         StairCount = stairs;
     }
 
-    /// <summary>Drops the tile array if every tile is the same (after generation passes that add variety).</summary>
+    /// <summary>Stores the tiles as compactly as they fit again: uniform if every tile is the same, else packed when 16
+    /// kinds or fewer (after generation passes that add variety, or edits that brought in kinds that have gone again).</summary>
     internal void Compact()
     {
-        if (_tiles is null) return;
-        var first = _tiles[0];
-        foreach (var t in _tiles)
-            if (t != first) return;
-        InitUniform(first);
+        if (IsUniform) return;
+        var all = Unpacked();
+        var first = all[0];
+        bool uniform = true;
+        foreach (var t in all) uniform &= t == first;
+        if (uniform) InitUniform(first);
+        else Adopt(all);
     }
 
     internal static int Index(int lx, int ly, int lz) => (lz << (2 * Shift)) | (ly << Shift) | lx;
@@ -183,9 +305,10 @@ public sealed class Chunk
         w.Write(Version);
         w.Write(NonAirCount);
         w.Write(SolidCount);
-        w.Write((byte)_fill);
-        w.Write(_tiles != null);
-        if (_tiles != null) w.Write(System.Runtime.InteropServices.MemoryMarshal.AsBytes(_tiles.AsSpan()));
+        // Tiles a byte each whatever the storage (a loaded copy packs them again); the fill only means something when uniform.
+        w.Write((byte)(IsUniform ? _fill : TileType.Air));
+        w.Write(!IsUniform);
+        if (!IsUniform) w.Write(System.Runtime.InteropServices.MemoryMarshal.AsBytes(Unpacked().AsSpan()));
         w.Write(Edges != null);
         if (Edges != null) w.Write(System.Runtime.InteropServices.MemoryMarshal.AsBytes(Edges.AsSpan()));
         w.Write(EdgeCells);
@@ -199,18 +322,19 @@ public sealed class Chunk
     internal void SnapLoad(BinaryReader r)
     {
         Version = r.ReadInt32();
-        NonAirCount = r.ReadInt32();
-        SolidCount = r.ReadInt32();
-        _fill = (TileType)r.ReadByte();
-        _tiles = null;
+        int nonAir = r.ReadInt32(), solid = r.ReadInt32();
+        InitUniform((TileType)r.ReadByte());
+        NonAirCount = nonAir;
+        SolidCount = solid;
         if (r.ReadBoolean())
         {
-            _tiles = new TileType[Volume];
-            r.BaseStream.ReadExactly(System.Runtime.InteropServices.MemoryMarshal.AsBytes(_tiles.AsSpan()));
+            var tiles = new TileType[Volume];
+            r.BaseStream.ReadExactly(System.Runtime.InteropServices.MemoryMarshal.AsBytes(tiles.AsSpan()));
+            Adopt(tiles);
         }
         StairCount = 0; // derived (not saved)
-        if (_tiles is null) StairCount = TileInfo.IsStair(_fill) ? Volume : 0;
-        else foreach (var t in _tiles) if (TileInfo.IsStair(t)) StairCount++;
+        if (IsUniform) StairCount = TileInfo.IsStair(_fill) ? Volume : 0;
+        else for (int i = 0; i < Volume; i++) if (TileInfo.IsStair(At(i))) StairCount++;
         Edges = null;
         if (r.ReadBoolean())
         {

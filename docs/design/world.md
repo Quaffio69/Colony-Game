@@ -85,6 +85,14 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   outlet rose forever and flooded the land over hours (the books balanced; it was real accumulation). Dug-out water
   below the old ground is never touched; a fed reservoir still fills. `Total + Drained + Evaporated - Sourced` is
   constant (exact conservation).
+  **Only water near people steps** (`Water.SetInterest`, from `ColonySim` before each step: every colonist's position,
+  `WaterInterestRadius` 384 tiles, a square of blocks). The rest freezes: it keeps its volumes, flows and outflows, its
+  springs wait, and it doesn't step (rivers never sleep: on a 4096 map they were 12.5k of 27k blocks, 40 ms a step).
+  Where live water meets a frozen block, the frozen block's last outflows keep feeding it and what flows into it leaves,
+  so a steady river runs on through the live stretch; that flux counts as sourced and drained (the books still balance).
+  Comes from sim state, so peers agree and nothing new is saved; no colonists (tools, tests, the loading settle): all steps.
+  Blocks neither awake nor beside an awake block drop their pipes and next volumes (`ReleasePipes`; rebuilt when next
+  prepared, identical).
   Generated rivers start `RiverFill` of their channel, lakes at their sill; springs at every `RiverSources` point
   (rate by catchment gain, never filling past 0.9 of the channel); `ColonySim.WaterSettleSteps` (400) run in the
   background while the first frames draw (`WaterReady` gates ticks and edits). Wheels read `ThroughFlow`.

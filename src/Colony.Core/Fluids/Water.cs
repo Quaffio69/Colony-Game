@@ -80,6 +80,7 @@ public sealed class Water
         public bool Awake, Prepared, NeedsSpans = true, Changed, Received;
         public int Quiet, Version, Wet;
         public long Drained, Evaporated;
+        public long FromFrozen, ToFrozen; // this step, across the edge of the live water (transient: folded into the books in Finish)
         public int Visited;
 
         public Block(int index, int x0, int y0, bool border)
@@ -450,15 +451,39 @@ public sealed class Water
 
         _t0 = Sw();
         _awake.Sort((a, b) => a.Index.CompareTo(b.Index));
+        // Awake blocks out of everyone's interest wait, frozen (see SetInterest); they rejoin the awake list in Finish.
+        _frozenAwake.Clear();
+        if (_live != null)
+        {
+            var live = _live;
+            _awake.RemoveAll(b =>
+            {
+                if (live[b.Index]) return false;
+                _frozenAwake.Add(b);
+                return true;
+            });
+        }
+        _released.Clear();
+        _released.AddRange(_prepared);
         _prepared.Clear();
         foreach (var b in _awake) Prepare(b);
-        foreach (var b in _awake)
+        // Live neighbours of awake blocks (live or frozen: a frozen river keeps feeding the live water it flows into).
+        foreach (var list in new[] { _awake, _frozenAwake })
+        foreach (var b in list)
         {
             int bx = b.Index % _bw, by = b.Index / _bw;
-            if (bx + 1 < _bw) Prepare(Ensure(bx + 1, by));
-            if (bx > 0) Prepare(Ensure(bx - 1, by));
-            if (by + 1 < _bd) Prepare(Ensure(bx, by + 1));
-            if (by > 0) Prepare(Ensure(bx, by - 1));
+            if (bx + 1 < _bw && Live(by * _bw + bx + 1)) Prepare(Ensure(bx + 1, by));
+            if (bx > 0 && Live(by * _bw + bx - 1)) Prepare(Ensure(bx - 1, by));
+            if (by + 1 < _bd && Live((by + 1) * _bw + bx)) Prepare(Ensure(bx, by + 1));
+            if (by > 0 && Live((by - 1) * _bw + bx)) Prepare(Ensure(bx, by - 1));
+        }
+        foreach (var b in _released) if (!b.Prepared) ReleasePipes(b);
+        if (_prepared.Count == 0)
+        {
+            _awake.AddRange(_frozenAwake); // nothing live to step
+            LastStepCells = 0;
+            AddSprings();
+            return;
         }
         foreach (var b in _awake)
             if (b.Out is null || b.Out.Length < b.Spans * Slots) b.Out = new int[Math.Max(b.Spans, 1) * Slots];
@@ -506,6 +531,9 @@ public sealed class Water
             visited += b.Visited;
             _drained += b.Drained;
             _evaporated += b.Evaporated;
+            _sourced += b.FromFrozen;   // across the edge of the live water (see SetInterest)
+            _drained += b.ToFrozen;
+            b.FromFrozen = b.ToFrozen = 0;
             b.Drained = 0;
             (b.Vol, b.NewVol) = (b.NewVol, b.Vol);
             if (b.Wet > 0 ? _wet.Add(b.Index) : _wet.Remove(b.Index)) WetSetVersion++;
@@ -526,11 +554,78 @@ public sealed class Water
             }
             if (b.Awake) next.Add(b);
         }
+        FrozenAwake = _frozenAwake.Count;
+        next.AddRange(_frozenAwake); // frozen, still awake: they step again once someone comes near
+        _frozenAwake.Clear();
         _awake = next;
         LastStepCells = visited;
         Timings = $"rebuild {_tp - _tr:0.00} ({_rebuilt}) pressure {_tq - _tp:0.00} ({_fullBlocks.Count} full blocks, {_confined.Count} confined) " +
                   $"prep {_t1 - _t0:0.00} out {_t2 - _t1:0.00} apply {_t3 - _t2:0.00} finish {Sw() - tf:0.00} ms ({_prepared.Count} prepared)";
         AddSprings();
+    }
+
+    private readonly List<Block> _released = new();
+
+    // ---- Interest: water steps only near people ----------------------------------------------------------------
+    // Rivers never sleep, so on a big map they were nearly every awake block (12.5k of 27k at 4096: 40 ms a step). Water
+    // nobody is near freezes instead: it keeps its volumes, flows and outflows and doesn't step. Where live water meets a
+    // frozen block, the frozen block's last outflows keep feeding it and what flows into it leaves (a steady river runs on
+    // through the live stretch); that flux counts as sourced and drained. The live set comes from colonists' positions
+    // (sim state), so every peer computes the same one, and nothing new is saved.
+
+    private bool[]? _live;
+    private readonly List<int> _liveMarked = new();
+    private readonly List<Block> _frozenAwake = new();
+
+    /// <summary>
+    /// Water steps only in blocks within <paramref name="radius"/> tiles (a square) of one of <paramref name="points"/>; the
+    /// rest freezes until someone comes near. Null or empty: every block steps (tools, tests, worlds without people). Set
+    /// before each step.
+    /// </summary>
+    public void SetInterest(IReadOnlyList<TilePos>? points, int radius)
+    {
+        Join();
+        if (points is null || points.Count == 0)
+        {
+            _live = null;
+            return;
+        }
+        _live ??= new bool[_bw * _bd];
+        foreach (int i in _liveMarked) _live[i] = false;
+        _liveMarked.Clear();
+        int r = (radius + Chunk.Mask) >> Chunk.Shift;
+        foreach (var p in points)
+        {
+            int cx = p.X >> Chunk.Shift, cy = p.Y >> Chunk.Shift;
+            for (int by = Math.Max(0, cy - r); by <= Math.Min(_bd - 1, cy + r); by++)
+            for (int bx = Math.Max(0, cx - r); bx <= Math.Min(_bw - 1, cx + r); bx++)
+            {
+                int i = by * _bw + bx;
+                if (_live[i]) continue;
+                _live[i] = true;
+                _liveMarked.Add(i);
+            }
+        }
+    }
+
+    /// <summary>Whether a block steps (see <see cref="SetInterest"/>).</summary>
+    private bool Live(int block) => _live is null || _live[block];
+
+    /// <summary>Awake blocks frozen out of everyone's interest at the last step (diagnostics).</summary>
+    public int FrozenAwake { get; private set; }
+
+    /// <summary>
+    /// A block that is neither awake nor beside an awake one lets go of its pipes and next volumes (derived and scratch:
+    /// rebuilt the next time it is prepared, the same as before). Still lakes and dry ground are most blocks, and their
+    /// pipes were two thirds of the water's memory (614 of 920 MB at 4096).
+    /// </summary>
+    private static void ReleasePipes(Block b)
+    {
+        b.Link = [];
+        b.Back = [];
+        b.Sill = [];
+        b.NewVol = [];
+        b.LinksValid = false;
     }
 
     private void Prepare(Block b)
@@ -545,6 +640,7 @@ public sealed class Water
     {
         foreach (var (p, (rate, limit)) in _springs)
         {
+            if (!Live((p.Y >> Chunk.Shift) * _bw + (p.X >> Chunk.Shift))) continue; // frozen: what it fed keeps flowing from the block's last outflows
             var b = Ensure(p.X >> Chunk.Shift, p.Y >> Chunk.Shift);
             if (!FindIn(b, p.X, p.Y, p.Z, out int s)) continue; // buried: dormant
             long surface = (long)b.Floor[s] * U + b.Vol[s];
@@ -623,7 +719,8 @@ public sealed class Water
         var back = b.Back;
         int wet = 0, visited = 0;
         bool changed = false, received = false, still = true, full = false;
-        long drained = 0, evaporated = 0;
+        long drained = 0, evaporated = 0, toFrozen = 0, fromFrozen = 0;
+        var live = _live;
         for (int c = 0; c < Chunk.Size * Chunk.Size; c++)
         {
             int x = b.X0 + (c & Chunk.Mask), y = b.Y0 + (c >> Chunk.Shift);
@@ -654,6 +751,7 @@ public sealed class Water
                     long g = nb.Out is { } no ? no[(l & SpanMask) * Slots + (side ^ 1) * Links + back[ob + slot]] : 0;
                     outflow += f;
                     inflow += g;
+                    if (live != null && !live[nb.Index]) { toFrozen += f; fromFrozen += g; } // the frozen side neither loses nor gains
                     // Out through the +x side moves water towards +x; in through it, towards -x; and so on.
                     long net = f - g;
                     if (side == 0) fx += net; else if (side == 1) fx -= net; else if (side == 2) fy += net; else fy -= net;
@@ -693,6 +791,8 @@ public sealed class Water
         b.Visited = visited;
         b.Drained = drained;
         b.Evaporated = evaporated;
+        b.ToFrozen = toFrozen;
+        b.FromFrozen = fromFrozen;
         b.HasFull = full;
         b.Changed = changed;
         b.Received = received;
@@ -1058,8 +1158,8 @@ public sealed class Water
                 for (int lz = 0; lz < Chunk.Size && z0 + lz < open.Length; lz++) open[z0 + lz] = o;
                 continue;
             }
-            var raw = chunk.Raw!;
-            for (int lz = 0; lz < Chunk.Size && z0 + lz < open.Length; lz++) open[z0 + lz] = !TileInfo.IsSolid(raw[Chunk.Index(lx, ly, lz)]);
+
+            for (int lz = 0; lz < Chunk.Size && z0 + lz < open.Length; lz++) open[z0 + lz] = !TileInfo.IsSolid(chunk.Get(lx, ly, lz));
         }
     }
 

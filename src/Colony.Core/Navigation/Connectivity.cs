@@ -22,18 +22,27 @@ public sealed class Connectivity
     /// <summary>A move from local region <see cref="From"/> into region <see cref="Region"/> of chunk <see cref="Other"/>.</summary>
     private readonly record struct Link(ushort From, ushort Region, int Other);
 
+    /// <summary>
+    /// A chunk with walkable regions (chunks without have none: most of a deep world's are rock or sky). Labels are stored as
+    /// small as the region count allows: a bit per cell for one region (most chunks; 512 bytes), a byte per cell up to 255,
+    /// 16 bits beyond. At 8192 the 16-bit labels of every walkable chunk were 3 GB.
+    /// </summary>
     private sealed class ChunkNav
     {
-        public int LabeledVersion = int.MinValue;
-        public ushort[]? Labels;           // 0 = not standable, else local region id (1-based)
+        public ulong[]? Bits;      // one region: the standable cells
+        public byte[]? Labels8;    // 0 = not standable, else local region id (1-based)
+        public ushort[]? Labels16;
         public int RegionCount;
-        public List<(ushort From, long TargetCell)> CellLinks = new();
+        public long[] CellLinks = []; // moves out of the chunk: (from region << 48) | target cell key
         public Link[] RegionLinks = [];
         public int DenseBase;
+
+        public int Label(int i) =>
+            Bits != null ? (int)(Bits[i >> 6] >> (i & 63)) & 1 : Labels8 != null ? Labels8[i] : Labels16 != null ? Labels16[i] : 0;
     }
 
     private readonly VoxelWorld _world;
-    private readonly ChunkNav[] _nav;
+    private readonly ChunkNav?[] _nav;
     private int[] _componentOfRegion = [];
     private bool _built;
     private readonly List<int> _active = new();
@@ -53,8 +62,7 @@ public sealed class Connectivity
     public Connectivity(VoxelWorld world)
     {
         _world = world;
-        _nav = new ChunkNav[world.Chunks.Count];
-        for (int i = 0; i < _nav.Length; i++) _nav[i] = new ChunkNav();
+        _nav = new ChunkNav?[world.Chunks.Count];
         _baseOf = new int[_nav.Length];
         _countOf = new int[_nav.Length];
         world.ChunkChanged += i => _changed.Add(i);
@@ -73,8 +81,8 @@ public sealed class Connectivity
     {
         if (!_world.InBounds(p)) return -1;
         var nav = _nav[_world.ChunkIndex(p.X >> Chunk.Shift, p.Y >> Chunk.Shift, p.Z >> Chunk.Shift)];
-        if (nav.Labels is null) return -1;
-        int label = nav.Labels[Chunk.Index(p.X & Chunk.Mask, p.Y & Chunk.Mask, p.Z & Chunk.Mask)];
+        if (nav is null) return -1;
+        int label = nav.Label(Chunk.Index(p.X & Chunk.Mask, p.Y & Chunk.Mask, p.Z & Chunk.Mask));
         return label == 0 ? -1 : _componentOfRegion[nav.DenseBase + label - 1];
     }
 
@@ -105,19 +113,19 @@ public sealed class Connectivity
 
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var hadRegions = new bool[dirty.Count];
-        for (int i = 0; i < dirty.Count; i++) hadRegions[i] = _nav[dirty[i]].RegionCount > 0;
+        for (int i = 0; i < dirty.Count; i++) hadRegions[i] = _countOf[dirty[i]] > 0;
         if (dirty.Count > 8) Parallel.ForEach(dirty, Relabel);
         else foreach (int i in dirty) Relabel(i);
         LastRelabelCount = dirty.Count;
         for (int i = 0; i < dirty.Count && !_activeDirty; i++)
-            _activeDirty = hadRegions[i] != _nav[dirty[i]].RegionCount > 0;
+            _activeDirty = hadRegions[i] != _countOf[dirty[i]] > 0;
         if (_activeDirty)
         {
             // Chunks with walkable regions, in index order (keeps dense region ids deterministic). Only a
             // small share of a deep world's chunks: the rest are solid rock or open sky.
             _active.Clear();
             for (int i = 0; i < _nav.Length; i++)
-                if (_nav[i].RegionCount > 0) _active.Add(i);
+                if (_countOf[i] > 0) _active.Add(i);
             _activeDirty = false;
         }
 
@@ -143,15 +151,17 @@ public sealed class Connectivity
         Version++;
     }
 
+    // Per-thread scratch for Relabel (it runs in parallel over chunks): labels and links are built here, then stored packed.
+    [ThreadStatic] private static ushort[]? t_labels;
+    [ThreadStatic] private static List<long>? t_links;
+    [ThreadStatic] private static Stack<int>? t_stack;
+    [ThreadStatic] private static List<(TilePos To, float Cost)>? t_moves;
+
     private void Relabel(int chunkIndex)
     {
         var chunk = _world.Chunks[chunkIndex];
-        var nav = _nav[chunkIndex];
-        nav.LabeledVersion = chunk.Version;
-        nav.CellLinks = new List<(ushort, long)>();
-        nav.RegionCount = 0;
+        _nav[chunkIndex] = null;
         _countOf[chunkIndex] = 0;
-        nav.Labels = null;
 
         // Fully solid chunks have no open cells (stairs are open, so they don't count as solid); empty chunks
         // (no stairs either) above chunks with nothing solid have no floors.
@@ -165,9 +175,12 @@ public sealed class Connectivity
         var box = TileBox.CaptureSeen(_world, o.X - Pad, o.Y - Pad, o.Z - Pad,
             Chunk.Size + 2 * Pad, Chunk.Size + 2 * Pad, Chunk.Size + 2 * Pad);
 
-        var labels = new ushort[Chunk.Size * Chunk.Size * Chunk.Size];
-        var stack = new Stack<int>();
-        var moves = new List<(TilePos To, float Cost)>(12);
+        var labels = t_labels ??= new ushort[Chunk.Volume];
+        Array.Clear(labels);
+        var links = t_links ??= new List<long>();
+        links.Clear();
+        var stack = t_stack ??= new Stack<int>();
+        var moves = t_moves ??= new List<(TilePos To, float Cost)>(12);
         int regions = 0;
 
         for (int lz = 0; lz < Chunk.Size; lz++)
@@ -197,36 +210,50 @@ public sealed class Connectivity
                     }
                     else
                     {
-                        nav.CellLinks.Add((region, CellKey(q)));
+                        links.Add((long)region << 48 | CellKey(q));
                     }
                 }
             }
         }
 
         if (regions == 0) return;
-        nav.Labels = labels;
-        nav.RegionCount = regions;
+        var nav = new ChunkNav { RegionCount = regions, CellLinks = links.ToArray() };
+        if (regions == 1)
+        {
+            nav.Bits = new ulong[Chunk.Volume / 64];
+            for (int i = 0; i < labels.Length; i++)
+                if (labels[i] != 0) nav.Bits[i >> 6] |= 1UL << (i & 63);
+        }
+        else if (regions <= byte.MaxValue)
+        {
+            nav.Labels8 = new byte[Chunk.Volume];
+            for (int i = 0; i < labels.Length; i++) nav.Labels8[i] = (byte)labels[i];
+        }
+        else nav.Labels16 = (ushort[])labels.Clone();
+        _nav[chunkIndex] = nav;
         _countOf[chunkIndex] = regions;
     }
 
     private void ResolveLinks(int chunkIndex)
     {
         var nav = _nav[chunkIndex];
-        if (nav.CellLinks.Count == 0)
+        if (nav is null) return;
+        if (nav.CellLinks.Length == 0)
         {
             nav.RegionLinks = [];
             return;
         }
         var seen = new HashSet<long>();
         var resolved = new List<Link>();
-        foreach (var (from, cell) in nav.CellLinks)
+        foreach (long packed in nav.CellLinks)
         {
+            ushort from = (ushort)(packed >> 48);
+            long cell = packed & ((1L << 48) - 1);
             long x = cell % _world.Width, rest = cell / _world.Width;
             long y = rest % _world.Depth, z = rest / _world.Depth;
             int other = _world.ChunkIndex((int)x >> Chunk.Shift, (int)y >> Chunk.Shift, (int)z >> Chunk.Shift);
-            var labels = _nav[other].Labels;
-            if (labels is null) continue;
-            ushort region = labels[Chunk.Index((int)x & Chunk.Mask, (int)y & Chunk.Mask, (int)z & Chunk.Mask)];
+            if (_nav[other] is not { } target) continue;
+            ushort region = (ushort)target.Label(Chunk.Index((int)x & Chunk.Mask, (int)y & Chunk.Mask, (int)z & Chunk.Mask));
             if (region == 0) continue; // the target stopped being standable; this link is stale
             if (seen.Add(((long)other << 32) | ((long)region << 16) | from)) resolved.Add(new Link(from, region, other));
         }
@@ -261,7 +288,7 @@ public sealed class Connectivity
         Grow(ref _componentOfRegion, total);
         Grow(ref _regionChunk, total);
         foreach (int c in _active)
-            for (int r = 0; r < _nav[c].RegionCount; r++) _regionChunk[_nav[c].DenseBase + r] = c;
+            for (int r = 0; r < _nav[c]!.RegionCount; r++) _regionChunk[_nav[c]!.DenseBase + r] = c;
         Grow(ref _edgeA, edgeCount);
         Grow(ref _edgeB, edgeCount);
         double tPrep = sw.Elapsed.TotalMilliseconds;
@@ -272,7 +299,7 @@ public sealed class Connectivity
         foreach (int c in _active)
         {
             int baseA = baseOf[c] - 1;
-            foreach (var link in _nav[c].RegionLinks)
+            foreach (var link in _nav[c]!.RegionLinks)
             {
                 if (link.Region > countOf[link.Other]) continue; // defensive: stale link to a relabelled chunk
                 _edgeA[edges] = baseA + link.From;
@@ -332,8 +359,8 @@ public sealed class Connectivity
     {
         if (!_world.InBounds(p)) return -1;
         var nav = _nav[_world.ChunkIndex(p.X >> Chunk.Shift, p.Y >> Chunk.Shift, p.Z >> Chunk.Shift)];
-        if (nav.Labels is null) return -1;
-        int label = nav.Labels[Chunk.Index(p.X & Chunk.Mask, p.Y & Chunk.Mask, p.Z & Chunk.Mask)];
+        if (nav is null) return -1;
+        int label = nav.Label(Chunk.Index(p.X & Chunk.Mask, p.Y & Chunk.Mask, p.Z & Chunk.Mask));
         return label == 0 ? -1 : nav.DenseBase + label - 1;
     }
 

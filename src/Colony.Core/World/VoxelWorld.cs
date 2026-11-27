@@ -474,11 +474,8 @@ public sealed class VoxelWorld : ITileReader
                     int lx = wx & Chunk.Mask;
                     int run = Math.Min(Chunk.Size - lx, xEnd - x);
                     var chunk = ChunkAt(wx, wy, wz);
-                    var raw = chunk.Raw;
-                    if (raw != null)
-                        Array.Copy(raw, Chunk.Index(lx, wy & Chunk.Mask, wz & Chunk.Mask), dest, (z * sy + y) * sx + x, run);
-                    else if (chunk.UniformType != TileType.Air)
-                        dest.AsSpan((z * sy + y) * sx + x, run).Fill(chunk.UniformType);
+                    if (!chunk.IsUniform || chunk.UniformType != TileType.Air)
+                        chunk.CopyRun(Chunk.Index(lx, wy & Chunk.Mask, wz & Chunk.Mask), dest.AsSpan((z * sy + y) * sx + x, run));
                     x += run;
                 }
             }

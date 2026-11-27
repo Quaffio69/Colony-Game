@@ -206,6 +206,61 @@ public class WaterTests
             Assert.InRange((sim.Water.SurfaceAt(x, 16, 3 + x / 8) ?? 0) - before[x], -0.05f, 0.05f);
     }
 
+    /// <summary>The stepped river of the test above, run until it flows steadily.</summary>
+    private static ColonySim SteppedRiver()
+    {
+        var sim = Flat(size: 64, height: 20);
+        for (int x = 0; x < 64; x++)
+        {
+            int bed = 3 + x / 8;
+            Fill(sim, x, 0, 3, x, 63, bed - 1);
+            Fill(sim, x, 0, bed, x, 14, bed + 3);
+            Fill(sim, x, 18, bed, x, 63, bed + 3);
+        }
+        Fill(sim, 63, 15, 0, 63, 17, 19);
+        sim.Water.AddSpring(new TilePos(62, 16, 3 + 62 / 8), 200, head: 1);
+        Steps(sim, 3000);
+        return sim;
+    }
+
+    [Fact]
+    public void WaterNoOneIsNear_Freezes_AndAFrozenRiverKeepsFeedingTheLiveStretch()
+    {
+        var sim = SteppedRiver();
+        var before = new float[64];
+        for (int x = 0; x < 64; x++) before[x] = sim.Water.SurfaceAt(x, 16, 3 + x / 8) ?? 0;
+
+        // Someone at the river's mouth: blocks within 16 tiles of x = 8 step (x < 32), the upstream half freezes.
+        sim.Water.SetInterest([new TilePos(8, 16, 4)], 16);
+        Steps(sim, 1500);
+        Assert.True(sim.Water.FrozenAwake > 0, "the upstream river is frozen, not asleep");
+        for (int x = 32; x < 64; x++)
+            Assert.Equal(before[x], sim.Water.SurfaceAt(x, 16, 3 + x / 8) ?? 0); // untouched
+        // The live stretch still carries the river, at about its steady level: the frozen block above keeps feeding it.
+        Assert.True(sim.Water.MassAt(4, 16, 3) > F / 50, "the river still reaches the bottom");
+        for (int x = 1; x < 31; x++)
+            Assert.InRange((sim.Water.SurfaceAt(x, 16, 3 + x / 8) ?? 0) - before[x], -0.1f, 0.1f);
+
+        // Nobody left near: everything steps again (and a spring upstream keeps the river going).
+        sim.Water.SetInterest(null, 0);
+        Steps(sim, 50);
+        Assert.Equal(0, sim.Water.FrozenAwake);
+    }
+
+    [Fact]
+    public void FrozenWater_StepsAgain_WhenSomeoneComesNear()
+    {
+        var sim = Flat(size: 64, height: 12);
+        Basin(sim, 40, 40, 50, 50, 8);
+        sim.Water.SetInterest([new TilePos(4, 4, 3)], 8); // far from the basin
+        sim.Water.Add(new TilePos(40, 40, 3), F * 4);       // poured in a corner: it would spread
+        Steps(sim, 200);
+        Assert.Equal(F * 4, sim.Water.MassAt(40, 40, 3) + sim.Water.MassAt(40, 40, 4) + sim.Water.MassAt(40, 40, 5) + sim.Water.MassAt(40, 40, 6));
+        sim.Water.SetInterest([new TilePos(45, 45, 3)], 8);
+        Steps(sim, 1500);
+        Assert.InRange(sim.Water.SurfaceAt(50, 50, 3) ?? 0, 3.0f, 3.1f); // spread over the basin's 121 columns
+    }
+
     /// <summary>A channel along x at y=16 (walls at y=15 and 17 up to z=10), closed at x=25, open to the border at x=0.</summary>
     private static ColonySim Channel()
     {

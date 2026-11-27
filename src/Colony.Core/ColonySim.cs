@@ -112,6 +112,11 @@ public sealed partial class ColonySim
 
     /// <summary>Water steps every this many ticks.</summary>
     public const int WaterInterval = 4;
+
+    /// <summary>Water steps within this many tiles of a colonist (a square); beyond it freezes (see Water.SetInterest). The
+    /// same on every peer; tests shrink it to see freezing on small maps (not saved: set it again after loading).</summary>
+    public int WaterInterestRadius { get; set; } = 384;
+    private readonly List<TilePos> _interest = new();
     /// <summary>Whole-world water steps run while the world loads, so rivers and lakes start at their flowing rest.</summary>
     public const int WaterSettleSteps = 400;
 
@@ -756,6 +761,10 @@ public sealed partial class ColonySim
         // worker threads until the next tick begins (the game draws a frame meanwhile); the outcome is the same.
         if (Tick % WaterInterval == 0)
         {
+            // Only water near people steps (see Water.SetInterest): far rivers freeze until someone comes.
+            _interest.Clear();
+            foreach (var c in _colonists) _interest.Add(c.Position);
+            Water.SetInterest(_interest, WaterInterestRadius);
             Water.BeginStep(AsyncWater);
             _waterworksDue = true;
             if (!AsyncWater) RunWaterworks();

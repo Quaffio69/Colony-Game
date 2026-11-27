@@ -78,6 +78,29 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void ASnapshot_WithFarWaterFrozen_PlaysOnIdentically()
+    {
+        // Water no one is near freezes (Water.SetInterest); frozen rivers keep feeding the live water from their saved outflows.
+        var sim = BusyGame();
+        // A spring in a corner, flowing while everything steps; then only water near the colonists does.
+        int sx = 4, sy = 4;
+        sim.Water.AddSpring(new TilePos(sx, sy, sim.World.SurfaceLevel(sx, sy) + 1), head: 2);
+        for (int i = 0; i < 400; i++) sim.Step();
+        sim.WaterInterestRadius = 8;
+        for (int i = 0; i < 40; i++) sim.Step();
+        Assert.True(sim.Water.FrozenAwake > 0, "some flowing water is frozen");
+        var loaded = Snapshot.Load(Snapshot.Take(sim, Busy));
+        loaded.WaterInterestRadius = 8;
+        Assert.Equal(StateHash.Compute(sim), StateHash.Compute(loaded));
+        for (int i = 1; i <= 2000; i++)
+        {
+            sim.Step();
+            loaded.Step();
+            if (i % 250 == 0) Assert.True(StateHash.Compute(sim) == StateHash.Compute(loaded), $"diverged by tick {sim.Tick}");
+        }
+    }
+
+    [Fact]
     public void ASnapshotOfASnapshot_IsTheSame()
     {
         var sim = BusyGame();
