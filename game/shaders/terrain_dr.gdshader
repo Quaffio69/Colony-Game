@@ -23,7 +23,7 @@ void fragment() {
 	if (v_world.y > cut_height + 0.002) {
 		discard;
 	}
-	int t = clamp(int(v_tile + 0.5), 0, 31);
+	int t = clamp(int(v_tile + 0.5), 0, 63);
 	vec3 cell = floor(v_world - v_normal * 0.5);
 	bool on_cut = abs(cell.y - (cut_height - 1.0)) < 0.5;
 	ALBEDO = dr_tile_albedo(t, cell, v_world, v_normal, on_cut);

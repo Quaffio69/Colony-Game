@@ -19,19 +19,148 @@ public static class FloraGenerator
     private const int TreeCell = 3;  // at most one tree per 3x3 tiles
     private const int PlantCell = 2; // at most one surface plant per 2x2 tiles
 
-    public static Flora Generate(WorldGenSettings s, Terrain t, VoxelWorld world)
+    public static Flora Generate(WorldGenSettings s, Terrain t, VoxelWorld world, WorldGenProgress? progress = null)
     {
         var flora = new Flora(world);
         int regions = flora.RegionsX * flora.RegionsY;
         var lists = new List<Plant>[regions];
+        int done = 0, trees = 0;
         Parallel.For(0, regions, r =>
         {
             int rx = r % flora.RegionsX, ry = r / flora.RegionsX;
-            lists[r] = GenerateRegion(s, t, world, rx * Flora.RegionSize, ry * Flora.RegionSize);
+            lists[r] = t.Landform != null
+                ? GenerateBiomeRegion(s, t, world, rx * Flora.RegionSize, ry * Flora.RegionSize)
+                : GenerateRegion(s, t, world, rx * Flora.RegionSize, ry * Flora.RegionSize);
             CaveGlowcaps(s, world, rx * Flora.RegionSize, ry * Flora.RegionSize, lists[r]);
+            if (progress == null) return;
+            int grown = Interlocked.Add(ref trees, lists[r].Count(p => PlantInfo.IsTree(p.Kind)));
+            int n = Interlocked.Increment(ref done);
+            if ((n & 15) == 0 || n == regions)
+            {
+                progress.Retitle($"Growing {grown:N0} trees");
+                progress.Within((float)n / regions);
+            }
         });
         foreach (var list in lists) flora.AddGenerated(list);
+        if (progress != null) progress.Retitle($"Growing {lists.Sum(l => l.Count(p => PlantInfo.IsTree(p.Kind))):N0} trees");
         return flora;
+    }
+
+    /// <summary>
+    /// Flora of the tectonic generator: trees and undergrowth by biome (dense jungle and taiga, woods and groves in the
+    /// temperate lands, lone trees on the savanna, next to nothing in deserts and on the ice), species by temperature,
+    /// water and soil acidity (<see cref="Biomes.Acidity"/>: conifers, birch and berries on acid ground, oaks, shrubs
+    /// and flowers on alkaline), reeds along every warm shore.
+    /// </summary>
+    private static List<Plant> GenerateBiomeRegion(WorldGenSettings s, Terrain t, VoxelWorld world, int x0, int y0)
+    {
+        var result = new List<Plant>();
+        var trees = new HashSet<(int, int)>();
+        int x1 = Math.Min(x0 + Flora.RegionSize, s.Width), y1 = Math.Min(y0 + Flora.RegionSize, s.Depth);
+
+        for (int gy = y0 / TreeCell; gy * TreeCell < y1; gy++)
+        for (int gx = x0 / TreeCell; gx * TreeCell < x1; gx++)
+        {
+            int x = gx * TreeCell + (int)(Noise.Hash(gx, gy, 1, s.Seed + 700) * TreeCell);
+            int y = gy * TreeCell + (int)(Noise.Hash(gx, gy, 2, s.Seed + 700) * TreeCell);
+            if (x < x0 || y < y0 || x >= x1 || y >= y1) continue;
+            if (!Growable(s, t, world, x, y, out int surface)) continue;
+            var c = Biomes.At(t, x, y);
+            float forest = Forest(s, x, y);
+            int wd = t.WaterDistance[y * s.Width + x];
+            float density = c.Biome switch
+            {
+                Biome.Jungle => 0.86f,
+                Biome.Taiga => 0.45f + 0.35f * forest,
+                Biome.Forest => 0.38f + 0.5f * forest,
+                Biome.Swamp => 0.35f,
+                Biome.Grassland => 0.015f + 0.6f * MathF.Max(0f, forest - 0.55f), // open land with groves
+                Biome.Savanna => 0.045f,
+                Biome.Steppe => 0.008f,
+                Biome.Tundra => c.Temperature > 0f ? 0.02f : 0f,
+                Biome.Beach => 0.02f,
+                _ => 0f,
+            };
+            if (density <= 0) continue;
+            density = Math.Clamp(density + 0.15f * MathF.Max(0f, 1f - wd / 30f), 0f, 0.92f);
+            density *= Math.Clamp((c.Temperature + 1f) / 4f, 0f, 1f); // the tree line
+            if (Noise.Hash(gx, gy, 3, s.Seed + 700) >= density) continue;
+
+            float roll = Noise.Hash(gx, gy, 4, s.Seed + 700);
+            float acid = Biomes.Acidity(t, world, x, y, c);
+            PlantKind kind;
+            if (c.Biome == Biome.Swamp && roll < 0.7f || wd <= 5 && roll < 0.5f && c.Temperature > 3f) kind = PlantKind.Willow;
+            else if (c.Biome is Biome.Taiga or Biome.Tundra || c.Temperature < 6f)
+                kind = roll < 0.55f + (6f - acid) * 0.1f ? PlantKind.Spruce : PlantKind.Pine;
+            else if (c.Biome == Biome.Jungle) kind = roll < 0.75f ? PlantKind.Oak : PlantKind.Willow;
+            else if (c.Temperature < 10f && roll < 0.45f) kind = acid < 5.8f ? PlantKind.Pine : PlantKind.Spruce;
+            else if (acid < 5.8f && roll < 0.55f || Noise.Fbm2D(x / 90f, y / 90f, s.Seed + 92, 3) > 0.6f) kind = PlantKind.Birch;
+            else kind = PlantKind.Oak;
+            result.Add(MakePlant(s, x, y, surface, kind, gx, gy, mostlyMature: true));
+            trees.Add((x, y));
+        }
+
+        for (int gy = y0 / PlantCell; gy * PlantCell < y1; gy++)
+        for (int gx = x0 / PlantCell; gx * PlantCell < x1; gx++)
+        {
+            int x = gx * PlantCell + (int)(Noise.Hash(gx, gy, 11, s.Seed + 800) * PlantCell);
+            int y = gy * PlantCell + (int)(Noise.Hash(gx, gy, 12, s.Seed + 800) * PlantCell);
+            if (x < x0 || y < y0 || x >= x1 || y >= y1 || trees.Contains((x, y))) continue;
+            if (!Growable(s, t, world, x, y, out int surface)) continue;
+            var c = Biomes.At(t, x, y);
+            float roll = Noise.Hash(gx, gy, 13, s.Seed + 800);
+            float pick = Noise.Hash(gx, gy, 14, s.Seed + 800);
+            int wd = t.WaterDistance[y * s.Width + x];
+            PlantKind? kind = null;
+            if (wd <= 2 && c.Temperature > 2f)
+            {
+                if (roll < 0.55f) kind = PlantKind.Reeds;
+            }
+            else
+            {
+                float acid = Biomes.Acidity(t, world, x, y, c);
+                float meadow = Noise.Fbm2D(x / 70f, y / 70f, s.Seed + 81, 3);
+                switch (c.Biome)
+                {
+                    case Biome.Jungle:
+                        if (roll < 0.45f) kind = pick < 0.65f ? PlantKind.Fern : pick < 0.85f ? PlantKind.Shrub : PlantKind.BerryBush;
+                        break;
+                    case Biome.Forest:
+                    case Biome.Taiga:
+                        if (roll < 0.22f) kind = pick < 0.45f ? PlantKind.Fern : pick < (acid < 6f ? 0.6f : 0.8f) ? PlantKind.Shrub : PlantKind.BerryBush;
+                        break;
+                    case Biome.Swamp:
+                        if (roll < 0.45f) kind = pick < 0.65f ? PlantKind.Reeds : PlantKind.Fern;
+                        break;
+                    case Biome.Grassland:
+                        if (roll < 0.03f + Math.Max(0f, meadow - 0.5f) * 0.5f)
+                            kind = pick < (acid > 7f ? 0.7f : 0.5f) ? PlantKind.Flowers : pick < 0.8f ? PlantKind.Shrub : PlantKind.BerryBush;
+                        break;
+                    case Biome.Savanna:
+                    case Biome.Steppe:
+                        if (roll < 0.06f) kind = pick < 0.75f ? PlantKind.Shrub : PlantKind.Flowers;
+                        break;
+                    case Biome.Tundra:
+                        if (roll < 0.08f) kind = pick < 0.55f ? PlantKind.Shrub : PlantKind.BerryBush;
+                        break;
+                    case Biome.Beach:
+                    case Biome.Alpine:
+                    case Biome.Volcanic:
+                        if (roll < 0.03f) kind = PlantKind.Shrub;
+                        break;
+                }
+            }
+            if (kind is { } k) result.Add(MakePlant(s, x, y, surface, k, gx, gy, mostlyMature: false));
+        }
+        return result;
+    }
+
+    /// <summary>Dry land with a fertile top (grass, dry grass, soil, mud) and open air above.</summary>
+    private static bool Growable(WorldGenSettings s, Terrain t, VoxelWorld world, int x, int y, out int surface)
+    {
+        int i = y * s.Width + x;
+        surface = t.Surface[i];
+        return t.Kind[i] == SurfaceKind.Land && surface + 1 < s.Height && TileInfo.IsFertile(world.Get(x, y, surface));
     }
 
     /// <summary>

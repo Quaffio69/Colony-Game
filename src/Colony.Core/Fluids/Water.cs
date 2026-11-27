@@ -81,6 +81,7 @@ public sealed class Water
         public int Quiet, Version, Wet;
         public long Drained, Evaporated;
         public long FromFrozen, ToFrozen; // this step, across the edge of the live water (transient: folded into the books in Finish)
+        public long SeaIn; // this step, water the sea at the map edge gave back (transient, like FromFrozen)
         public int Visited;
 
         public Block(int index, int x0, int y0, bool border)
@@ -115,6 +116,8 @@ public sealed class Water
     /// </summary>
     private const int Seepage = U / 2048;
     private int[]? _natural; // per column: the natural water surface (units), see FillFromTerrain
+    private long _seaTop;     // the sea's surface (units over z = 0), or 0 without a sea: map-edge sea columns hold it
+    private int _seaNatural;  // _natural of a sea column (how an edge column is known to be sea)
     /// <summary>Water springs have added so far (thousandths of a cell): with <see cref="Total"/> and <see cref="Drained"/>, the books balance.</summary>
     public long Sourced => _sourced * Full / U;
 
@@ -344,6 +347,8 @@ public sealed class Water
     {
         int w = t.Width, d = t.Depth;
         _natural = new int[w * d];
+        _seaTop = t.SeaLevel > 0 ? (long)t.SeaLevel * U + U / 10 : 0;
+        _seaNatural = (t.SeaLevel + 1) * U - U / 10;
         for (int i = 0; i < w * d; i++)
         {
             int lvl = t.Surface[i] + t.Water[i];
@@ -532,6 +537,8 @@ public sealed class Water
             _drained += b.Drained;
             _evaporated += b.Evaporated;
             _sourced += b.FromFrozen;   // across the edge of the live water (see SetInterest)
+            _sourced += b.SeaIn;        // the sea holding its level at the map edge
+            b.SeaIn = 0;
             _drained += b.ToFrozen;
             b.FromFrozen = b.ToFrozen = 0;
             b.Drained = 0;
@@ -719,7 +726,7 @@ public sealed class Water
         var back = b.Back;
         int wet = 0, visited = 0;
         bool changed = false, received = false, still = true, full = false;
-        long drained = 0, evaporated = 0, toFrozen = 0, fromFrozen = 0;
+        long drained = 0, evaporated = 0, toFrozen = 0, fromFrozen = 0, seaIn = 0;
         var live = _live;
         for (int c = 0; c < Chunk.Size * Chunk.Size; c++)
         {
@@ -765,10 +772,15 @@ public sealed class Water
                     if (over > 0) { long e = Math.Min(over, Seepage); n -= e; evaporated += e; }
                 }
                 if (n < Dry && inflow == 0) { evaporated += n; n = 0; }
-                if (edge && n > 0)
+                if (edge)
                 {
-                    drained += n;
-                    n = 0;
+                    // The map edge drains, except where the sea meets it: a sea column's open span holds the sea's
+                    // level there (the ocean beyond the map), taking what's above it and giving back what's below.
+                    long hold = 0;
+                    if (_seaTop > 0 && b.Ceil[s] > _seaTop / U && _natural![(b.Y0 + (c >> Chunk.Shift)) * _world.Width + b.X0 + (c & Chunk.Mask)] == _seaNatural)
+                        hold = Math.Clamp(_seaTop - (long)b.Floor[s] * U, 0, (long)(b.Ceil[s] - b.Floor[s]) * U);
+                    if (n > hold) { drained += n - hold; n = hold; }
+                    else if (n < hold) { seaIn += hold - n; n = hold; }
                 }
                 b.NewVol[s] = (int)n;
                 full |= n >= (long)(b.Ceil[s] - b.Floor[s]) * U;
@@ -793,6 +805,7 @@ public sealed class Water
         b.Evaporated = evaporated;
         b.ToFrozen = toFrozen;
         b.FromFrozen = fromFrozen;
+        b.SeaIn = seaIn;
         b.HasFull = full;
         b.Changed = changed;
         b.Received = received;

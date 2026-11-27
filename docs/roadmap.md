@@ -143,6 +143,11 @@ Sorted by kind; within each list roughly by how much it hurts play. Agent playte
 - [ ] Simple people models with simple animations per action.
 - [x] Dev mode (main menu, F7): instant free construction, orders done at once, no schooling gates, spawn any item, machine or colonist. Single-player only. Next: fold in Enter-completes-all and the debug nest spawn.
 
+- [x] Tectonic world generation: plates (ranges on colliding seams, coastal ranges and volcanoes, island arcs, rifts),
+      wind-carried rain with rain shadows, rain-weighted erosion, seas, 14 biomes with their own ground and flora, rock
+      that follows the plates; World options in New colony and a loading screen with the world forming. Old saves keep
+      the first generator. Next: rivers that meander, glaciers and fjords, coral reefs, cactus and palm.
+
 ### Direction
 - [ ] Tone down the colony-sim side, lean more toward an automation game (affects needs, moods and families versus
       machines, conveyors and production chains; to decide before big work on either).

@@ -50,7 +50,7 @@ public partial class Main
     /// <summary>Remembers how a freshly generated world was made (called once it exists).</summary>
     private void RememberSettings()
     {
-        s_settings = new GameSettings(Seed, WorldWidth, WorldDepth, WorldHeight, StartingColonists, Colonies);
+        s_settings = new GameSettings(Seed, WorldWidth, WorldDepth, WorldHeight, StartingColonists, Colonies) { Shape = s_shape };
         s_replayable = _sim;
     }
 

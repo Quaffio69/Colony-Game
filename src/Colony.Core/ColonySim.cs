@@ -302,6 +302,7 @@ public sealed partial class ColonySim
     public static ItemType? MiningYield(TilePos p, TileType removed) => removed switch
     {
         TileType.Stone when Procedural.Noise.Hash(p.X, p.Y, p.Z, 0x5703E) < Balance.StoneYield => ItemType.Stone,
+        TileType.Gravel when Procedural.Noise.Hash(p.X, p.Y, p.Z, 0x5703E) < Balance.StoneYield * 0.5f => ItemType.Stone,
         TileType.Clay => ItemType.Clay,
         TileType.Sand => ItemType.Sand,
         TileType.CopperOre => ItemType.CopperOre,
@@ -366,15 +367,16 @@ public sealed partial class ColonySim
 
     /// <summary>Generates a world and drops a starting party at the terrain's suggested spawn.</summary>
     public static ColonySim Generate(WorldGenSettings settings, int colonists = 7, bool settleWaterInBackground = false, int factions = 1,
-        bool wildlife = true)
+        bool wildlife = true, WorldGenProgress? progress = null)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        var generated = WorldGenerator.GenerateWithTerrain(settings);
+        var generated = WorldGenerator.GenerateWithTerrain(settings, progress);
         generated.World.Seal(); // from here on, changed chunks are what a snapshot stores
         var sim = new ColonySim(generated.World) { Terrain = generated.Terrain };
         long genMs = clock.ElapsedMilliseconds;
 
         clock.Restart();
+        progress?.Step(generated.Terrain.SeaLevel > 0 ? "Pouring the seas" : "Pouring the rivers", "Springs start to flow; the water settles while the colony lands", 0.70f, 0.72f);
         sim.Water.FillFromTerrain(generated.Terrain);
         var stepping = DevHooks.Stepping; // generation's own settling isn't the caller's step (Wait may inline it)
         DevHooks.Stepping = null;
@@ -387,8 +389,9 @@ public sealed partial class ColonySim
             waterMs = waterClock.ElapsedMilliseconds;
         });
 
+        progress?.Step("Growing trees", "Woods, groves and meadows, each where its climate suits it", 0.72f, 0.88f);
         clock.Restart();
-        sim.Flora = FloraGenerator.Generate(settings, generated.Terrain, generated.World);
+        sim.Flora = FloraGenerator.Generate(settings, generated.Terrain, generated.World, progress);
         long floraMs = clock.ElapsedMilliseconds;
         int trees = sim.Flora.All.Count(p => PlantInfo.IsTree(p.Kind));
 
@@ -420,9 +423,11 @@ public sealed partial class ColonySim
 
         if (wildlife) sim.Wildlife.Populate(sim, settings.Seed);
 
+        progress?.Step("Mapping the paths", "Where colonists can walk, climb and swim", 0.88f, 0.98f);
         clock.Restart();
         sim.Connectivity.Update();
         long connMs = clock.ElapsedMilliseconds;
+        progress?.Step("Waking the colonists", $"{sim._colonists.Count} settlers step off the wagon", 0.98f, 1f);
         if (settleWaterInBackground) sim._waterSettling = settle; // the game draws its first frames meanwhile
         else settle.Wait();
         DevHooks.Stepping = stepping;
@@ -432,6 +437,7 @@ public sealed partial class ColonySim
                             $"flora {floraMs} ms ({trees} trees, {sim.Flora.Count - trees} plants), " +
                             $"connectivity {connMs} ms " +
                             $"({sim.Connectivity.RegionCount} regions, {sim.Connectivity.ComponentCount} components)";
+        progress?.Finish();
         return sim;
     }
 

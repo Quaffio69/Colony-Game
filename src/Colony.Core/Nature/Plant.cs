@@ -113,14 +113,14 @@ public static class PlantInfo
     };
 
     /// <summary>
-    /// Plants grow in an open cell whose floor is grass or soil; glowcaps grow on any solid floor, but only under
+    /// Plants grow in an open cell whose floor is fertile (grass, dry grass, soil, mud); glowcaps grow on any solid floor, but only under
     /// a roof (some solid tile above, within <see cref="RoofSearch"/> levels).
     /// </summary>
     public static bool CanGrowAt<T>(in T tiles, TilePos p, PlantKind kind = PlantKind.Shrub) where T : ITileReader
     {
         if (p.Z <= 0 || !tiles.InBounds(p.X, p.Y, p.Z) || tiles.Get(p.X, p.Y, p.Z) != TileType.Air) return false;
         var floor = tiles.Get(p.X, p.Y, p.Z - 1);
-        if (kind != PlantKind.Glowcap) return floor is TileType.Grass or TileType.Soil;
+        if (kind != PlantKind.Glowcap) return TileInfo.IsFertile(floor);
         if (!TileInfo.IsSolid(floor)) return false;
         for (int z = p.Z + 1; z < p.Z + RoofSearch && tiles.InBounds(p.X, p.Y, z); z++)
             if (TileInfo.IsSolid(tiles.Get(p.X, p.Y, z))) return true;

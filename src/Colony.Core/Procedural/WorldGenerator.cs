@@ -2,7 +2,11 @@ using Colony.Core.World;
 
 namespace Colony.Core.Procedural;
 
-public sealed record WorldGenSettings(int Seed, int Width = 64, int Depth = 64, int Height = 40);
+/// <summary>A world's recipe: seed, size and the world-generation choices (<see cref="WorldShape"/>).</summary>
+public sealed record WorldGenSettings(int Seed, int Width = 64, int Depth = 64, int Height = 40)
+{
+    public WorldShape Shape { get; init; } = WorldShape.Default;
+}
 
 /// <summary>A generated world plus the surface/hydrology data it was built from.</summary>
 public sealed record GeneratedWorld(VoxelWorld World, Terrain Terrain);
@@ -21,18 +25,76 @@ public static class WorldGenerator
 
     public static VoxelWorld Generate(WorldGenSettings s) => GenerateWithTerrain(s).World;
 
-    public static GeneratedWorld GenerateWithTerrain(WorldGenSettings s)
+    public static GeneratedWorld GenerateWithTerrain(WorldGenSettings s, WorldGenProgress? progress = null)
     {
-        var terrain = Terrain.Generate(s);
+        var terrain = Terrain.Generate(s, progress);
+        bool tectonic = terrain.Landform != null;
+        if (tectonic) progress?.Step("Laying strata", "Sandstone and limestone over slate, granite and basalt, folded up under the mountains", 0.56f, 0.58f);
         var world = new VoxelWorld(s.Width, s.Depth, s.Height) { Geology = Geology.For(s, terrain) };
-        Parallel.For(0, world.ChunksX * world.ChunksY, column =>
+        // Fun titles for the ground being laid, by the biomes this world has (a census every 16 tiles).
+        var phases = tectonic ? GroundPhases(terrain) : [];
+        int phaseShown = 0;
+        if (tectonic) progress?.Step(phases[0].Title, phases[0].Detail, 0.58f, 0.58f + 0.12f / phases.Length);
+        int columns = world.ChunksX * world.ChunksY, done = 0;
+        Parallel.For(0, columns, column =>
         {
             int cx = column % world.ChunksX, cy = column / world.ChunksX;
             FillColumn(s, terrain, world, cx, cy);
             PlaceOre(s, world, cx, cy);
             CarveCaverns(terrain, world, cx, cy);
+            int n = Interlocked.Increment(ref done);
+            if (progress != null && (n & 31) == 0)
+            {
+                float share = (float)n / columns;
+                // Each biome's turn is a step of its own (one thread moves it on; the rest just report).
+                int k = Math.Min(phases.Length - 1, (int)(share * phases.Length));
+                int shown = Volatile.Read(ref phaseShown);
+                if (k > shown && Interlocked.CompareExchange(ref phaseShown, k, shown) == shown)
+                    progress.Step(phases[k].Title, phases[k].Detail, 0.58f + 0.12f * k / phases.Length, 0.58f + 0.12f * (k + 1) / phases.Length);
+                else progress.Within(share * phases.Length - k);
+            }
         });
+        if (tectonic && progress != null)
+        {
+            var (rgb, pw, ph) = terrain.Picture();
+            progress.Show(rgb, pw, ph);
+        }
         return new GeneratedWorld(world, terrain);
+    }
+
+    /// <summary>The loading screen's titles while the ground goes down: one for each biome the world has much of.</summary>
+    private static (string Title, string Detail)[] GroundPhases(Terrain t)
+    {
+        var count = new int[Enum.GetValues<Biome>().Length];
+        int total = 0;
+        for (int y = 8; y < t.Depth; y += 16)
+        for (int x = 8; x < t.Width; x += 16)
+        {
+            count[(int)Biomes.At(t, x, y).Biome]++;
+            total++;
+        }
+        var list = new List<(string, string)>();
+        void Add(Biome b, string title, string detail)
+        {
+            if (count[(int)b] * 50 >= total) list.Add((title, detail));
+        }
+        Add(Biome.Grassland, "Soiling the plains", "Grass over soil, with clay beds where it is damp");
+        Add(Biome.Forest, "Mulching forest floors", "Leaf litter over deep soil");
+        Add(Biome.Desert, "Baking deserts", "Where the rain shadow falls, the sand piles into dunes");
+        Add(Biome.Badlands, "Weathering badlands", "Red clay and bare rock, stepped into mesas");
+        Add(Biome.Savanna, "Drying the savanna", "Tall dry grass under a hot sun");
+        Add(Biome.Steppe, "Settling the steppe", "Dry grass over cold, open ground");
+        Add(Biome.Jungle, "Steaming the jungle", "Warm rain all year round");
+        Add(Biome.Swamp, "Bogging down swamps", "Mud and still water in the low, wet places");
+        Add(Biome.Taiga, "Needling the taiga", "Cold forest floors, acid and dark");
+        Add(Biome.Tundra, "Freezing the tundra", "Thin soil, dry grass and frost-shattered stones");
+        Add(Biome.Snow, "Snowing on the peaks", "Above the snow line it never melts");
+        Add(Biome.Volcanic, "Cooling lava fields", "Black basalt and cinders round the volcanoes");
+        Add(Biome.Beach, "Raking the beaches", "Sand where the sea meets the land");
+        if (list.Count == 0) list.Add(("Laying the ground", "Topsoil, subsoil and rock"));
+        list.Add(("Seeding ore", "Copper and tin near the top, iron below, gold, gems and aetherite in the deep"));
+        list.Add(("Hollowing caverns", "Dark halls deep under the surface, waiting to be found"));
+        return list.ToArray();
     }
 
     /// <summary>Levels above which mountain tops are bare rock.</summary>
@@ -95,6 +157,11 @@ public static class WorldGenerator
     /// </summary>
     private static (TileType Top, int Soil, TileType Sub) SurfaceMaterial(WorldGenSettings s, Terrain t, int x, int y, int surface)
     {
+        if (t.Landform != null)
+        {
+            var column = Biomes.At(t, x, y);
+            return Biomes.Ground(t, x, y, column);
+        }
         int i = y * s.Width + x;
         var kind = t.Kind[i];
         if (kind == SurfaceKind.RiverBed) return (TileType.Sand, 3, TileType.Clay);

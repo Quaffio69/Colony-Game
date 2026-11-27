@@ -7,7 +7,7 @@ render_mode cull_back;
 #include "res://shaders/tiles.gdshaderinc"
 
 uniform sampler2D tiles : filter_nearest;
-uniform vec4 palette[32]; // rgb: sRGB tile colour; a < 1 glows (aetherite)
+uniform vec4 palette[64]; // rgb: sRGB tile colour; a < 1 glows (aetherite)
 uniform float level;
 
 varying vec3 v_world;

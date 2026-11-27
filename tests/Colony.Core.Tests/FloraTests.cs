@@ -28,17 +28,17 @@ public class FloraTests
             Assert.True(PlantInfo.CanGrowAt(w, p.Position), $"{p} has no ground");
             int i = p.Position.Y * w.Width + p.Position.X;
             Assert.Equal(SurfaceKind.Land, t.Kind[i]);
-            Assert.Equal(TileType.Grass, w.Get(p.Position.X, p.Position.Y, p.Position.Z - 1));
+            Assert.True(TileInfo.IsFertile(w.Get(p.Position.X, p.Position.Y, p.Position.Z - 1)), $"{p} not on fertile ground");
             if (PlantInfo.IsTree(p.Kind))
             {
                 trees++;
-                Assert.True(p.Position.Z - 1 <= FloraGenerator.TreeLine(Large), $"{p} above the treeline");
+                Assert.True(Procedural.Biomes.At(t, p.Position.X, p.Position.Y).Temperature > -1.5f, $"{p} above the treeline");
                 if (p.Kind is PlantKind.Pine or PlantKind.Spruce) conifers++;
             }
             if (p.Kind == PlantKind.Reeds)
             {
                 reeds++;
-                Assert.True(t.WaterDistance[i] <= 2, $"{p} reeds far from water");
+                Assert.True(t.WaterDistance[i] <= 2 || Procedural.Biomes.At(t, p.Position.X, p.Position.Y).Biome == Procedural.Biome.Swamp, $"{p} reeds far from water");
             }
         }
         Assert.True(trees > 2000, $"only {trees} trees");

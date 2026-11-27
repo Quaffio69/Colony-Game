@@ -14,10 +14,10 @@ namespace Colony.Core.Meshing;
 public static class FarMesher
 {
     /// <summary>The tile code far meshes use for standing water (no world tile has it; tile tables give it water's look).</summary>
-    public const TileType Water = (TileType)31;
+    public const TileType Water = (TileType)63;
     /// <summary>The tile code coarse far cells use for woodland (two of their four sampled columns carry a tree): far out the
     /// trees themselves are not drawn (each would be a fraction of a pixel), so the ground shows they are there.</summary>
-    public const TileType Forest = (TileType)29;
+    public const TileType Forest = (TileType)61;
 
     /// <summary>
     /// Greedy rectangles meet in T-junctions, which rasterise with hairline cracks; under a far top there is nothing, so a

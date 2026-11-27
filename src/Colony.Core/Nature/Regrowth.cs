@@ -48,10 +48,11 @@ public sealed class Regrowth
                 _cells[keep++] = _cells[i];
                 continue;
             }
-            switch (Check(sim, p, round))
+            var outcome = Check(sim, p, round);
+            switch (outcome)
             {
-                case Outcome.Green:
-                    world.Set(p, TileType.Grass);
+                case Outcome.Green or Outcome.GreenDry:
+                    world.Set(p, outcome == Outcome.GreenDry ? TileType.DryGrass : TileType.Grass);
                     Greened++;
                     _watched.Remove(p);
                     break;
@@ -66,7 +67,7 @@ public sealed class Regrowth
         _cells.RemoveRange(keep, _cells.Count - keep);
     }
 
-    private enum Outcome { Green, Wait, Drop }
+    private enum Outcome { Green, GreenDry, Wait, Drop }
 
     private static Outcome Check(ColonySim sim, TilePos p, int round)
     {
@@ -83,7 +84,10 @@ public sealed class Regrowth
         {
             if (dx == 0 && dy == 0) continue;
             var n = p.Offset(dx, dy, dz);
-            if (world.InBounds(n) && world.Get(n) == TileType.Grass && !world.IsSolid(n.X, n.Y, n.Z + 1)) return Outcome.Green;
+            if (!world.InBounds(n) || world.IsSolid(n.X, n.Y, n.Z + 1)) continue;
+            var g = world.Get(n);
+            if (g == TileType.Grass) return Outcome.Green;
+            if (g == TileType.DryGrass) return Outcome.GreenDry; // steppe and savanna grow back dry
         }
         return Outcome.Wait;
     }

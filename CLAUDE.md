@@ -11,7 +11,7 @@ compete). Public on GitHub (`Quaffio69/Colony-Game`, MIT); players install throu
 | Doc | Covers |
 |---|---|
 | `docs/design/economy.md` | `Balance.cs` pacing knobs, industry direction, flora, items/hauling/racks/scaffolds, production tree (`data/tech-tree.json`), factory builder, raw resources, farms, gathering |
-| `docs/design/world.md` | movement rules, stairs, designations, water simulation, terrain hydrology, thin walls, floors/roofs, waterworks, cave-ins |
+| `docs/design/world.md` | movement rules, stairs, designations, world generation (plates, climate, erosion, biomes, sea), water simulation, terrain hydrology, thin walls, floors/roofs, waterworks, cave-ins |
 | `docs/design/people.md` | needs (hunger, rest, mood), population and settlers, homes and fixtures, families, work priorities, likes |
 | `docs/design/combat.md` | health, gear, drafting/squads, giant ants (nests, temperament, raids, swarm pathing) |
 | `docs/design/multiplayer.md` | lockstep networking, `StateHash`, snapshots, saves, commands, factions/ownership, trade |

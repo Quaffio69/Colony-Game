@@ -52,7 +52,7 @@ Lockstep networking, state hashes, snapshots and saves, the command system, fact
   `--join=127.0.0.1:7781 --net-orders --net-check=1500`; the two `[net] ... hash` lines must match (they did).
 - Limits: demos edit the world outside commands, so they're off online (a world a demo changed can still be hosted:
   snapshots hold its edits).
-- **Snapshots (`Net.Snapshot`, version 16: conveyor ends work with their 3x3; 15: conveyor belts and the goods on them, power per colony (wheels and pumps carry their colony); version 6: blueprints built from another cell (`Blueprint.Target`: decks, stairs); 5: machine limits; 4: trade depots, deals, seventh work type; 3: racks and regrowth; versions 2-3 still load, `SnapIO.Before(v)` skips newer sections):** the whole state in a gzip blob: the `GameSettings` (the terrain is regenerated, a
+- **Snapshots (`Net.Snapshot`, version 17: the settings carry the world shape (`GameSettings.Shape`, `WorldShape`; older snapshots rebuild with the first generator); 16: conveyor ends work with their 3x3; 15: conveyor belts and the goods on them, power per colony (wheels and pumps carry their colony); version 6: blueprints built from another cell (`Blueprint.Target`: decks, stairs); 5: machine limits; 4: trade depots, deals, seventh work type; 3: racks and regrowth; versions 2-3 still load, `SnapIO.Before(v)` skips newer sections):** the whole state in a gzip blob: the `GameSettings` (the terrain is regenerated, a
   second at 2048), the chunks changed since generation (`VoxelWorld.Seal` after generation starts tracking them), then
   flora, piles, orders, stockpiles, farms, rooms and parts, blueprints, waterworks, water (spans, volumes, flow
   momentum, sleep state, springs; natural levels from the terrain; pipes rebuilt), colonists, colonies (society,
@@ -67,7 +67,7 @@ Lockstep networking, state hashes, snapshots and saves, the command system, fact
   piece of sim state must be added to its class's `SnapSave`/`SnapLoad` (and `Settle` if it holds claims or
   order-dependent containers); the continuation test catches omissions. Arrays are written in bulk (`MemoryMarshal`):
   element by element through gzip, water took 11 s to load.
-- **Saves (`Net.SaveGame`, game `MainSave.cs`):** version 2 holds a snapshot (version 1, the command log, still loads by
+- **Saves (`Net.SaveGame`, game `MainSave.cs`):** version 3 adds the world shape to the settings and a flag for the body (snapshot or log); version 2 holds a snapshot (version 1, the command log, still loads by
   replay), with the `GameSettings`, the tick, a name, the local player and when it was saved (`Read(headerOnly)` lists
   saves fast). `Load` runs on a background task with progress; loaded games are bit-identical (tested, and across two
   processes: `--save-at=TICKS` then `--load-newest` print matching hashes). Files in `user://saves/*.colony` (name ->

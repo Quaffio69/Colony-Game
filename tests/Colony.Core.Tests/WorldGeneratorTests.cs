@@ -44,7 +44,8 @@ public class WorldGeneratorTests
             int surface = w.SurfaceLevel(x, y);
             Assert.Equal(t.SurfaceAt(x, y), surface);
             Assert.InRange(surface, 1, w.Height - 2);
-            Assert.Contains(w.Get(x, y, surface), new[] { TileType.Grass, TileType.Soil, TileType.Stone });
+            var top = w.Get(x, y, surface);
+            Assert.True(TileInfo.IsEarth(top) || top == TileType.Stone, $"{top} on top at ({x},{y})");
             Assert.True(w.IsSolid(x, y, 0));
             for (int z = 0; z <= surface; z++) Assert.True(w.IsSolid(x, y, z)); // no voids under the surface
             Assert.Equal(TileType.Air, w.Get(x, y, w.Height - 1));

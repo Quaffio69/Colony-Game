@@ -40,8 +40,16 @@ public sealed class Geology
     private readonly int _gw, _gd, _seed;
     // Per coarse node: the top level of each layer (bedrock, basalt, granite, slate) and the tilt of the sediment bands.
     private readonly short[] _bedrock, _basalt, _granite, _slate, _tilt;
+    private readonly short[]? _sand; // tectonic worlds: per node, the share (thousandths) of sediment bands that are sandstone
 
-    public Geology(int seed, int width, int depth, int height, int zeroLevel)
+    /// <summary>
+    /// What the plates did at a point, for the tectonic generator's rock: levels to lift the basement (folded up under
+    /// mountains, laid bare where erosion cut deep), 0..1 volcanic, 0..1 arid (sandstone), 0..1 marine (limestone), and
+    /// the surface level there.
+    /// </summary>
+    public readonly record struct Province(float Lift, float Volcanic, float Arid, float Marine, int Surface);
+
+    public Geology(int seed, int width, int depth, int height, int zeroLevel, Func<int, int, Province>? province = null)
     {
         _seed = seed;
         ZeroLevel = zeroLevel;
@@ -49,6 +57,7 @@ public sealed class Geology
         _gd = depth / Grid + 2;
         int n = _gw * _gd;
         _bedrock = new short[n]; _basalt = new short[n]; _granite = new short[n]; _slate = new short[n]; _tilt = new short[n];
+        if (province != null) _sand = new short[n];
         float h = height;
         bool deep = height >= 96; // small test worlds keep only z = 0 as bedrock
         int bMin = int.MaxValue, bMax = 0;
@@ -65,6 +74,18 @@ public sealed class Geology
             int basalt = Math.Max(bedrock + 2, bedrock + (int)(h * 0.09f + (n2 - 0.5f) * h * 0.10f));
             int granite = Math.Max(basalt + 2, (int)(h * 0.24f + (n3 - 0.5f) * h * 0.12f));
             int slate = Math.Max(granite + 2, (int)(h * 0.37f + (n4 - 0.5f) * h * 0.12f));
+            if (province != null)
+            {
+                var p = province((int)x, (int)y);
+                int lift = (int)p.Lift;
+                basalt = Math.Max(bedrock + 2, basalt + lift / 2);
+                granite += lift;
+                slate += lift;
+                if (p.Volcanic > 0) basalt = Math.Max(basalt, (int)(basalt + (p.Surface - 3 - basalt) * p.Volcanic));
+                granite = Math.Max(granite, basalt + 2);
+                slate = Math.Max(slate, granite + 2);
+                _sand![i] = (short)(1000f * Math.Clamp(0.48f + 0.32f * p.Arid - 0.28f * p.Marine, 0.1f, 0.85f));
+            }
             _bedrock[i] = (short)bedrock; _basalt[i] = (short)basalt; _granite[i] = (short)granite; _slate[i] = (short)slate;
             _tilt[i] = (short)((Noise.Fbm2D(x / 140f, y / 140f, seed + 905, 2) - 0.5f) * 40f);
             bMin = Math.Min(bMin, bedrock);
@@ -89,7 +110,21 @@ public sealed class Geology
     {
         int lowest = int.MaxValue;
         foreach (int z in t.Surface) lowest = Math.Min(lowest, z);
-        return new Geology(s.Seed, s.Width, s.Depth, s.Height, lowest == int.MaxValue ? 0 : lowest);
+        int zero = lowest == int.MaxValue ? 0 : lowest;
+        if (t.Landform is not { } lf) return new Geology(s.Seed, s.Width, s.Depth, s.Height, zero);
+        int sea = t.SeaLevel > 0 ? t.SeaLevel : lf.BaseLevel;
+        return new Geology(s.Seed, s.Width, s.Depth, s.Height, zero, (x, y) =>
+        {
+            int cx = Math.Clamp(x, 0, s.Width - 1), cy = Math.Clamp(y, 0, s.Depth - 1);
+            int surface = t.Surface[cy * s.Width + cx];
+            float rain = lf.At(lf.Rain, cx, cy);
+            return new Province(
+                Lift: 0.8f * lf.At(lf.Uplift, cx, cy) + 0.6f * lf.At(lf.Eroded, cx, cy),
+                Volcanic: Math.Clamp(lf.At(lf.Volcanic, cx, cy) * 1.4f - 0.2f, 0f, 1f),
+                Arid: Math.Clamp((0.45f - rain) / 0.3f, 0f, 1f),
+                Marine: Math.Clamp(1f - (surface - sea) / (0.08f * s.Height), 0f, 1f),
+                Surface: surface);
+        });
     }
 
     private int Lerp(short[] a, int x, int y)
@@ -115,7 +150,8 @@ public sealed class Geology
         // Sediment: bands 4-9 levels thick, tilted across the land, each sandstone, limestone or a slate parting.
         int band = Math.DivRem(z + Lerp(_tilt, x, y) + 400, 6, out _);
         float pick = Noise.Hash(band, 0, 77, _seed + 906);
-        return pick < 0.48f ? Rock.Sandstone : pick < 0.88f ? Rock.Limestone : Rock.Slate;
+        float sandstone = _sand == null ? 0.48f : Lerp(_sand, x, y) / 1000f;
+        return pick < sandstone ? Rock.Sandstone : pick < 0.88f ? Rock.Limestone : Rock.Slate;
     }
 
     // ---- Caverns ----------------------------------------------------------------------------------------------

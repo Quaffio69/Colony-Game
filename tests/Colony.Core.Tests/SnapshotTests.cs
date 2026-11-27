@@ -84,6 +84,7 @@ public class SnapshotTests
         var sim = BusyGame();
         // A spring in a corner, flowing while everything steps; then only water near the colonists does.
         int sx = 4, sy = 4;
+        while (sim.Terrain!.Kind[sy * sim.World.Width + sx] != Procedural.SurfaceKind.Land) { sx++; sy++; } // on land, not in the sea
         sim.Water.AddSpring(new TilePos(sx, sy, sim.World.SurfaceLevel(sx, sy) + 1), head: 2);
         for (int i = 0; i < 400; i++) sim.Step();
         sim.WaterInterestRadius = 8;

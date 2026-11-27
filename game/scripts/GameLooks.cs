@@ -14,7 +14,8 @@ namespace ColonyGame;
 public static class GameLooks
 {
     // Glyph groups of our own (GlyphAtlas: 32..126 are free).
-    public const int Furniture = 32, Construction = 33, Farm = 34, UpStairs = 35, DownStairs = 36, UpDownStairs = 37, Nest = 38, CutRock = 39;
+    public const int Furniture = 32, Construction = 33, Farm = 34, UpStairs = 35, DownStairs = 36, UpDownStairs = 37, Nest = 38, CutRock = 39,
+        Snow = 40, DryGrass = 41, Gravel = 42;
 
     private static bool _registered;
 
@@ -72,6 +73,9 @@ public static class GameLooks
         G(DownStairs, "down stairs", " .:>>>>>", ">>>>>>>>");
         G(UpDownStairs, "up/down stairs", " .:XXXXX", "XXXXXXXX");
         G(Nest, "nest", " .:∩∩∩∩∩", "∩∩∩∩∩∩∩∩");
+        G(Snow, "snow", " ..:::**", "*.*.*.**");
+        G(DryGrass, "dry grass", " .,''\"vw", "','\"',''");
+        G(Gravel, "gravel", " .,:;oo%", ".o.,o.:o");
     }
 
     /// <summary>The UI's 5x7 bitmap glyphs (game/ui/glyph_glyphs.json) into the kit's font, so ASCII matches the UI.</summary>
@@ -125,6 +129,10 @@ public static class GameLooks
             TileType.Granite => B("#8c7470", TileRecipe.Stone, GlyphAtlas.Stone),
             TileType.Basalt => B("#4a4a52", TileRecipe.DeepStone, GlyphAtlas.DeepStone),
             TileType.Bedrock => B("#2a2428", TileRecipe.DeepStone, GlyphAtlas.DeepStone),
+            TileType.Snow => B("#e6ecf2", TileRecipe.Sand, Snow),
+            TileType.DryGrass => B("#b3a456", TileRecipe.Grass, DryGrass, SurfaceClass.Grass),
+            TileType.Mud => B("#5e4a34", TileRecipe.Dirt, GlyphAtlas.Dirt),
+            TileType.Gravel => B("#9c958a", TileRecipe.Path, Gravel),
             TileInfo.Hidden => B("#000000", TileRecipe.Noise, GlyphAtlas.Sky), // unexplored rock: dark, no symbols
             _ => B("#77706a", TileRecipe.Stone, GlyphAtlas.Stone),
         };
@@ -134,10 +142,10 @@ public static class GameLooks
     public static (Vector4[] Palette, float[] Groups, float[] CapGroups) TileTables()
     {
         RegisterBlocks();
-        var palette = new Vector4[32];
-        var groups = new float[32];
-        var capGroups = new float[32];
-        for (int i = 1; i < 32; i++)
+        var palette = new Vector4[64];
+        var groups = new float[64];
+        var capGroups = new float[64];
+        for (int i = 1; i < 64; i++)
         {
             if (i >= TileInfo.Count && i != (int)TileInfo.Hidden) continue;
             var look = BlockLooks.Get(i);

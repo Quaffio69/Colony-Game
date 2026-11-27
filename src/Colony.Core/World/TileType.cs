@@ -57,15 +57,25 @@ public enum TileType : byte
     Granite,
     Basalt,
     Bedrock,
+
+    // Ground of the biomes (generator 2).
+    /// <summary>Snow over the ground of cold peaks and polar lands: loose, dug like earth, leaves nothing.</summary>
+    Snow,
+    /// <summary>Dry grass of steppe, savanna and tundra: grows plants like grass.</summary>
+    DryGrass,
+    /// <summary>Swamp mud: wet ground that grows plants; dug like clay.</summary>
+    Mud,
+    /// <summary>Loose stones of scree, alpine slopes, cold shores and river beds: dug like sand, leaves stone now and then.</summary>
+    Gravel,
 }
 
 public static class TileInfo
 {
     /// <summary>Number of <see cref="TileType"/> values (for palettes and lookup tables).</summary>
-    public const int Count = 29;
+    public const int Count = 33;
 
     /// <summary>Palette entry of unexplored rock (fog of war) on the cut surface; not a tile type.</summary>
-    public const TileType Hidden = (TileType)30;
+    public const TileType Hidden = (TileType)62;
 
     /// <summary>Blocks movement: natural rock and earth. Stairs and decks are walk-in cells, not solid.</summary>
     public static bool IsSolid(TileType t) => t != TileType.Air && t != TileType.Deck && !IsStair(t);
@@ -93,7 +103,11 @@ public static class TileInfo
     public static bool IsGem(TileType t) => t is TileType.Garnet or TileType.Sapphire or TileType.Ruby or TileType.Emerald or TileType.Diamond;
 
     /// <summary>Loose earth: dug quickly.</summary>
-    public static bool IsEarth(TileType t) => t is TileType.Grass or TileType.Soil or TileType.Clay or TileType.Sand;
+    public static bool IsEarth(TileType t) => t is TileType.Grass or TileType.Soil or TileType.Clay or TileType.Sand
+        or TileType.Snow or TileType.DryGrass or TileType.Mud or TileType.Gravel;
+
+    /// <summary>Ground plants grow in: grass, dry grass, soil and mud.</summary>
+    public static bool IsFertile(TileType t) => t is TileType.Grass or TileType.DryGrass or TileType.Soil or TileType.Mud;
 
     public static string Name(TileType t) => t switch
     {
@@ -106,6 +120,7 @@ public static class TileInfo
         TileType.DownStair => "Down stair",
         TileType.UpDownStair => "Up/down stair",
         TileType.Deck => "Upper floor",
+        TileType.DryGrass => "Dry grass",
         _ => t.ToString(),
     };
 }

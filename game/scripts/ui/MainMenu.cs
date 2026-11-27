@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using Colony.Core.Procedural;
 using Godot;
 
 namespace ColonyGame.UI;
@@ -48,6 +49,7 @@ public partial class MainMenu : Control
 
     public void Show(bool show, string page = "")
     {
+        if (!show && _ui.Main.Generating) return; // the loading screen stays until the new world opens
         Visible = show;
         _page = page;
         if (show) Build();
@@ -67,7 +69,8 @@ public partial class MainMenu : Control
         _box.AddChild(G.Text($"v{GameInfo.Version}", "Faint", align: HorizontalAlignment.Center));
         _box.AddChild(G.Gap(1.5f));
 
-        if (_page == "loading" || _ui.Main.Loading) BuildLoading();
+        if (_ui.Main.Generating) BuildGenerating();
+        else if (_page == "loading" || _ui.Main.Loading) BuildLoading();
         else if (_page == "save") BuildSave();
         else if (_page == "load") BuildLoad();
         else if (_page == "multiplayer") BuildMultiplayer();
@@ -235,6 +238,7 @@ public partial class MainMenu : Control
 
     public override void _Process(double delta)
     {
+        if (Visible && _ui.Main.Generating) UpdateGenerating();
         if (!Visible || _loadBar == null || !IsInstanceValid(_loadBar) || !_loadBar.IsInsideTree()) return;
         float p = _ui.Main.LoadProgress;
         _loadBar.Set(p, $"{p * 100,3:0}%", "accent");
@@ -360,14 +364,142 @@ public partial class MainMenu : Control
             Tips = ["Just yours", "Two colonies in one world (F4 switches which you play, until online play)", "Three colonies", "Four colonies"],
         });
         _box.AddChild(coloniesRow);
+        _box.AddChild(G.Gap(0.5f));
+        BuildWorldOptions();
         _box.AddChild(G.Gap(1));
         Item("Start", "Primary", () =>
         {
             int seed = int.TryParse(_seed!.Text.Trim(), out int s) ? s : _seed.Text.GetHashCode();
             _ui.Main.NewColony(seed, Sizes[_size], _colonies);
+            Build();
         }, "Make the world and found the colony (the current one is not saved)");
         Item("Back", "", () => Go(""), "Back to the menu");
     }
+
+    /// <summary>
+    /// The world options (Main.WorldOptions, kept for the session): climate, rain, seas, mountains and rivers. Each is
+    /// one segmented row; the tips say what the generator does with it.
+    /// </summary>
+    private void BuildWorldOptions()
+    {
+        _box.AddChild(new GlyphSection("World"));
+        var shape = Main.WorldOptions;
+        void Row<T>(string label, T current, string[] names, string[] tips, Func<WorldShape, T, WorldShape> set) where T : struct, Enum
+        {
+            var row = new HBoxContainer();
+            row.AddChild(G.Text(label, "Dim", cols: 9));
+            var values = Enum.GetValues<T>();
+            row.AddChild(new GlyphSegmented(names, Array.IndexOf(values, current), i => Main.WorldOptions = set(Main.WorldOptions, values[i])) { Tips = tips });
+            _box.AddChild(row);
+            _box.AddChild(G.Gap(0.35f));
+        }
+        Row("Climate", shape.Climate, ["Frozen", "Cold", "Temperate", "Warm", "Tropical"],
+            ["Ice and tundra, snow down to the shore", "Taiga and tundra, snowy mountains",
+             "Forests, grassland and taiga from south to north", "Grassland, savanna and woods", "Jungle, savanna and desert"],
+            (s, v) => s with { Climate = v });
+        Row("Rain", shape.Rainfall, ["Arid", "Dry", "Normal", "Wet"],
+            ["Deserts and badlands, rivers only from the mountains", "Steppe and savanna, deserts in the rain shadows",
+             "Wet windward slopes, drier lee sides", "Lush everywhere: forests, jungle and swamps"],
+            (s, v) => s with { Rainfall = v });
+        Row("Seas", shape.Oceans, ["None", "Coasts", "Seas", "Islands"],
+            ["All land: rivers run off the edge of the map", "Mostly land, with a coast or two",
+             "Continents and seas", "An archipelago: island arcs and volcanoes in open sea"],
+            (s, v) => s with { Oceans = v });
+        Row("Peaks", shape.Relief, ["Gentle", "Rolling", "Mountainous", "Alpine"],
+            ["Low hills where the plates meet", "Hills and modest ranges", "Real ranges along the plate seams",
+             "Towering, snowy ranges: lots of rock to dig into"],
+            (s, v) => s with { Relief = v });
+        Row("Rivers", shape.Rivers, ["Few", "Normal", "Many"],
+            ["Only the big rivers", "Rivers where the rain gathers", "Streams and rivers everywhere"],
+            (s, v) => s with { Rivers = v });
+    }
+
+    // ---- Making the world ------------------------------------------------------------------------------------
+
+    private Label? _genTitle, _genDetail;
+    private GlyphBar? _genBar;
+    private TextureRect? _genMap;
+    private VBoxContainer? _genDone;
+    private int _genVersion = -1;
+    private object? _genMapShown;
+    private const int DoneRows = 10;
+
+    /// <summary>
+    /// The loading screen while a new world is made: a map of the world as it forms (plates, rain, erosion, biomes), the
+    /// step under way with a line about it, the progress bar, and the steps finished with their times.
+    /// </summary>
+    private void BuildGenerating()
+    {
+        var main = _ui.Main;
+        _box.AddChild(new GlyphSection("Making the world"));
+        if (main.GenSettings is { } gs)
+            _box.AddChild(G.Text($"seed {gs.Seed} · {gs.Width}² · {gs.Shape.Describe()}", "Faint", align: HorizontalAlignment.Center));
+        _box.AddChild(G.Gap(0.5f));
+        // The map on the left, the steps beside it (fits a 900-pixel-high window).
+        var split = new HBoxContainer { MouseFilter = MouseFilterEnum.Ignore };
+        split.AddThemeConstantOverride("separation", (int)(GlyphTheme.Cw * 2));
+        _box.AddChild(split);
+        float side = 17 * GlyphTheme.Ch;
+        var frame = new GlyphPanel { CustomMinimumSize = new Vector2(side + GlyphTheme.Cw * 2, side + GlyphTheme.Ch), SizeFlagsVertical = SizeFlags.ShrinkBegin };
+        _genMap = new TextureRect
+        {
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+            TextureFilter = TextureFilterEnum.Nearest,
+            Position = new Vector2(GlyphTheme.Cw, GlyphTheme.Ch * 0.5f),
+            Size = new Vector2(side, side),
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        frame.AddChild(_genMap);
+        split.AddChild(frame);
+        var steps = new VBoxContainer { CustomMinimumSize = new Vector2(38 * GlyphTheme.Cw, 0), MouseFilter = MouseFilterEnum.Ignore };
+        split.AddChild(steps);
+        _genTitle = G.Text("", "Accent", bold: true);
+        steps.AddChild(_genTitle);
+        _genDetail = G.Text("", "Dim");
+        _genDetail.AutowrapMode = TextServer.AutowrapMode.WordSmart;
+        _genDetail.CustomMinimumSize = new Vector2(38 * GlyphTheme.Cw, 2 * GlyphTheme.Ch);
+        steps.AddChild(_genDetail);
+        steps.AddChild(G.Gap(0.35f));
+        _genBar = new GlyphBar(0, 0, "accent", "  0%");
+        steps.AddChild(_genBar);
+        steps.AddChild(G.Gap(0.5f));
+        _genDone = new VBoxContainer { CustomMinimumSize = new Vector2(0, DoneRows * GlyphTheme.Ch), MouseFilter = MouseFilterEnum.Ignore };
+        steps.AddChild(_genDone);
+        _genVersion = -1;
+        _genMapShown = null;
+        _genDoneCount = -1;
+        UpdateGenerating();
+    }
+
+    private void UpdateGenerating()
+    {
+        if (_ui.Main.GenProgress is not { } p || _genTitle == null || !IsInstanceValid(_genTitle)) return;
+        if (p.Version == _genVersion) return;
+        _genVersion = p.Version;
+        _genTitle.Text = p.Title.Length > 0 ? p.Title + "…" : "Ready";
+        _genDetail!.Text = p.Detail;
+        _genBar!.Set(p.Fraction, $"{p.Fraction * 100,3:0}%", "accent");
+        if (p.Map is { } map && !ReferenceEquals(map.Rgb, _genMapShown))
+        {
+            _genMapShown = map.Rgb;
+            var image = Image.CreateFromData(map.Width, map.Height, false, Image.Format.Rgb8, map.Rgb);
+            _genMap!.Texture = ImageTexture.CreateFromImage(image);
+        }
+        var done = p.Finished;
+        if (done.Length == _genDoneCount) return;
+        _genDoneCount = done.Length;
+        G.Clear(_genDone!);
+        for (int k = Math.Max(0, done.Length - DoneRows); k < done.Length; k++) // the last few, newest brightest
+        {
+            var row = new HBoxContainer { MouseFilter = MouseFilterEnum.Ignore };
+            row.AddChild(G.Text("✓ " + done[k].Title, k == done.Length - 1 ? "Text" : "Faint", expand: true));
+            row.AddChild(G.Text($"{done[k].Milliseconds / 1000.0:0.0} s", "Faint", align: HorizontalAlignment.Right));
+            _genDone!.AddChild(row);
+        }
+    }
+
+    private int _genDoneCount = -1;
 
     public override void _GuiInput(InputEvent e)
     {

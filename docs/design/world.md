@@ -96,6 +96,42 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   Generated rivers start `RiverFill` of their channel, lakes at their sill; springs at every `RiverSources` point
   (rate by catchment gain, never filling past 0.9 of the channel); `ColonySim.WaterSettleSteps` (400) run in the
   background while the first frames draw (`WaterReady` gates ticks and edits). Wheels read `ThroughFlow`.
+- **World generation (`Procedural.WorldShape`, `Landform`, `Biomes`):** a world's recipe is its seed, size and
+  `WorldShape`: the generator (1: the first, noise plus drainage, kept bit for bit so saves made before it rebuild the same
+  ground: `GeneratorVersionTests` fingerprints it; 2: tectonic, the default) and the New colony menu's World options
+  (climate Frozen..Tropical, rain Arid..Wet, seas None/Coasts/Seas/Islands, peaks Gentle..Alpine, rivers Few..Many).
+  Generator 2 works the big shapes out on a coarse grid (`Landform`, `Cell` = max(4, size/256) tiles, ~256 nodes across):
+  **plates** (jittered seeds `PlateSpacing` = size/2 apart, 320..1500 tiles, seams bent by a two-octave warp; each
+  continental or oceanic by the seas setting, drifting its own way; the plate under the map's middle is always land):
+  crust sets the base level (continents above the sea, ocean plates below, blended softly across seams), and where two
+  meet their motion decides the landform: colliding continents fold a range on the seam, ocean diving under continent a
+  coastal range inland of a trench with volcanoes behind it, two ocean plates an island arc, plates parting a rift
+  valley between raised shoulders (lakes), plates sliding past a fault trough. Every effect is a smooth function of the
+  distance to the seam, equal from both sides, so seams have no steps; ranges rise and fall along their length (passes,
+  massifs) and carry ridged crests; rare hotspot volcanoes stand inside plates (cones with craters, irregular flanks).
+  **Climate:** sea-level temperature by latitude (north, the top, colder; the climate sets the middle, the map's size the
+  spread) less `Lapse` (40 °C a world height) climbed; a prevailing wind (seeded) carries moisture across the grid in
+  wind order: it saturates over the sea, rains out climbing slopes and arrives dry behind them (rain shadows: deserts),
+  recovering towards the region's humidity over a few hundred tiles. **Erosion:** 40 rounds of rain-weighted stream
+  power (implicit, receivers from a priority flood to the sea and the edge; basins keep their hollow), slumping past the
+  angle of repose and soil creep. The fine height (`FineHeight`) is the eroded grid interpolated (Catmull-Rom) plus detail
+  as rugged as the ground, dunes across the wind in sandy deserts, stepped mesas in broken arid ground. **The sea**
+  (`Terrain.SeaLevel` = 0.45 x height; 0 without seas): columns below it joined to the map edge are lake water at sea
+  level (`Terrain.IsSea`), the floor a shelf within `Terrain.SeaDepth` (8.5% of the height); rivers end in it; in the water
+  sim a map-edge sea column holds the sea's level (takes what is above, gives back what is below, booked as drained and
+  sourced) instead of draining. **Biomes** (`Biomes.At`, per column, never stored): from temperature (with a little
+  noise), rain (plus the damp within 10 tiles of rivers and lakes: green banks, oases), slope, volcanoes, ruggedness and
+  lowness: snow (under -3 °C), alpine rock, volcanic slopes, beach, tundra, swamp, taiga, steppe, desert, badlands,
+  savanna, jungle, forest, grassland. Each lays its ground (`Biomes.Ground`: top tile, loose depth, fill; cliffs of 3+ are
+  bare rock): new tiles `Snow`, `DryGrass` (grows plants, regrows dry), `Mud`, `Gravel` (dug like sand, leaves stone at
+  half the rate); flora by biome (`FloraGenerator.GenerateBiomeRegion`: density, conifers by cold, species by soil
+  acidity, `Biomes.Acidity` from the rock beneath and the rain). **Rock** follows the plates (`Geology.Province`): the
+  basement is folded up under mountains and laid bare where erosion cut deep, basalt rises round volcanoes, sediment is
+  sandstone in arid lands and limestone in low marine ones. The colony lands by `Terrain.ChooseHome` (livable biome,
+  flat, dry, near the middle, looking further out when the middle is sea or ice). Hover shows a surface tile's biome,
+  temperature and rain. Progress (`WorldGenProgress`: step titles like "Eroding valleys", "Baking deserts", "Growing
+  41,200 trees", a line about each, the share done, finished steps with times, a map of the world so far) feeds the
+  loading screen (ui.md). Bench: `-- map` writes the maps as PNGs (dev-commands.md).
 - **Terrain hydrology** (`Terrain.Generate`, fine grid, whole levels; `-- terrain` bench checks it): rivers are
   1-2 deep with a level of bank above their water (room for their flow; flush banks flooded): each river tile's
   level is the lowest land within 2 tiles minus one, min-smoothed over the river within 2 tiles.
@@ -109,6 +145,17 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   within `BankReach` tiles to rise a level per tile from the bank. River/lake neighbours don't count as cliffs
   for surface materials (sand banks, not stone). The bench must show 0 water beside lower land, 0 systems not
   reaching the edge, 0 water tiles with no downhill way out, and only lake-outlet side steps.
+  **Generator 2 differs** (walls by the water were the first generator's flaw: rivers set 20-35 levels below their valley
+  with 5 tiles of graded bank left a wall where grading stopped; pulling land towards the strongest nearby river's level
+  creased it where two rivers' reaches met): rain-weighted drainage (`Terrain.RiverAt` = 300 x the rivers setting); the
+  sea is an outlet in the coarse flood (`CoarseSea`; no basin, no river carved in it); no valley pull (erosion made the
+  valleys); a sealed water system's outlet follows the cheapest way over the fine ground (`LowestOutlet`: a tile plus 6 a
+  level climbed, best-first towards the edge; the new channel counts as draining, or the scan took it for a new sealed
+  system and ran a river down the whole map edge); banks graded without limit of distance (`GradeValleySides`: a level a
+  tile for 5 tiles, then two) and **levees** (`BuildLevees`: land beside water stands at its level and falls away from it
+  the same way, where the ground is lower: a river left above the land round it sits on a sloping levee, not a one-tile
+  dyke). The bench reports land steps: 2048, 4096 and 8192 maps have none of 10+ levels (the first generator: 540 at
+  2048, up to 33 high).
 
 - **Thin walls (`World.EdgeInfo`, `WallMaterials`):** walls, doors and windows stand on cell edges, one level tall,
   so rooms keep their floor. Each cell owns its east (+x) and north (+y) edge: a `ushort` per cell in `Chunk.Edges`

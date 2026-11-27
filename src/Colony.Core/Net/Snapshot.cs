@@ -105,9 +105,9 @@ internal static class SnapIO
 public static class Snapshot
 {
     private const string Magic = "COLONYSNAP";
-    /// <summary>16: conveyor ends work with their 3x3 (and goods record reserved room). 15: conveyor belts, power per colony. 14: who plays each colony. 13: stockpiles with settings. 12: machines are driven (who drives which). 11: waterfall mist (and time spent in it). 10: dev mode. 9: machines (kind, fuel). 8: unseen cavern cells per chunk. 7: order priorities. 6: blueprints built from another cell (decks, stairs). 5: machine stock limits. 4: trade depots and deals (a seventh work type). 3: storage racks and grass regrowth. Versions 2-4 still
+    /// <summary>17: the world-generation choices in the settings (older snapshots rebuild with the first generator). 16: conveyor ends work with their 3x3 (and goods record reserved room). 15: conveyor belts, power per colony. 14: who plays each colony. 13: stockpiles with settings. 12: machines are driven (who drives which). 11: waterfall mist (and time spent in it). 10: dev mode. 9: machines (kind, fuel). 8: unseen cavern cells per chunk. 7: order priorities. 6: blueprints built from another cell (decks, stairs). 5: machine stock limits. 4: trade depots and deals (a seventh work type). 3: storage racks and grass regrowth. Versions 2-4 still
     /// load (without what came later).</summary>
-    private const int Version = 16;
+    private const int Version = 17;
 
     /// <summary>Where the last load or take spent its time (ms), for the bench.</summary>
     public static string LastTimings { get; internal set; } = "";
@@ -144,7 +144,7 @@ public static class Snapshot
         int version = r.ReadInt32();
         if (version is < 2 or > Version) throw new InvalidDataException($"snapshot version {version} (this game reads 2..{Version})");
         SnapIO.ReadVersion = version;
-        return GameSettings.Read(r);
+        return GameSettings.Read(r, withShape: version >= 17);
     }
 
     /// <summary>Rebuilds the game a snapshot holds. Off the main thread is fine (nothing else touches the new sim).</summary>
@@ -155,7 +155,7 @@ public static class Snapshot
         using (var r = new BinaryReader(ms, System.Text.Encoding.UTF8, leaveOpen: true)) settings = Header(r);
         progress?.Invoke(0.05f);
         var genClock = System.Diagnostics.Stopwatch.StartNew();
-        var generated = WorldGenerator.GenerateWithTerrain(new WorldGenSettings(settings.Seed, settings.Width, settings.Depth, settings.Height));
+        var generated = WorldGenerator.GenerateWithTerrain(settings.World);
         long genMs = genClock.ElapsedMilliseconds;
         progress?.Invoke(0.6f);
         using var gz = new GZipStream(ms, CompressionMode.Decompress);

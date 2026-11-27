@@ -268,8 +268,8 @@ public sealed class Designations
     {
         int dig = tile switch
         {
-            TileType.Grass or TileType.Soil or TileType.Sand => Balance.DigLoose,
-            TileType.Clay => Balance.DigClay,
+            TileType.Grass or TileType.Soil or TileType.Sand or TileType.Snow or TileType.DryGrass or TileType.Gravel => Balance.DigLoose,
+            TileType.Clay or TileType.Mud => Balance.DigClay,
             TileType.Stone => Procedural.Geology.DigTicks(rock),
             TileType.Aetherite => Balance.DigAetherite,
             _ when TileInfo.IsGem(tile) => Balance.DigGem,

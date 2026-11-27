@@ -3,7 +3,8 @@ using Colony.Core.Commands;
 namespace Colony.Core.Net;
 
 /// <summary>
-/// A saved game. Version 2 holds a <see cref="Snapshot"/> of the whole state (loads in about the time it takes to
+/// A saved game. Version 3 adds the world-generation choices (<see cref="WorldShape"/>; older saves rebuild their
+/// world with the first generator). Version 2 holds a <see cref="Snapshot"/> of the whole state (loads in about the time it takes to
 /// make the terrain); version 1 held the command log instead (loads by regenerating and replaying the game at sim
 /// speed) and still loads. Both carry the settings, the tick, a name, the local player and when it was saved.
 /// </summary>
@@ -11,7 +12,7 @@ public sealed record SaveGame(GameSettings Settings, long Tick, IReadOnlyList<Lo
     byte[]? State = null)
 {
     private const string Magic = "COLONYSAVE";
-    private const int Version = 2;
+    private const int Version = 3;
 
     /// <summary>Saves a game as a snapshot (this settles it: see <see cref="Snapshot.Take"/>).</summary>
     public static SaveGame Of(ColonySim sim, GameSettings settings, string name, int player)
@@ -24,12 +25,13 @@ public sealed record SaveGame(GameSettings Settings, long Tick, IReadOnlyList<Lo
     {
         using var w = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
         w.Write(Magic);
-        w.Write(State != null ? Version : 1);
+        w.Write(Version);
         w.Write(Name);
         w.Write(Player);
         w.Write(SavedAt);
         Settings.Write(w);
         w.Write(Tick);
+        w.Write(State != null);
         var body = State ?? CommandCodec.EncodeLog(Log);
         w.Write(body.Length);
         w.Write(body);
@@ -45,11 +47,12 @@ public sealed record SaveGame(GameSettings Settings, long Tick, IReadOnlyList<Lo
         string name = r.ReadString();
         int player = r.ReadInt32();
         long savedAt = r.ReadInt64();
-        var settings = GameSettings.Read(r);
+        var settings = GameSettings.Read(r, withShape: version >= 3);
         long tick = r.ReadInt64();
+        bool snapshot = version == 2 || version >= 3 && r.ReadBoolean();
         if (headerOnly) return new SaveGame(settings, tick, [], name, player, savedAt);
         var body = r.ReadBytes(r.ReadInt32());
-        return version == 1
+        return !snapshot
             ? new SaveGame(settings, tick, CommandCodec.DecodeLog(body), name, player, savedAt)
             : new SaveGame(settings, tick, [], name, player, savedAt, body);
     }

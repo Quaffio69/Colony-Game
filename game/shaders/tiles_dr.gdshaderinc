@@ -5,15 +5,15 @@
 uniform sampler2D dr_atlas : filter_nearest, repeat_disable; // 3 columns (top, side, bottom) x one row per tile type
 uniform float dr_tile_px = 8.0;
 uniform float dr_tex_strength = 0.85;
-uniform vec4 dr_palette[32];   // sRGB base colour; alpha < 1 glows (aetherite)
-uniform float dr_group[32];    // glyph group per tile type (what ASCII draws)
-uniform float dr_cap_group[32]; // ... on the cut surface (inside rock: cut-rock symbols, not mountains)
+uniform vec4 dr_palette[64];   // sRGB base colour; alpha < 1 glows (aetherite)
+uniform float dr_group[64];     // glyph group per tile type (what ASCII draws)
+uniform float dr_cap_group[64]; // ... on the cut surface (inside rock: cut-rock symbols, not mountains)
 
 // t: tile type; cell: integer tile (Godot axes); world/n: position and face normal; on_cut: the view level's own tiles.
 vec3 dr_tile_albedo(int t, vec3 cell, vec3 world, vec3 n, bool on_cut) {
 	float jitter = 0.93 + 0.14 * dr_hash3(cell);
 	vec3 albedo = dr_palette[t].rgb * jitter;
-	if (dr_tex_strength > 0.0 && t != 29 && t != 31) {   // far-view woodland (29) and water (31): no block texture row
+	if (dr_tex_strength > 0.0 && t != 61 && t != 63) {   // far-view woodland (61) and water (63): no block texture row
 		vec3 an = abs(n);
 		vec2 fuv; float face = 1.0;
 		if (an.y >= an.x && an.y >= an.z) { fuv = world.xz; face = n.y > 0.0 ? 0.0 : 2.0; }

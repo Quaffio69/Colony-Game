@@ -230,6 +230,13 @@ public static class WorldInfo
             bool ripe = Colony.Core.Nature.PlantInfo.IsGatherable(plant);
             card.Add("♣", Tok("pine"), Colony.Core.Nature.PlantInfo.Name(plant.Kind) + (ripe ? " (ripe)" : ""));
         }
+        // Out in the open (tectonic worlds): the biome and its climate.
+        if (sim.Terrain is { Landform: not null } terrain && tile.Z >= sim.World.SurfaceLevel(tile.X, tile.Y))
+        {
+            var c = Colony.Core.Procedural.Biomes.At(terrain, tile.X, tile.Y);
+            string rain = c.Rain < 0.25f ? "arid" : c.Rain < 0.45f ? "dry" : c.Rain < 0.9f ? "moist" : "wet";
+            card.Add("☼", Tok("dim"), $"{Colony.Core.Procedural.Biomes.Name(c.Biome)} · {c.Temperature:0} °C · {rain}", "Dim");
+        }
         if (sim.Water.MassAt(cell) >= Colony.Core.Fluids.Water.MinMass)
             card.Add("≈", Tok("water"), $"water {sim.Water.Level(cell)}/7" + (sim.Water.Pressure(cell) is var pr and > 0.05f ? $", pressed by {pr:0.0}" : ""));
         if (sim.Mist.At(cell) is var mist and >= Colony.Core.Fluids.Mist.Felt)

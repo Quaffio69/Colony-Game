@@ -76,7 +76,7 @@ public partial class Main : Node3D
         }
         else
         {
-            _sim = ColonySim.Generate(new WorldGenSettings(Seed, WorldWidth, WorldDepth, WorldHeight), StartingColonists,
+            _sim = ColonySim.Generate(new WorldGenSettings(Seed, WorldWidth, WorldDepth, WorldHeight) { Shape = s_shape }, StartingColonists,
                 settleWaterInBackground: true, factions: Colonies); // settles while the terrain is meshed for the first frames
             GD.Print($"World {WorldWidth}x{WorldDepth}x{WorldHeight} built in {Time.GetTicksMsec() - start} ms: {_sim.StartupReport}");
             RememberSettings();
@@ -190,18 +190,6 @@ public partial class Main : Node3D
         else FocusOnColony();
     }
 
-    /// <summary>Starts a new colony: a fresh world from this seed and size (the scene reloads onto it).</summary>
-    public void NewColony(int seed, int size, int colonies = 1)
-    {
-        s_newWorld = (seed, size, size, WorldHeight, colonies);
-        s_player = 0;
-        s_home = null;
-        s_launch = null;
-        s_launchResult = null;
-        GetTree().ReloadCurrentScene();
-    }
-
-    private static (int Seed, int W, int D, int H, int Colonies)? s_newWorld;
     private static int s_player;
     private GameUi _ui = null!;
 
@@ -336,6 +324,7 @@ public partial class Main : Node3D
         }
         NetOrders();
         SaveFrame();
+        GenerateFrame();
         SaveDevArgs();
         NetCheck();
         NetDesyncTest();
@@ -389,12 +378,7 @@ public partial class Main : Node3D
             if (arg.StartsWith("--seed=") && int.TryParse(arg["--seed=".Length..], out int seed)) Seed = seed;
             if (arg.StartsWith("--colonies=") && int.TryParse(arg["--colonies=".Length..], out int colonies)) Colonies = Math.Clamp(colonies, 1, 8);
         }
-        if (s_newWorld is { } fresh) // the main menu's "New colony"
-        {
-            (Seed, WorldWidth, WorldDepth, WorldHeight, Colonies) = fresh;
-            s_newWorld = null;
-            s_devArgsDone = true; // the demos and dev flags were for the first world
-        }
+        if (!s_devArgsDone) ReadWorldArgs();
     }
 
     internal static string? Arg(string name)

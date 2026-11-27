@@ -296,6 +296,10 @@ public partial class WorldView : Node3D
         TileType.Granite => new Color(0.58f, 0.50f, 0.50f),
         TileType.Basalt => new Color(0.30f, 0.30f, 0.33f),
         TileType.Bedrock => new Color(0.16f, 0.14f, 0.16f),
+        TileType.Snow => new Color(0.90f, 0.93f, 0.96f),
+        TileType.DryGrass => new Color(0.68f, 0.63f, 0.36f),
+        TileType.Mud => new Color(0.37f, 0.29f, 0.21f),
+        TileType.Gravel => new Color(0.60f, 0.58f, 0.54f),
         TileInfo.Hidden => new Color(0.02f, 0.018f, 0.024f), // unexplored rock (fog of war)
         FarMesher.Water => new Color(0.24f, 0.46f, 0.62f), // standing water in far blocks
         FarMesher.Forest => new Color(0.20f, 0.38f, 0.17f), // woodland in coarse far blocks
@@ -986,7 +990,7 @@ public partial class WorldView : Node3D
         _capImage = Image.CreateFromData(World.Width, World.Depth, false, Image.Format.R8, _capData);
         _capTexture = ImageTexture.CreateFromImage(_capImage);
 
-        var palette = new Vector4[32];
+        var palette = new Vector4[64];
         for (int i = 0; i < TileInfo.Count; i++)
         {
             var c = TileColor((TileType)i);

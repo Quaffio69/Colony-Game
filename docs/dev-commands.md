@@ -20,6 +20,17 @@ Every build, run, bench, demo and debug flag.
   food and settlers over game days with no player)
   (prints per-phase totals, slow-tick breakdowns and GC counts; the render bench prints a startup breakdown); `-- mem [size]`
   generates a world and prints managed memory by system (chunk tiles, connectivity labels and links, water arrays, flora).
+- **World generation:** `dotnet run -c Release --project tools/Colony.Bench -- map [size] [seed] [dir] [oceans] [relief]
+  [climate] [rainfall] [rivers] [x y ...]` (names as in `WorldShape`: e.g. `islands alpine warm dry many`) makes a world
+  and writes `world.png` (biomes, water, hill shading, 1024 px), `landform0..2.png` (plates, rain, erosion: the loading
+  screen's maps), `rain.png`, `temperature.png` into dir; prints each step's time, biome shares, land steps (walls),
+  river tiles on the map edges and the hydrology timings; trailing x y pairs print that column's biome, climate,
+  ruggedness and uplift; `CROP=x,y,size` also writes a tile-per-pixel `crop.png`. `-- terrain [size] [x y [step]]` checks
+  the hydrology (spills, sealed systems, traps, land steps) of the default (tectonic) world and maps levels round x, y.
+  Game: `--oceans=none|coasts|seas|islands`, `--relief=gentle|rolling|mountainous|alpine`,
+  `--climate=frozen|cold|temperate|warm|tropical`, `--rainfall=arid|dry|normal|wet`, `--rivers=few|normal|many`,
+  `--classic-terrain` (the first generator) shape the first world; `--gen-shot=PATH[,SIZE[,SHARE]]` makes a new world from
+  the menu (default 1024) and saves the loading screen once SHARE (0.5) is done, then quits.
 - VS Code: F5 "Play Game" or "Open Godot Editor" (see `.vscode/launch.json`).
 - **Render perf flags:** `--level-sweep[=N]` (with `--bench`: steps the view down N levels, default 40, one every other frame; per change the frame time and the world view's share; `--no-vsync` for real times), `--bench-zooms=4,60,450,...` (after the world is built, per rig distance: avg/p95/max ms, draws, primitives,
   art size, tiles per pixel, far view, shadows; the tool for frame-rate work), `--ortho`, `--persp`, `--default-look`, `--pixel=N`,

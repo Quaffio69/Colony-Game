@@ -57,11 +57,16 @@ The window system, controls, game windows, hotkeys, mouse, selection, notices an
   ripe), piles (role), blueprints (what they wait for), nests, tiles. Its panel is rebuilt every tick, except while the
   pointer is on one of its buttons and it still shows the same thing (`GlyphWindow.PointerOnButtonIn`; a button freed under
   the mouse flickered and lost clicks); a press refreshes it at once and again after the next sim tick; Go to, Follow (camera tracks the colonist until
-  WASD/RMB), clear; a tile lists what is built and lying there with materials. **Hover card** (`UI.HoverCard`, `UI.WorldInfo`): inspect on hover, a glass card at the bottom right describing what is under the cursor (what a click would select, its subtitle, the tile's facts: ground and level, floor, roof, walls/doors/windows by side with materials, plants, water, parts "of logs", plans and what they wait for, piles, ants; a hint for click and F); hidden over the UI and while boxing. **Notices** (`UI.Notices`): the tool card (bottom centre, accent pill: the tool's icon and name from `Tools`, its key hints as keycaps, the box size or wall piece count,
+  WASD/RMB), clear; a tile lists what is built and lying there with materials. **Hover card** (`UI.HoverCard`, `UI.WorldInfo`): inspect on hover, a glass card at the bottom right describing what is under the cursor (what a click would select, its subtitle, the tile's facts: ground and level, on the surface of a tectonic world its biome, temperature and rain, floor, roof, walls/doors/windows by side with materials, plants, water, parts "of logs", plans and what they wait for, piles, ants; a hint for click and F); hidden over the UI and while boxing. **Notices** (`UI.Notices`): the tool card (bottom centre, accent pill: the tool's icon and name from `Tools`, its key hints as keycaps, the box size or wall piece count,
   the box size or why it can't be placed), the box size at the cursor while dragging, a Paused pill, and toasts for the
   colony's events (alerts red; click: Chronicle). Window shadows are a tight contact shadow (the old 34 px one smeared
   a dark band under windows). **Main menu** (`MainMenu`, solid `bg` backdrop for now): Continue, New colony (seed,
-  map size; `Main.NewColony` reloads the scene), Save, Load, Multiplayer, Dev mode (switches it on and opens its window),
+  map size, colonies, and a World section: climate, rain, seas, peaks, rivers, each a segmented row with tips, kept for
+  the session in `Main.WorldOptions`; Start makes the world on a background task, `MainWorldGen.cs`, and the menu becomes
+  the **loading screen**: "Making the world", the recipe, a map of the world as it forms (plates, rain, erosion, then
+  biomes; pixel-sharp in a glyph frame) beside the step under way (an accent title such as "Eroding valleys" or "Baking
+  deserts" and a line about it), the progress bar and the last ten finished steps with their times; Esc can't close it;
+  the scene reloads onto the new world when it is done), Save, Load, Multiplayer, Dev mode (switches it on and opens its window),
   Appearance, Tests, Quit; opened by Esc when nothing is left to close (the game does not start on it yet); the sim
   waits while it is up.
 - **Dev mode** (`ColonySim.DevMode`, `ColonySimDev.cs`; commands `SetDevMode(On, InstantOrders)` and `DevSpawn(At, ItemId,

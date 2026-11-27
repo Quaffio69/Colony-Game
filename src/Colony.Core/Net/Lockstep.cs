@@ -9,16 +9,27 @@ namespace Colony.Core.Net;
 /// <summary>How a networked world is made: every peer generates it from these, so they start identical.</summary>
 public sealed record GameSettings(int Seed, int Width, int Depth, int Height, int Colonists, int Colonies)
 {
-    public ColonySim Create(bool settleWaterInBackground = false) =>
-        ColonySim.Generate(new WorldGenSettings(Seed, Width, Depth, Height), Colonists, settleWaterInBackground, Colonies);
+    /// <summary>The world-generation choices (and generator); old saves read as <see cref="WorldShape.Legacy"/>.</summary>
+    public WorldShape Shape { get; init; } = WorldShape.Default;
+
+    /// <summary>The world's recipe.</summary>
+    public WorldGenSettings World => new(Seed, Width, Depth, Height) { Shape = Shape };
+
+    public ColonySim Create(bool settleWaterInBackground = false, WorldGenProgress? progress = null) =>
+        ColonySim.Generate(World, Colonists, settleWaterInBackground, Colonies, progress: progress);
 
     public void Write(BinaryWriter w)
     {
         w.Write(Seed); w.Write(Width); w.Write(Depth); w.Write(Height); w.Write(Colonists); w.Write(Colonies);
+        Shape.Write(w);
     }
 
-    public static GameSettings Read(BinaryReader r) =>
-        new(r.ReadInt32(), r.ReadInt32(), r.ReadInt32(), r.ReadInt32(), r.ReadInt32(), r.ReadInt32());
+    /// <summary>Reads settings; <paramref name="withShape"/> false for records written before world shapes (first generator).</summary>
+    public static GameSettings Read(BinaryReader r, bool withShape = true)
+    {
+        var s = new GameSettings(r.ReadInt32(), r.ReadInt32(), r.ReadInt32(), r.ReadInt32(), r.ReadInt32(), r.ReadInt32());
+        return s with { Shape = withShape ? WorldShape.Read(r) : WorldShape.Legacy };
+    }
 }
 
 internal enum Msg : byte
@@ -136,7 +147,7 @@ public sealed record NetPlayer(int Faction, string Name)
 /// </summary>
 public sealed class LockstepHost : IDisposable
 {
-    public const int Protocol = 20;
+    public const int Protocol = 21;
     /// <summary>Ticks between desync checks (5 s at 1x).</summary>
     public const int HashInterval = 100;
 

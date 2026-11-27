@@ -9,6 +9,12 @@ using Colony.Core.Navigation;
 using Colony.Core.Procedural;
 using Colony.Core.World;
 
+if (args.Length > 0 && args[0] == "map")
+{
+    WorldMaps.Run(args);
+    return;
+}
+
 if (args.Length > 0 && args[0] == "snapshot")
 {
     // Snapshot cost on a real map: settle + write, size, load, and a check that the copy matches.
@@ -369,6 +375,25 @@ if (args.Length > 0 && args[0] == "terrain")
                 if (j >= 0 && j < drainsOut.Length && drainsOut[j] && trapEx < 0) { trapEx = i; Console.WriteLine($"  trap edge at ({bx2},{by2}) {tt.Kind[i]} level {tt.Surface[i] + tt.Water[i]} next to {tt.Kind[j]} level {tt.Surface[j] + tt.Water[j]} at ({j % tsize},{j / tsize}), flow {tt.FlowDirection[i]}"); }
         }
     Console.WriteLine($"{traps} water tiles with no downhill way out (e.g. {trapEx % tsize},{trapEx / tsize})");
+
+    // Cliffs: steps between neighbouring land columns (walls the far view shows as faces), and those beside water.
+    int walk = 0, cliff4 = 0, cliff10 = 0, wetCliffs = 0, maxStep = 0, maxAt = -1, landPairs = 0;
+    for (int y = 0; y < tsize; y++)
+    for (int x = 0; x + 1 < tsize; x++)
+    for (int k = 0; k < 2; k++)
+    {
+        int i = y * tsize + x, j = k == 0 ? i + 1 : i + tsize;
+        if (k == 1 && y + 1 >= tsize) continue;
+        if (tt.Kind[i] != SurfaceKind.Land || tt.Kind[j] != SurfaceKind.Land) continue;
+        landPairs++;
+        int step = Math.Abs(tt.Surface[i] - tt.Surface[j]);
+        if (step <= 1) walk++;
+        if (step >= 4) cliff4++;
+        if (step >= 10) { cliff10++; if (tt.WaterDistance[i] <= 3 || tt.WaterDistance[j] <= 3) wetCliffs++; }
+        if (step > maxStep) { maxStep = step; maxAt = i; }
+    }
+    Console.WriteLine($"land steps: {walk * 100.0 / Math.Max(1, landPairs):0.0}% walkable, {cliff4} of 4+ levels, {cliff10} of 10+ ({wetCliffs} by water), " +
+                      $"highest {maxStep} at ({maxAt % tsize},{maxAt / tsize})");
 
     if (args.Length > 3)
     {

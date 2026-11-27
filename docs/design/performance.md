@@ -39,7 +39,7 @@ How the game stays fast on big maps (2048x2048x384 default, 4096 measured): the 
   graph (~2 ms at 2048, 156k region edges).
 - `Colony.Core` compiles with `<Optimize>true</Optimize>` even in Debug: the Godot editor runs Debug, and
   unoptimized meshing made startup ~3x slower. Keep it that way.
-- Default map 2048x2048x384: gen ~3 s (terrain 2 s, connectivity 1 s; water settles in the background ~5 s). 4096: gen
+- Default map 2048x2048x384 (tectonic generator, `-- map`: landform 0.5 s, fine height 0.3 s, rivers 0.4 s, lakes 0.8 s, ground 0.6 s; 4096 ~7 s, 8192 ~35 s of terrain, the fine hydrology most of it): gen ~4 s (terrain 2.6 s, connectivity 0.8 s; water settles in the background ~5 s). First generator, 4096: gen
   ~11 s (terrain 6.3 s, connectivity 2.1 s, water settling 18 s in the background); 8192: terrain 31 s, connectivity
   8.8 s, settling 75 s. Generation (whole-map hydrology and settling) is now what limits map size. Use
   `--size=1024x1024x384` for faster iteration. **Core memory** (`-- mem SIZE`, after 40 steps): 4096 1.37 GB (was 3.67:
