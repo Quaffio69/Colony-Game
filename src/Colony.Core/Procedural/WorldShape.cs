@@ -19,7 +19,9 @@ public enum Rivers : byte { Few, Normal, Many }
 /// The world-generation choices (the New colony menu's World options) and which generator makes the world. Part of a
 /// world's recipe: saves and multiplayer games carry it, and every peer builds the same world from it.
 /// <see cref="Generator"/> 1 is the first generator (noise and drainage), kept so worlds saved before the tectonic one
-/// rebuild exactly; 2 is the tectonic generator (<see cref="Landform"/>), which reads the rest.
+/// rebuild exactly; 2 is the tectonic generator (<see cref="Landform"/>), which reads the rest; 3 the same with banks
+/// that dig or raise the natural ground instead of reshaping it, and lakes that flood the valleys below them (2 is kept
+/// so its worlds rebuild exactly).
 /// </summary>
 public sealed record WorldShape(
     int Generator = WorldShape.Current,
@@ -30,7 +32,7 @@ public sealed record WorldShape(
     Rivers Rivers = Rivers.Normal)
 {
     /// <summary>The generator new worlds use.</summary>
-    public const int Current = 2;
+    public const int Current = 3;
 
     public static readonly WorldShape Default = new();
     /// <summary>The first generator (worlds saved before version 2 of the recipe).</summary>

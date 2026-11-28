@@ -39,4 +39,12 @@ public class GeneratorVersionTests
         Assert.Equal(6748849766862576698UL, Fingerprint(s));
         Assert.Equal(13647918698330532034UL, Fingerprint(new WorldGenSettings(Seed: 12345, Width: 512, Depth: 512, Height: 160) { Shape = WorldShape.Legacy }));
     }
+
+    [Fact]
+    public void TheFirstTectonicGenerator_StillMakesTheSameWorld()
+    {
+        // Generator 2 (its banks reshaped the land; lakes stopped LakeShoreReach tiles out) is kept for its saves.
+        var s = new WorldGenSettings(Seed: 777, Width: 512, Depth: 512, Height: 256) { Shape = new WorldShape(Generator: 2) };
+        Assert.Equal(2518458387926943134UL, Fingerprint(s));
+    }
 }

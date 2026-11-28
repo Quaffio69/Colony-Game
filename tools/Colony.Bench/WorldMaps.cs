@@ -69,6 +69,24 @@ internal static class WorldMaps
             }
             WritePng(Path.Combine(dir, "crop.png"), px, cs, cs);
         }
+        if (Environment.GetEnvironmentVariable("LEVELS") is { } lv)
+        {
+            // LEVELS=x,y,r[,step]: the surface round a column, water as ~level (lake) or =level (river).
+            var p = lv.Split(',').Select(int.Parse).ToArray();
+            int step = p.Length > 3 ? p[3] : 1;
+            for (int yy = p[1] - p[2]; yy <= p[1] + p[2]; yy += step)
+            {
+                var line = new System.Text.StringBuilder($"{yy,5} ");
+                for (int xx = p[0] - p[2]; xx <= p[0] + p[2]; xx += step)
+                {
+                    if ((uint)xx >= (uint)t.Width || (uint)yy >= (uint)t.Depth) { line.Append("    "); continue; }
+                    int i = yy * t.Width + xx;
+                    char k = t.Kind[i] == SurfaceKind.LakeBed ? '~' : t.Kind[i] == SurfaceKind.RiverBed ? '=' : ' ';
+                    line.Append($"{k}{t.Surface[i] + t.Water[i],3}");
+                }
+                Console.WriteLine(line);
+            }
+        }
         int[] edgeRiver = new int[4];
         for (int k = 0; k < t.Width; k++)
         {
@@ -128,6 +146,9 @@ internal static class WorldMaps
         Console.WriteLine($"land steps {walk * 100.0 / Math.Max(1, pairs):0.0}% walkable, {cliff10} of 10+, highest {maxStep}; surface {lo}..{hi}; " +
                           $"zero level {world.Geology!.ZeroLevel}, cavern layers {world.Geology.CavernLayers.Length}");
         Console.WriteLine($"  hydrology: {t.Timings}");
+        Console.WriteLine($"  drowned valleys flooded: {t.DrownedValleys} tiles; banks dug 10+: {t.DeepCuts.Tiles} (most {t.DeepCuts.Max} at {t.DeepCuts.At % t.Width},{t.DeepCuts.At / t.Width}); levees: {t.Levees.Tiles} tiles raised 3+, most {t.Levees.Max}" +
+                          (t.Levees.At < 0 ? "" : $" at {t.Levees.At % t.Width},{t.Levees.At / t.Width}") +
+                          (t.Levees.LakeAt < 0 ? "" : $"; by a lake {t.Levees.LakeMax} at {t.Levees.LakeAt % t.Width},{t.Levees.LakeAt / t.Width}"));
         foreach (var d in progress.Finished) Console.WriteLine($"  {d.Title,-36} {d.Milliseconds,6} ms");
         for (int k = 9; k + 1 < args.Length; k += 2)
         {

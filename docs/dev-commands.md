@@ -25,7 +25,8 @@ Every build, run, bench, demo and debug flag.
   and writes `world.png` (biomes, water, hill shading, 1024 px), `landform0..2.png` (plates, rain, erosion: the loading
   screen's maps), `rain.png`, `temperature.png` into dir; prints each step's time, biome shares, land steps (walls),
   river tiles on the map edges and the hydrology timings; trailing x y pairs print that column's biome, climate,
-  ruggedness and uplift; `CROP=x,y,size` also writes a tile-per-pixel `crop.png`. `-- terrain [size] [x y [step]]` checks
+  ruggedness and uplift; `CROP=x,y,size` also writes a tile-per-pixel `crop.png`, `LEVELS=x,y,r[,step]` prints the water and ground levels round a
+  column (`~` lake, `=` river); it also prints drowned-valley tiles flooded, banks dug 10+ and levees raised 3+ (with where). `-- terrain [size] [x y [step]]` checks
   the hydrology (spills, sealed systems, traps, land steps) of the default (tectonic) world and maps levels round x, y.
   Game: `--oceans=none|coasts|seas|islands`, `--relief=gentle|rolling|mountainous|alpine`,
   `--climate=frozen|cold|temperate|warm|tropical`, `--rainfall=arid|dry|normal|wet`, `--rivers=few|normal|many`,

@@ -56,7 +56,7 @@ public sealed class Terrain
     /// <summary>Downstream neighbour of each river tile (0..3: +x, +y, -x, -y) or <see cref="NoFlow"/>.</summary>
     public byte[] FlowDirection { get; }
 
-    private Terrain(int w, int d, int h)
+    internal Terrain(int w, int d, int h)
     {
         Width = w;
         Depth = d;
@@ -79,6 +79,12 @@ public sealed class Terrain
     public int SeaLevel { get; private set; }
     /// <summary>Where the fine hydrology spent its time (ms), for the bench.</summary>
     public string Timings { get; private set; } = "";
+    /// <summary>Bench: tiles a levee raised 3+ levels, the most it raised one, and where (tile index).</summary>
+    public (int Tiles, int Max, int At, int LakeMax, int LakeAt) Levees { get; private set; }
+    /// <summary>Bench: river banks dug 10+ levels down to the water (rivers in canyons).</summary>
+    public (int Tiles, int Max, int At) DeepCuts { get; private set; }
+    /// <summary>Tiles of drowned valleys flooded by the lakes below them (<see cref="FloodDrownedValleys"/>).</summary>
+    public int DrownedValleys { get; private set; }
 
     /// <summary>River threshold this world used (<see cref="RiverThreshold"/> for the first generator).</summary>
     public float RiverAt { get; private set; } = RiverThreshold;
@@ -276,10 +282,13 @@ public sealed class Terrain
         MarkSpringPools(t);
         BuildLakeSills(t);
         ExtendLakesToTheirShores(t); // rivers turned into backwater may have land below their level beside them
+        if (lf != null && s.Shape.Generator >= 3) FloodDrownedValleys(t);
         Lap("pools, sills, shores");
         // Banks: the first generator graded 5 tiles, which left a wall where a river sat deep below its valley; now the
-        // land rises a level a tile, then two, as far as it needs to (valley sides, no walls: see GradeValleySides).
-        ShapeBanks(t, lf == null ? BankReach : -1);
+        // tectonic worlds dig or raise the natural ground by amounts that fade with distance (see ShapeTectonicBanks).
+        if (lf == null) ShapeBanks(t, BankReach);
+        else if (s.Shape.Generator == 2) ShapeBanks(t, -1);
+        else ShapeTectonicBanks(t);
         ComputeWaterDistance(t);
         Lap("banks");
         t.Timings = times.ToString();
@@ -859,6 +868,125 @@ public sealed class Terrain
         }
     }
 
+    /// <summary>Most tiles one lake may take in when it floods a drowned valley (bigger is treated as a leak).</summary>
+    public const int DrownedValleyLimit = 4_000_000;
+
+    /// <summary>
+    /// A lake fed by a river whose valley lies below the lake's surface floods that valley (the river became backwater in
+    /// <see cref="SetWaterLevels"/>), but <see cref="ExtendLakesToTheirShores"/> only reaches <see cref="LakeShoreReach"/>
+    /// tiles: the rest of the valley stayed dry below the lake behind a straight-edged dyke. For each lake (4-connected
+    /// lake tiles at one level, not the sea) this floods all the land below its surface joined to it (4-way, as water
+    /// flows), with the rivers there that run into it, as long as none of that land touches the map edge, lower water,
+    /// or a river that drains elsewhere: then the lake would spill there, and it is left as it was. Deterministic
+    /// (lakes in scan order, FIFO growth).
+    /// </summary>
+    internal static void FloodDrownedValleys(Terrain t)
+    {
+        int w = t.Width, d = t.Depth, n = w * d;
+        var mark = new int[n];      // lake id (1-based) that last visited a tile
+        var end = new Dictionary<int, int>(); // river tile -> the first non-river tile downstream (memo; -1 = none)
+        var comp = new List<int>();
+        var region = new List<int>();
+        var queue = new Queue<int>();
+        int id = 0;
+
+        int EndOf(int i)
+        {
+            if (end.TryGetValue(i, out int known)) return known;
+            var path = new List<int>();
+            int c = i, result = -1;
+            for (int guard = 0; guard < 1_000_000; guard++)
+            {
+                if (end.TryGetValue(c, out int seen)) { result = seen; break; }
+                if (t.Kind[c] != SurfaceKind.RiverBed) { result = c; break; }
+                path.Add(c);
+                byte f = t.FlowDirection[c];
+                if (f == NoFlow) break;
+                int x = c % w, y = c / w;
+                int nx = x + (f == 0 ? 1 : f == 2 ? -1 : 0), ny = y + (f == 1 ? 1 : f == 3 ? -1 : 0);
+                if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) break; // runs off the map
+                c = ny * w + nx;
+            }
+            foreach (int p in path) end[p] = result;
+            return result;
+        }
+
+        for (int start = 0; start < n; start++)
+        {
+            if (t.Kind[start] != SurfaceKind.LakeBed || mark[start] != 0 || t.IsSea(start)) continue;
+            id++;
+            int level = t.Surface[start] + t.Water[start];
+            // The lake itself.
+            comp.Clear();
+            mark[start] = id;
+            queue.Enqueue(start);
+            while (queue.TryDequeue(out int c))
+            {
+                comp.Add(c);
+                int x = c % w, y = c / w;
+                for (int k = 0; k < 4; k++)
+                {
+                    int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                    if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) continue;
+                    int m = ny * w + nx;
+                    if (mark[m] == id || t.Kind[m] != SurfaceKind.LakeBed || t.Surface[m] + t.Water[m] != level) continue;
+                    mark[m] = id;
+                    queue.Enqueue(m);
+                }
+            }
+            // Everything below its surface joined to it, unless it leaks.
+            region.Clear();
+            bool leaks = false;
+            foreach (int c in comp) queue.Enqueue(c);
+            while (queue.TryDequeue(out int c) && !leaks)
+            {
+                int x = c % w, y = c / w;
+                bool inLake = t.Kind[c] == SurfaceKind.LakeBed;
+                for (int k = 0; k < 4 && !leaks; k++)
+                {
+                    int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                    if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) { if (!inLake) leaks = true; continue; }
+                    int m = ny * w + nx;
+                    if (mark[m] == id) continue;
+                    int top = t.Surface[m] + t.Water[m];
+                    switch (t.Kind[m])
+                    {
+                        case SurfaceKind.Land:
+                            if (t.Surface[m] >= level) continue;
+                            break;
+                        case SurfaceKind.LakeBed:
+                            if (top > level) continue;      // a higher lake spilling into this one
+                            if (top < level) leaks = true;  // lower water (the sea, another lake): it would spill there
+                            break;                          // the same level: one water
+                        default: // river
+                            if (top >= level) continue;     // runs in from higher up
+                            // A lower river: only the lake's own outflow (beside the lake itself) and rivers that run
+                            // into the lake may be there; any other drains the flooded land away.
+                            if (inLake) continue;
+                            int e = EndOf(m);
+                            if (e < 0 || mark[e] != id || t.Kind[e] != SurfaceKind.LakeBed) leaks = true;
+                            break;
+                    }
+                    if (leaks) break;
+                    mark[m] = id;
+                    region.Add(m);
+                    queue.Enqueue(m);
+                    if (region.Count > DrownedValleyLimit) leaks = true;
+                }
+            }
+            queue.Clear();
+            if (leaks || region.Count == 0) continue;
+            foreach (int m in region)
+            {
+                if (t.Kind[m] == SurfaceKind.LakeBed) continue;
+                t.Kind[m] = SurfaceKind.LakeBed;
+                t.Water[m] = (byte)Math.Min(255, level - t.Surface[m]);
+                t.FlowDirection[m] = NoFlow;
+            }
+            t.DrownedValleys += region.Count;
+        }
+    }
+
     /// <summary>How far (tiles) a lake may spread past its coarse cells to reach its shore.</summary>
     public const int LakeShoreReach = 48;
 
@@ -1191,13 +1319,117 @@ public sealed class Terrain
     public const int BankReach = 5;
 
     /// <summary>
-    /// Grades the land beside rivers: within <see cref="BankReach"/> tiles it rises at most one level per tile from
-    /// the water's level (the first tile a level above it: the bank), so rivers run in shallow valleys with a bank to
-    /// the bank instead of at the bottom of a cut. Land beside water is never left below that water's surface
-    /// (raised if need be), so nothing spills. Only reshapes land tiles. Deterministic.
+    /// The tectonic generator's banks (the first generator's are <see cref="ShapeBanks"/>): changes to the natural ground, not
+    /// a new shape for it. Where a river runs below the land beside it, the bank is dug down to a level above the water
+    /// and the dig fades out a level a tile for the first <see cref="BankReach"/> tiles, then two a tile; where water
+    /// stands above the land beside it (a river kept its reach's level, a lake its basin's), the bank is raised to the
+    /// water and the raise fades the same way. The land keeps its own slopes and contours under both (the first try ran
+    /// ramps out from the water at fixed gradients: mountains planed into straight-edged cones, and a levee ramp from
+    /// a high river running on downhill to a cliff over the sea). Never digs below the river's bank or raises above the
+    /// water it holds. Bucket queues (amounts are small integers) keep it linear. Deterministic.
     /// </summary>
+    private static void ShapeTectonicBanks(Terrain t)
+    {
+        int w = t.Width, d = t.Depth, n = w * d;
+        var ground = (int[])t.Surface.Clone();
+        var amount = new int[n];
+        var limit = new int[n];
+        var source = new int[n];
+        var dist = new byte[n];
+
+        // Seeds from water tiles of the given kind: each land tile beside one gets amount = need(tile, water level).
+        void Seed(bool riversOnly, Func<int, int, int> need)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                if (t.Kind[i] == SurfaceKind.Land || riversOnly && t.Kind[i] != SurfaceKind.RiverBed) continue;
+                int x = i % w, y = i / w, lvl = t.Surface[i] + t.Water[i];
+                for (int k = 0; k < 4; k++)
+                {
+                    int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                    if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) continue;
+                    int j = ny * w + nx;
+                    if (t.Kind[j] != SurfaceKind.Land) continue;
+                    int a = need(j, lvl);
+                    if (a <= amount[j]) continue;
+                    amount[j] = a;
+                    limit[j] = lvl;
+                    source[j] = i;
+                    dist[j] = 1;
+                }
+            }
+        }
+        // Spreads the amounts over land, each fading a level a tile near the water and two further out (largest first).
+        void Spread()
+        {
+            int top = 0;
+            for (int i = 0; i < n; i++) top = Math.Max(top, amount[i]);
+            var buckets = new List<int>?[top + 1];
+            for (int i = 0; i < n; i++) if (amount[i] > 0) (buckets[amount[i]] ??= new List<int>()).Add(i);
+            for (int v = top; v > 0; v--)
+            {
+                if (buckets[v] is not { } list) continue;
+                for (int q = 0; q < list.Count; q++)
+                {
+                    int c = list[q];
+                    if (amount[c] != v) continue;
+                    int next = v - (dist[c] < BankReach ? 1 : 2);
+                    if (next <= 0) continue;
+                    int x = c % w, y = c / w;
+                    for (int k = 0; k < 4; k++)
+                    {
+                        int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                        if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) continue;
+                        int j = ny * w + nx;
+                        if (t.Kind[j] != SurfaceKind.Land || amount[j] >= next) continue;
+                        amount[j] = next;
+                        limit[j] = limit[c];
+                        source[j] = source[c];
+                        dist[j] = (byte)Math.Min(255, dist[c] + 1);
+                        (buckets[next] ??= new List<int>()).Add(j);
+                    }
+                }
+                buckets[v] = null;
+            }
+        }
+
+        // 1. Dig: banks a level above the river, fading into the natural ground (never below the river's bank).
+        Seed(true, (j, lvl) => ground[j] - (lvl + 1));
+        Spread();
+        int cuts = 0, cutMax = 0, cutAt = -1;
+        for (int i = 0; i < n; i++)
+        {
+            if (amount[i] <= 0) continue;
+            int dug = Math.Max(ground[i] - amount[i], Math.Min(ground[i], limit[i] + 1));
+            if (dist[i] == 1 && ground[i] - dug >= 10) { cuts++; if (ground[i] - dug > cutMax) (cutMax, cutAt) = (ground[i] - dug, i); }
+            ground[i] = dug;
+        }
+
+        // 2. Raise: land beside any water at least at its level, fading likewise (never above the water it holds).
+        Array.Clear(amount);
+        Array.Clear(dist);
+        Seed(false, (j, lvl) => lvl - ground[j]);
+        Spread();
+        int tiles = 0, max = 0, at = -1, lakeMax = 0, lakeAt = -1;
+        for (int i = 0; i < n; i++)
+        {
+            if (amount[i] <= 0) continue;
+            int raised = Math.Min(ground[i] + amount[i], Math.Max(ground[i], limit[i]));
+            int by = raised - ground[i];
+            if (by >= 3) tiles++;
+            if (t.Kind[source[i]] == SurfaceKind.LakeBed && !t.IsSea(source[i]) && by > lakeMax) (lakeMax, lakeAt) = (by, i);
+            if (by > max) (max, at) = (by, i);
+            ground[i] = raised;
+        }
+        t.Levees = (tiles, max, at, lakeMax, lakeAt);
+        t.DeepCuts = (cuts, cutMax, cutAt);
+        // A bigger raise from lower water can reach a bank first and cap it below its own water: banks hold, whatever.
+        Seed(false, (j, lvl) => { if (lvl > ground[j]) ground[j] = lvl; return 0; });
+        for (int i = 0; i < n; i++) if (t.Kind[i] == SurfaceKind.Land) t.Surface[i] = Math.Max(1, ground[i]);
+    }
+
     /// <summary>
-    /// The tectonic generator's banks (<see cref="ShapeBanks"/> with a negative reach): from the bank the land may rise a
+    /// Generator 2's banks (<see cref="ShapeBanks"/> with a negative reach; kept so its worlds rebuild exactly): from the bank the land may rise a
     /// level a tile for the first <see cref="BankReach"/> tiles, then two a tile, with no limit of distance, so a river
     /// deep in a mountain valley gets steep valley sides instead of a wall where grading stopped. A bucket queue
     /// (levels are small integers) keeps it linear. Continues <paramref name="cap"/> and <paramref name="dist"/> from
@@ -1234,6 +1466,71 @@ public sealed class Terrain
         }
     }
 
+    /// <summary>
+    /// The other half of generator 2's grading: land next to water stands at least at the water's level, and
+    /// from there may fall a level a tile for <see cref="BankReach"/> tiles, then two, wherever the ground (already
+    /// graded down towards lower water) would be lower. A river running above the land round it (it kept the level of its
+    /// reach while a lower river's valley sides cut the ground away beside it) gets a sloping levee instead of a one-tile
+    /// dyke with a wall behind it, and the same for a lake's rim. Raises only, land only; a bucket queue from the highest
+    /// water down.
+    /// </summary>
+    private static void BuildLevees(Terrain t, int[] ground)
+    {
+        int w = t.Width, d = t.Depth, n = w * d, top = t.Height + 2;
+        var floor = new int[n];
+        var dist = new byte[n];
+        var buckets = new List<int>[top + 1];
+        for (int i = 0; i < n; i++)
+        {
+            if (t.Kind[i] != SurfaceKind.Land) continue;
+            int x = i % w, y = i / w, need = 0;
+            for (int k = 0; k < 4; k++)
+            {
+                int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) continue;
+                int j = ny * w + nx;
+                if (t.Kind[j] != SurfaceKind.Land) need = Math.Max(need, t.Surface[j] + t.Water[j]);
+            }
+            if (need <= 0) continue;
+            floor[i] = Math.Min(need, top);
+            dist[i] = 1;
+            (buckets[floor[i]] ??= new List<int>()).Add(i);
+        }
+        for (int v = top; v > 0; v--)
+        {
+            if (buckets[v] is not { } list) continue;
+            for (int q = 0; q < list.Count; q++)
+            {
+                int c = list[q];
+                if (floor[c] != v) continue;
+                int next = v - (dist[c] < BankReach ? 1 : 2);
+                if (next <= 0) continue;
+                int x = c % w, y = c / w;
+                for (int k = 0; k < 4; k++)
+                {
+                    int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
+                    if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) continue;
+                    int j = ny * w + nx;
+                    // Only where the ground is lower than the levee would be (higher ground already holds the water).
+                    if (t.Kind[j] != SurfaceKind.Land || next <= ground[j] || next <= floor[j]) continue;
+                    floor[j] = next;
+                    dist[j] = (byte)Math.Min(255, dist[c] + 1);
+                    (buckets[next] ??= new List<int>()).Add(j);
+                }
+            }
+            buckets[v] = null;
+        }
+        for (int i = 0; i < n; i++)
+            if (floor[i] > ground[i]) ground[i] = floor[i];
+    }
+
+
+    /// <summary>
+    /// Grades the land beside rivers: within <see cref="BankReach"/> tiles it rises at most one level per tile from
+    /// the water's level (the first tile a level above it: the bank), so rivers run in shallow valleys with a bank to
+    /// the bank instead of at the bottom of a cut. Land beside water is never left below that water's surface
+    /// (raised if need be), so nothing spills. Only reshapes land tiles. Deterministic.
+    /// </summary>
     private static void ShapeBanks(Terrain t, int reach)
     {
         int w = t.Width, d = t.Depth, n = w * d;
@@ -1294,64 +1591,6 @@ public sealed class Terrain
         }
         if (reach < 0) BuildLevees(t, lowered);
         Array.Copy(lowered, t.Surface, n);
-    }
-
-    /// <summary>
-    /// The other half of the tectonic generator's grading: land next to water stands at least at the water's level, and
-    /// from there may fall a level a tile for <see cref="BankReach"/> tiles, then two, wherever the ground (already
-    /// graded down towards lower water) would be lower. A river running above the land round it (it kept the level of its
-    /// reach while a lower river's valley sides cut the ground away beside it) gets a sloping levee instead of a one-tile
-    /// dyke with a wall behind it, and the same for a lake's rim. Raises only, land only; a bucket queue from the highest
-    /// water down.
-    /// </summary>
-    private static void BuildLevees(Terrain t, int[] ground)
-    {
-        int w = t.Width, d = t.Depth, n = w * d, top = t.Height + 2;
-        var floor = new int[n];
-        var dist = new byte[n];
-        var buckets = new List<int>[top + 1];
-        for (int i = 0; i < n; i++)
-        {
-            if (t.Kind[i] != SurfaceKind.Land) continue;
-            int x = i % w, y = i / w, need = 0;
-            for (int k = 0; k < 4; k++)
-            {
-                int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
-                if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) continue;
-                int j = ny * w + nx;
-                if (t.Kind[j] != SurfaceKind.Land) need = Math.Max(need, t.Surface[j] + t.Water[j]);
-            }
-            if (need <= 0) continue;
-            floor[i] = Math.Min(need, top);
-            dist[i] = 1;
-            (buckets[floor[i]] ??= new List<int>()).Add(i);
-        }
-        for (int v = top; v > 0; v--)
-        {
-            if (buckets[v] is not { } list) continue;
-            for (int q = 0; q < list.Count; q++)
-            {
-                int c = list[q];
-                if (floor[c] != v) continue;
-                int next = v - (dist[c] < BankReach ? 1 : 2);
-                if (next <= 0) continue;
-                int x = c % w, y = c / w;
-                for (int k = 0; k < 4; k++)
-                {
-                    int nx = x + (k == 0 ? 1 : k == 1 ? -1 : 0), ny = y + (k == 2 ? 1 : k == 3 ? -1 : 0);
-                    if ((uint)nx >= (uint)w || (uint)ny >= (uint)d) continue;
-                    int j = ny * w + nx;
-                    // Only where the ground is lower than the levee would be (higher ground already holds the water).
-                    if (t.Kind[j] != SurfaceKind.Land || next <= ground[j] || next <= floor[j]) continue;
-                    floor[j] = next;
-                    dist[j] = (byte)Math.Min(255, dist[c] + 1);
-                    (buckets[next] ??= new List<int>()).Add(j);
-                }
-            }
-            buckets[v] = null;
-        }
-        for (int i = 0; i < n; i++)
-            if (floor[i] > ground[i]) ground[i] = floor[i];
     }
 
 

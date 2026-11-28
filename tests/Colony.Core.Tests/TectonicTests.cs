@@ -116,4 +116,54 @@ public class TectonicTests
         file.Position = 0;
         Assert.Equal(settings.Shape, SaveGame.Read(file, headerOnly: true).Settings.Shape);
     }
+
+    /// <summary>
+    /// 40x20: ground at 20 all round; a lake at 15 (x 2..9); a valley floor at 12 (x 10..30, y 5..14) joined to it, with a
+    /// river at 13 down its middle running into the lake. <paramref name="drainOut"/>: the river at the valley's far end
+    /// also runs on off the east edge (so the valley drains away instead).
+    /// </summary>
+    private static Terrain LakeAndValley(bool drainOut)
+    {
+        var t = new Terrain(40, 20, 64);
+        for (int i = 0; i < t.Surface.Length; i++) { t.Surface[i] = 20; t.FlowDirection[i] = Terrain.NoFlow; }
+        for (int y = 5; y < 15; y++)
+        {
+            for (int x = 2; x < 10; x++) { int i = y * 40 + x; t.Kind[i] = SurfaceKind.LakeBed; t.Surface[i] = 10; t.Water[i] = 5; }
+            for (int x = 10; x <= 30; x++) t.Surface[y * 40 + x] = 12;
+        }
+        for (int x = 10; x <= 30; x++)
+        {
+            int i = 10 * 40 + x;
+            t.Kind[i] = SurfaceKind.RiverBed; t.Surface[i] = 12; t.Water[i] = 1;
+            t.FlowDirection[i] = 2; // west, into the lake
+        }
+        if (drainOut)
+            for (int x = 31; x < 40; x++)
+            {
+                int i = 10 * 40 + x;
+                t.Kind[i] = SurfaceKind.RiverBed; t.Surface[i] = 10; t.Water[i] = 1;
+                t.FlowDirection[i] = 0; // east, off the map
+            }
+        return t;
+    }
+
+    [Fact]
+    public void ALake_FloodsTheValleyBelowItsSurface_UnlessTheValleyDrainsElsewhere()
+    {
+        var t = LakeAndValley(drainOut: false);
+        Terrain.FloodDrownedValleys(t);
+        for (int y = 5; y < 15; y++)
+        for (int x = 10; x <= 30; x++)
+        {
+            int i = y * 40 + x;
+            Assert.Equal(SurfaceKind.LakeBed, t.Kind[i]);
+            Assert.Equal(15, t.Surface[i] + t.Water[i]);
+        }
+        Assert.Equal(SurfaceKind.Land, t.Kind[2 * 40 + 20]); // the rim stays dry
+
+        var leaky = LakeAndValley(drainOut: true);
+        Terrain.FloodDrownedValleys(leaky);
+        Assert.Equal(SurfaceKind.Land, leaky.Kind[7 * 40 + 20]);
+        Assert.Equal(SurfaceKind.RiverBed, leaky.Kind[10 * 40 + 20]);
+    }
 }

@@ -98,9 +98,9 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   background while the first frames draw (`WaterReady` gates ticks and edits). Wheels read `ThroughFlow`.
 - **World generation (`Procedural.WorldShape`, `Landform`, `Biomes`):** a world's recipe is its seed, size and
   `WorldShape`: the generator (1: the first, noise plus drainage, kept bit for bit so saves made before it rebuild the same
-  ground: `GeneratorVersionTests` fingerprints it; 2: tectonic, the default) and the New colony menu's World options
-  (climate Frozen..Tropical, rain Arid..Wet, seas None/Coasts/Seas/Islands, peaks Gentle..Alpine, rivers Few..Many).
-  Generator 2 works the big shapes out on a coarse grid (`Landform`, `Cell` = max(4, size/256) tiles, ~256 nodes across):
+  ground: `GeneratorVersionTests` fingerprints it; 2: the first tectonic one, kept the same way; 3: tectonic, the default)
+  and the New colony menu's World options (climate Frozen..Tropical, rain Arid..Wet, seas None/Coasts/Seas/Islands, peaks
+  Gentle..Alpine, rivers Few..Many). The tectonic generators (2 and 3) work the big shapes out on a coarse grid (`Landform`, `Cell` = max(4, size/256) tiles, ~256 nodes across):
   **plates** (jittered seeds `PlateSpacing` = size/2 apart, 320..1500 tiles, seams bent by a two-octave warp; each
   continental or oceanic by the seas setting, drifting its own way; the plate under the map's middle is always land):
   crust sets the base level (continents above the sea, ocean plates below, blended softly across seams), and where two
@@ -145,17 +145,26 @@ Movement rules, stairs, designations, the water simulation and terrain hydrology
   within `BankReach` tiles to rise a level per tile from the bank. River/lake neighbours don't count as cliffs
   for surface materials (sand banks, not stone). The bench must show 0 water beside lower land, 0 systems not
   reaching the edge, 0 water tiles with no downhill way out, and only lake-outlet side steps.
-  **Generator 2 differs** (walls by the water were the first generator's flaw: rivers set 20-35 levels below their valley
+  **The tectonic generators differ** (walls by the water were the first generator's flaw: rivers set 20-35 levels below their valley
   with 5 tiles of graded bank left a wall where grading stopped; pulling land towards the strongest nearby river's level
   creased it where two rivers' reaches met): rain-weighted drainage (`Terrain.RiverAt` = 300 x the rivers setting); the
   sea is an outlet in the coarse flood (`CoarseSea`; no basin, no river carved in it); no valley pull (erosion made the
   valleys); a sealed water system's outlet follows the cheapest way over the fine ground (`LowestOutlet`: a tile plus 6 a
   level climbed, best-first towards the edge; the new channel counts as draining, or the scan took it for a new sealed
-  system and ran a river down the whole map edge); banks graded without limit of distance (`GradeValleySides`: a level a
-  tile for 5 tiles, then two) and **levees** (`BuildLevees`: land beside water stands at its level and falls away from it
-  the same way, where the ground is lower: a river left above the land round it sits on a sloping levee, not a one-tile
-  dyke). The bench reports land steps: 2048, 4096 and 8192 maps have none of 10+ levels (the first generator: 540 at
-  2048, up to 33 high).
+  system and ran a river down the whole map edge). Generator 2 graded banks without limit of distance (`GradeValleySides`:
+  a level a tile for 5 tiles, then two) and built **levees** (`BuildLevees`: land beside water at its level, falling away
+  the same way where the ground is lower). Those were absolute ramps: every slope steeper than 2 a tile near a river was
+  planed into a straight-edged cone, and a levee from a high river ran on downhill (once to a 60-level cliff over the
+  sea). **Generator 3** (`ShapeTectonicBanks`) changes the natural ground instead of replacing it: a river's bank is dug
+  to a level above its water and the dig fades a level a tile for 5 tiles, then two (never below the river's bank); then
+  land beside any water is raised to its level and the raise fades the same way (never above that water), so slopes and
+  contours stay the land's own. It also floods **drowned valleys** (`FloodDrownedValleys`): a lake fed by a river whose
+  valley lies below its surface took that river in as backwater, but lakes only spread `LakeShoreReach` (48) tiles over
+  land, so the rest of the valley stayed dry below the lake behind a straight-edged dyke. Now each lake floods all the
+  land below its surface joined to it (4-way), with the rivers there that run into it, unless that land touches the map
+  edge, lower water or a river draining elsewhere (then it would spill: left as it was). The map bench reports tiles
+  flooded, banks dug 10+ and levees raised 3+. The bench reports land steps: 2048, 4096 and 8192 maps have none of 10+
+  levels (the first generator: 540 at 2048, up to 33 high).
 
 - **Thin walls (`World.EdgeInfo`, `WallMaterials`):** walls, doors and windows stand on cell edges, one level tall,
   so rooms keep their floor. Each cell owns its east (+x) and north (+y) edge: a `ushort` per cell in `Chunk.Edges`
